@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Living Kingdom Sandbox — โลกจำลองอาณาจักรมีชีวิต</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ══════════════ TOP TOOLBAR ══════════════ -->
+<header id="toolbar">
+  <div class="tb-group tb-title">
+    <span class="logo">⬢</span>
+    <span>Living Kingdom Sandbox</span>
+    <span id="dayCounter" class="day-counter">Day 0</span>
+  </div>
+
+  <div class="tb-group">
+    <button id="btnPause" class="tb-btn" title="หยุด/เล่นต่อ">⏸ Pause</button>
+    <button id="btnStep"  class="tb-btn" title="เดินหน้า 1 วัน">⏭ +1 วัน</button>
+    <button class="tb-btn speed-btn active" data-speed="1">x1</button>
+    <button class="tb-btn speed-btn" data-speed="5">x5</button>
+    <button class="tb-btn speed-btn" data-speed="20">x20</button>
+    <button id="btnReset" class="tb-btn danger" title="สร้างโลกใหม่">↺ Reset</button>
+  </div>
+
+  <div class="tb-group">
+    <label for="heatmapSelect">Heatmap:</label>
+    <select id="heatmapSelect">
+      <option value="none">— ปิด —</option>
+      <option value="hunger">ความหิว (Hunger)</option>
+      <option value="wealth">ความรวย (Wealth)</option>
+      <option value="danger">อันตราย (Danger)</option>
+      <option value="trade">การค้า (Trade Traffic)</option>
+      <option value="foodprice">ราคาอาหาร (Food Price)</option>
+      <option value="loyalty">ความภักดี (Loyalty)</option>
+      <option value="unrest">ความไม่สงบ (Unrest)</option>
+      <option value="faction">เขตอิทธิพล (Faction Control)</option>
+    </select>
+    <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
+  </div>
+</header>
+
+<!-- ══════════════ MAIN AREA ══════════════ -->
+<main id="main">
+  <div id="mapWrap">
+    <canvas id="mapCanvas"></canvas>
+
+    <!-- Sandbox tools floating panel -->
+    <div id="toolPanel" class="hidden">
+      <h3>🛠 Sandbox Tools <span id="toolHint"></span></h3>
+      <div class="tool-grid">
+        <button class="tool-btn" data-tool="addPeople">👥 เพิ่มคน 10</button>
+        <button class="tool-btn" data-tool="addTrader">🐪 เพิ่มพ่อค้า</button>
+        <button class="tool-btn" data-tool="addBandits">🗡 เพิ่มโจร 5</button>
+        <button class="tool-btn" data-tool="foodShortage">🍞 ทำให้ขาดอาหาร</button>
+        <button class="tool-btn" data-tool="warDemand">⚔ ปราสาทเตรียมสงคราม</button>
+        <button class="tool-btn" data-tool="drought">☀ เริ่มภัยแล้ง</button>
+        <button class="tool-btn" data-tool="plague">☠ โรคระบาด</button>
+        <button class="tool-btn" data-tool="spawnRebels">🔥 ปล่อยกลุ่มกบฏ</button>
+        <button class="tool-btn" data-tool="improveRoads">🛡 เพิ่มความปลอดภัยถนน</button>
+        <button class="tool-btn" data-tool="buildRoad">➕ สร้างถนน (คลิก 2 เมือง)</button>
+        <button class="tool-btn" data-tool="destroyRoad">✖ ทำลายถนน (คลิก 2 เมือง)</button>
+        <button class="tool-btn" data-tool="addVillage">🏡 เพิ่มหมู่บ้าน (คลิกแผนที่)</button>
+        <button class="tool-btn" data-tool="addTown">🏘 เพิ่มเมือง (คลิกแผนที่)</button>
+        <button class="tool-btn" data-tool="addFort">🏰 เพิ่มป้อม (คลิกแผนที่)</button>
+        <button class="tool-btn" data-tool="createWar">💥 ก่อสงคราม</button>
+        <button class="tool-btn" data-tool="giveWealth">💰 ให้เงินเมือง (คลิกเมือง)</button>
+      </div>
+      <p class="tool-note">เครื่องมือที่ต้องคลิกเป้าหมาย: เลือกเครื่องมือแล้วคลิกบนแผนที่ (คลิกขวาเพื่อยกเลิก)</p>
+    </div>
+
+    <!-- Legend -->
+    <div id="legend">
+      <b>สัญลักษณ์</b>
+      <div><span class="lg-shape circle-sm"></span> หมู่บ้าน</div>
+      <div><span class="lg-shape circle-lg"></span> เมือง</div>
+      <div><span class="lg-shape square"></span> ป้อม</div>
+      <div><span class="lg-shape square-lg"></span> ปราสาท</div>
+      <div><span class="lg-shape triangle"></span> ค่ายโจร</div>
+      <hr>
+      <div><span class="lg-dot" style="background:#5dbb63"></span> farmer</div>
+      <div><span class="lg-dot" style="background:#a5754a"></span> woodcutter</div>
+      <div><span class="lg-dot" style="background:#9e9e9e"></span> miner</div>
+      <div><span class="lg-dot" style="background:#26c6da"></span> crafter</div>
+      <div><span class="lg-dot" style="background:#ffd54f"></span> trader</div>
+      <div><span class="lg-dot" style="background:#ef5350"></span> bandit</div>
+      <div><span class="lg-dot" style="background:#42a5f5"></span> guard/soldier</div>
+      <div><span class="lg-dot" style="background:#ab47bc"></span> ผู้นำ/ขุนนาง</div>
+      <div><span class="lg-dot" style="background:#ffa726"></span> cavalry</div>
+      <div><span class="lg-dot" style="background:#2e7d32"></span> archer</div>
+      <div><span class="lg-dot" style="background:#eceff1"></span> ว่างงาน/อพยพ</div>
+    </div>
+  </div>
+
+  <!-- ══════════════ INSPECTOR PANEL ══════════════ -->
+  <aside id="inspector">
+    <h2 id="inspectorTitle">Inspector</h2>
+    <div id="inspectorBody">
+      <p class="hint">คลิกตัวละคร เมือง คาราวาน หรือกองกำลังบนแผนที่เพื่อดูข้อมูล</p>
+      <div id="worldSummary"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- ══════════════ EVENT LOG ══════════════ -->
+<footer id="eventLogWrap">
+  <div class="log-header">
+    <b>📜 Event Log — บันทึกประวัติศาสตร์</b>
+    <label><input type="checkbox" id="logAutoScroll" checked> เลื่อนอัตโนมัติ</label>
+  </div>
+  <div id="eventLog"></div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
