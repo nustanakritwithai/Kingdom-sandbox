@@ -1,0 +1,9 @@
+# Render Blueprint — deploy Living Kingdom Sandbox เป็น static site
+# ใช้กับ Render Dashboard: New + > Blueprint > เลือก repo นี้
+services:
+  - type: web
+    name: living-kingdom-sandbox
+    runtime: static
+    buildCommand: ""
+    staticPublishPath: .
+    autoDeploy: true
