@@ -89,6 +89,174 @@ const EventSystem = {
   }
 };
 
+/* ═══════════ 3.5 CHRONICLE / LEGENDS / WAR HISTORY (Phase 10) ═══════════
+   Chronicle    = บันทึกเฉพาะเหตุการณ์สำคัญ (แยกจาก event log รายวัน)
+   Deeds/Fame   = วีรกรรมและชื่อเสียงของตัวละคร → notable agent / legend
+   War objects  = ประวัติสงครามพร้อม summary อัตโนมัติ
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const Chronicle = {
+  // category: war | rebellion | settlement | legend | trade | disaster | faction | era
+  add(opt) {
+    const e = {
+      id: uid(), day: world.day,
+      category: opt.category,
+      importance: opt.importance || 2,      // 1-5
+      title: opt.title,
+      description: opt.description || '',
+      agents: opt.agents || [],             // agent ids ที่เกี่ยวข้อง
+      settlements: opt.settlements || [],
+      factions: opt.factions || []
+    };
+    world.chronicle.push(e);
+    if (world.chronicle.length > 500) world.chronicle.splice(0, world.chronicle.length - 500);
+    UI.chronicleDirty = true;
+    return e;
+  }
+};
+
+/* ── วีรกรรม + ชื่อเสียง — ตัวละครกลายเป็น notable agent เมื่อ fame ถึงเกณฑ์ ── */
+function addDeed(a, text, fame, title) {
+  if (!a || !a.alive) return;
+  a.deeds.push({ day: world.day, text });
+  if (a.deeds.length > 15) a.deeds.shift();
+  a.fame = (a.fame || 0) + fame;
+  a.legacyScore = (a.legacyScore || 0) + fame;
+  if (title && fame >= (a._titleFame || 0)) { a.title = title; a._titleFame = fame; }
+  if (a.fame >= 20 && !a.notable) {
+    a.notable = true;
+    Chronicle.add({
+      category: 'legend', importance: 3,
+      title: `⭐ ${a.name} เริ่มเป็นที่เลื่องลือในแผ่นดิน`,
+      description: text, agents: [a.id]
+    });
+  }
+}
+
+function factionTimeline(f, text) {
+  if (!f) return;
+  f.timeline.push({ day: world.day, text });
+  if (f.timeline.length > 40) f.timeline.shift();
+}
+
+function settlementHistory(s, text) {
+  if (!s) return;
+  s.history.push(`Day ${world.day}: ${text}`);
+  if (s.history.length > 40) s.history.shift();
+}
+
+/* ── ตั้งชื่อศึกอัตโนมัติจากสถานที่ + ชนิด + ขนาด ── */
+function battleName(kind, label, totalMen) {
+  const big = totalMen >= 12 ? 'ครั้งใหญ่' : '';
+  switch (kind) {
+    case 'raid': return `การปล้น${label}${big}`;
+    case 'capture': return `ยุทธการ${label}`;
+    case 'siege': return `การล้อม${label}`;
+    case 'rebellion': return `การลุกฮือแห่ง${label}`;
+    default: return `ศึก${label}${big}`;
+  }
+}
+
+/* ── War Chronicle ── */
+function activeWarBetween(fAId, fBId) {
+  return world.wars.find(w => !w.endDay &&
+    ((w.attackerId === fAId && w.defenderId === fBId) || (w.attackerId === fBId && w.defenderId === fAId)));
+}
+
+function startWar(attackerF, defenderF, cause) {
+  if (!attackerF || !defenderF || attackerF.id === defenderF.id) return null;
+  let w = activeWarBetween(attackerF.id, defenderF.id);
+  if (w) return w;
+  w = {
+    id: uid(),
+    name: `สงคราม${attackerF.name.replace('ราชอาณาจักร', '')}–${defenderF.name.replace('ราชอาณาจักร', '')}`,
+    attackerId: attackerF.id, defenderId: defenderF.id,
+    startDay: world.day, endDay: null, cause: cause || '',
+    battles: [], captured: [], casualties: 0,
+    winner: null, summary: null
+  };
+  world.wars.push(w);
+  attackerF.warState = true; defenderF.warState = true;
+  if (!attackerF.enemies.includes(defenderF.id)) attackerF.enemies.push(defenderF.id);
+  if (!defenderF.enemies.includes(attackerF.id)) defenderF.enemies.push(attackerF.id);
+  factionTimeline(attackerF, `ประกาศสงครามกับ${defenderF.name}`);
+  factionTimeline(defenderF, `ถูก${attackerF.name}ประกาศสงคราม`);
+  Chronicle.add({
+    category: 'war', importance: 5,
+    title: `⚔ สงครามปะทุ: ${attackerF.name} vs ${defenderF.name}`,
+    description: cause || 'ความขัดแย้งบานปลายเป็นสงครามเต็มรูปแบบ',
+    factions: [attackerF.id, defenderF.id]
+  });
+  return w;
+}
+
+function endWar(w, winnerId, reason) {
+  if (!w || w.endDay) return;
+  w.endDay = world.day;
+  w.winner = winnerId;
+  const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
+  const winF = winnerId ? getFaction(winnerId) : null;
+  const days = Math.max(1, w.endDay - w.startDay);
+  const capturedNames = w.captured.map(c => c.name).join(' และ ');
+  w.summary = `สงครามระหว่าง${att ? att.name : 'ฝ่ายที่สูญสิ้น'}กับ${def ? def.name : 'ฝ่ายที่สูญสิ้น'}กินเวลา ${days} วัน`
+    + (w.battles.length ? ` มีศึกสำคัญ ${w.battles.length} ครั้ง` : '')
+    + (w.casualties ? ` สูญเสียรวม ${w.casualties} ชีวิต` : '')
+    + (winF ? ` จบลงด้วยชัยชนะของ${winF.name}` + (capturedNames ? ` หลังยึด${capturedNames}ได้สำเร็จ` : '')
+            : ' จบลงโดยไม่มีผู้ชนะเด็ดขาด')
+    + (reason ? ` (${reason})` : '');
+  for (const [f, other] of [[att, def], [def, att]]) {
+    if (!f) continue;
+    f.enemies = f.enemies.filter(e => e !== (other ? other.id : -1));
+    if (!f.enemies.length) f.warState = false;
+    factionTimeline(f, `สงครามกับ${other ? other.name : 'ศัตรู'}สิ้นสุด${winnerId === f.id ? ' — ได้รับชัยชนะ' : winnerId ? ' — พ่ายแพ้' : ''}`);
+  }
+  Chronicle.add({
+    category: 'war', importance: 5,
+    title: `🕊 สงครามสิ้นสุด: ${att ? att.name : '?'} vs ${def ? def.name : '?'}`,
+    description: w.summary,
+    factions: [w.attackerId, w.defenderId]
+  });
+  EventSystem.add('war', `🕊 ${w.summary}`);
+}
+
+/* ── สรุปชีวิตตัวละครเป็นภาษาไทยสั้นๆ ── */
+function lifeSummary(a) {
+  const birthplace = getSettlement(a.birthplaceId);
+  const first = a.career[0];
+  const profTH = {
+    farmer: 'ชาวนา', woodcutter: 'คนตัดไม้', miner: 'คนงานเหมือง', crafter: 'ช่างฝีมือ',
+    trader: 'พ่อค้า', guard: 'ยาม', bandit: 'โจร', militia: 'ทหารบ้าน', swordsman: 'นักดาบ',
+    spearman: 'พลหอก', archer: 'นักธนู', cavalry: 'ทหารม้า', captain: 'นายกอง',
+    commander: 'แม่ทัพ', mayor: 'เจ้าเมือง', lord: 'ขุนนาง', king: 'ราชา',
+    unemployed: 'คนว่างงาน', migrant: 'ผู้อพยพ', refugee: 'ผู้ลี้ภัย'
+  };
+  let txt = `เริ่มชีวิตเป็น${profTH[first.profession] || first.profession}ที่${birthplace ? birthplace.name : 'แดนไกล'}`;
+  const changes = a.career.length - 1;
+  if (changes >= 2) txt += ` ผ่านมาแล้ว ${changes} อาชีพ`;
+  if (a.memory.citiesVisited.length >= 2) txt += ` เดินทางผ่าน ${a.memory.citiesVisited.length} ถิ่นฐาน`;
+  const totalBattles = a.memory.battlesWon + a.memory.battlesLost;
+  if (totalBattles > 0) txt += ` ผ่านศึกมา ${totalBattles} ครั้ง (ชนะ ${a.memory.battlesWon})`;
+  if (a.memory.raidsDone >= 3) txt += ` เคยร่วมปล้นถึง ${a.memory.raidsDone} ครั้ง`;
+  if (a.memory.tradeProfit >= 200) txt += ` ทำกำไรจากการค้ารวม ${fmt(a.memory.tradeProfit)} ทอง`;
+  if (a.deeds.length) {
+    const lastDeed = a.deeds[a.deeds.length - 1];
+    txt += ` วีรกรรมล่าสุด: ${lastDeed.text}`;
+  }
+  if (a.alive) {
+    const now = profTH[a.profession] || a.profession;
+    txt += ` ปัจจุบันเป็น${now}${a.title ? `ฉายา "${a.title}"` : ''}`;
+  }
+  return txt;
+}
+
+// บันทึกศึกเข้า war object (ถ้ามีสงครามระหว่างสอง faction นี้)
+function recordWarBattle(atkFactionId, defFactionId, name, dead, attackerWon) {
+  const w = atkFactionId && defFactionId ? activeWarBetween(atkFactionId, defFactionId) : null;
+  if (!w) return;
+  w.battles.push({ day: world.day, name, dead, attackerWon });
+  w.casualties += dead;
+}
+
 /* ═══════════════════ 4. NAME GENERATOR ═══════════════════ */
 
 const NAME_FIRST = ['อรุณ', 'กวิน', 'ธาดา', 'นคร', 'ปกรณ์', 'สิงห์', 'เมฆ', 'คีรี', 'วายุ', 'ตะวัน',
@@ -119,6 +287,9 @@ function createSettlement(opt) {
     prosperity: 50, loyalty: opt.type === 'camp' ? 100 : 70,
     unrest: 5, crime: 5, security: 30,
     taxRate: 0.10, treasury: opt.treasury != null ? opt.treasury : 200,
+    foundedDay: world.day,
+    timesRaided: 0, timesCaptured: 0,
+    pastRulers: [],                      // ชื่อผู้ปกครองในอดีต
     stock: newStock(opt.stock),
     demand: newStock(),
     prices: Object.assign({}, BASE_PRICE),
@@ -162,9 +333,12 @@ function createFaction(opt) {
     treasury: opt.treasury || 0,
     warState: false,
     enemies: [], allies: [],
-    vassalIds: []
+    vassalIds: [],
+    foundedDay: world.day,
+    timeline: []
   };
   world.factions.push(f);
+  f.timeline.push({ day: world.day, text: `ก่อตั้ง${f.name}` });
   return f;
 }
 
@@ -187,6 +361,12 @@ function createAgent(opt) {
     rank: 'commoner',
     reputation: 0,
     alive: true,
+    // ── Phase 10: legend/history ──
+    fame: 0, legacyScore: 0,
+    title: null, notable: false,
+    deeds: [],                                    // [{day, text}]
+    career: [{ day: world.day, profession: opt.profession || 'unemployed' }],
+    birthplaceId: opt.locationId,
     stats: { hunger: rand(60, 95), energy: rand(60, 100), health: 100, morale: rand(50, 75), wealth: 0 },
     money: opt.money != null ? opt.money : randInt(10, 40),
     inventory: Object.assign({ food: randInt(1, 4), wood: 0, ore: 0, tools: 0, weapon: 0, bow: 0, horse: 0, cart: 0 }, opt.inventory || {}),
@@ -196,7 +376,7 @@ function createAgent(opt) {
       bravery: rand(0.15, 0.9), greed: rand(0.15, 0.9), loyalty: rand(0.2, 0.95),
       ambition: rand(0.1, 0.95), riskTolerance: rand(0.1, 0.9), discipline: rand(0.2, 0.9)
     },
-    memory: { battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0 },
+    memory: { battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 },
     // governor attributes (ใช้เมื่อได้เป็นผู้ปกครอง)
     gov: null,
     travel: null,        // { path:[ids], seg, progress, purpose }
@@ -271,6 +451,7 @@ function generateWorld() {
     day: 0,
     settlements: [], routes: [], agents: [], units: [], armies: [], factions: [],
     events: [],
+    chronicle: [], wars: [], eras: [],
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0 }
   };
 
@@ -717,7 +898,24 @@ const NeedSystem = {
     }
     if (RULER_PROFS.has(a.profession) || a.rank === 'king') {
       EventSystem.add('politics', `⚰ ${a.name} (${a.profession}) ${causeText} — อำนาจสั่นคลอน`);
+      Chronicle.add({
+        category: 'faction', importance: 4,
+        title: `⚰ ผู้ปกครอง ${a.name} สิ้นชีพ`,
+        description: `${a.title ? a.title + ' ' : ''}${a.name} (${a.profession}) ${causeText}ที่${s ? s.name : 'กลางทาง'} เมื่ออายุ ${a.age} ปี`,
+        agents: [a.id], factions: a.factionId ? [a.factionId] : []
+      });
+      const f = getFaction(a.factionId);
+      if (f) factionTimeline(f, `ผู้ปกครอง ${a.name} เสียชีวิต (${causeText})`);
       handleRulerDeath(a);
+    } else if (a.notable) {
+      // ตำนานจบชีวิต — บันทึกลง chronicle พร้อมสรุปชีวิต
+      EventSystem.add('life', `⚰ ${a.title ? a.title + ' ' : ''}${a.name} ${causeText}ที่${s ? s.name : 'กลางทาง'}`);
+      Chronicle.add({
+        category: 'legend', importance: 4,
+        title: `⚰ ตำนาน ${a.name}${a.title ? ' "' + a.title + '"' : ''} จบชีวิตลง`,
+        description: lifeSummary(a) + ` — ${causeText}เมื่ออายุ ${a.age} ปี`,
+        agents: [a.id]
+      });
     } else if (chance(0.35)) {
       EventSystem.add('life', `⚰ ${a.name} (${a.profession}) ${causeText}ที่${s ? s.name : 'กลางทาง'}`);
     }
@@ -1042,6 +1240,21 @@ const TraderSystem = {
       a.stats.morale = clamp(a.stats.morale + (profit > 0 ? 4 : -4), 0, 100);
       a.currentThought = profit > 0 ? `ขายได้กำไร ${fmt(profit)} ทอง — การค้าคือชีวิต` : `ขาดทุน ${fmt(-profit)} ทอง... คำนวณพลาด`;
       a.cargo.qty -= sold;
+      // สะสมกำไรการค้า → ตำนานพ่อค้า
+      if (profit > 0) {
+        a.memory.tradeProfit += profit;
+        if (a.memory.tradeProfit >= 400 && !a._traderTitled) {
+          a._traderTitled = true;
+          const home = getSettlement(a.homeId) || s;
+          addDeed(a, `ทำกำไรจากการค้าสะสมเกิน 400 ทอง`, 12, `พ่อค้าแห่ง${home.name}`);
+          Chronicle.add({
+            category: 'trade', importance: 3,
+            title: `💰 ${a.name} กลายเป็นพ่อค้าผู้มั่งคั่ง`,
+            description: `ค้าขายจนกำไรสะสมกว่า 400 ทอง ได้รับฉายา "พ่อค้าแห่ง${home.name}"`,
+            agents: [a.id], settlements: [home.id]
+          });
+        }
+      }
     }
     if (a.cargo.qty <= 0) a.cargo = null;
     else if (sold === 0) {
@@ -1248,6 +1461,8 @@ const MilitarySystem = {
     const defPower = (sum(defenderUnits, u => this.unitPower(u)) + (context.defenseBonus || 0)) * rand(0.8, 1.2);
     const attackerWins = atkPower > defPower;
     const ratio = clamp(Math.min(atkPower, defPower) / Math.max(atkPower, defPower, 1), 0.1, 1);
+    const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
+    const bName = battleName(context.kind || 'field', context.label || '?', totalMen);
 
     const applyCasualties = (units, lossRate, won) => {
       let dead = 0, fled = 0;
@@ -1267,16 +1482,21 @@ const MilitarySystem = {
             m.memory.survivedBattles++;
             if (won) { m.memory.battlesWon++; m.skills.fighting = Math.min(10, m.skills.fighting + 0.15); m.stats.morale = clamp(m.stats.morale + 6, 0, 100); }
             else { m.memory.battlesLost++; m.stats.morale = clamp(m.stats.morale - 10, 0, 100); }
+            // ผู้รอดจากศึกใหญ่หลายครั้ง → ตำนาน
+            if (m.memory.survivedBattles === 5) {
+              addDeed(m, `รอดชีวิตจากสนามรบมาแล้ว 5 ครั้ง รวมทั้ง${bName}`, 8, 'ผู้รอดจากศึกใหญ่');
+            }
           }
         }
         u.morale = clamp(u.morale + (won ? 10 : -18), 5, 100);
         u.fatigue = clamp(u.fatigue + 25, 0, 100);
-        u.battleHistory.push({ day: world.day, won, vs: context.label });
+        u.battleHistory.push({ day: world.day, won, vs: context.label, name: bName });
         const leader = getAgent(u.leaderId);
         if (leader && leader.alive && won) {
           leader.skills.tactics = Math.min(10, leader.skills.tactics + 0.2);
           leader.skills.leadership = Math.min(10, leader.skills.leadership + 0.12);
           leader.reputation += 4;
+          if (totalMen >= 8) addDeed(leader, `นำทัพชนะใน${bName}`, 6);
           this.checkPromotion(leader);
         }
       }
@@ -1287,8 +1507,25 @@ const MilitarySystem = {
     const winnerRate = 0.08 + ratio * 0.1;
     const atkResult = applyCasualties(attackerUnits, attackerWins ? winnerRate : loserRate, attackerWins);
     const defResult = applyCasualties(defenderUnits, attackerWins ? loserRate : winnerRate, !attackerWins);
+    const totalDead = atkResult.dead + defResult.dead;
 
-    return { attackerWins, atkPower, defPower, atkResult, defResult };
+    // ── บันทึกประวัติศาสตร์: ศึกใหญ่ลง chronicle / ศึกในสงครามลง war object ──
+    recordWarBattle(context.atkFactionId, context.defFactionId, bName, totalDead, attackerWins);
+    if (totalMen >= 8) {
+      const atkLeader = attackerUnits.length ? getAgent(attackerUnits[0].leaderId) : null;
+      const defLeader = defenderUnits.length ? getAgent(defenderUnits[0].leaderId) : null;
+      Chronicle.add({
+        category: context.kind === 'rebellion' ? 'rebellion' : 'war',
+        importance: totalMen >= 15 ? 4 : 3,
+        title: `⚔ ${bName}`,
+        description: `กำลังพลรวม ${totalMen} นาย ${attackerWins ? 'ฝ่ายบุกได้ชัย' : 'ฝ่ายรับป้องกันสำเร็จ'} เสียชีวิต ${totalDead} หนี ${atkResult.fled + defResult.fled}`,
+        agents: [atkLeader, defLeader].filter(x => x).map(x => x.id),
+        settlements: context.settlementId ? [context.settlementId] : [],
+        factions: [context.atkFactionId, context.defFactionId].filter(x => x)
+      });
+    }
+
+    return { attackerWins, atkPower, defPower, atkResult, defResult, name: bName, totalDead };
   },
 
   checkPromotion(a) {
@@ -1297,9 +1534,16 @@ const MilitarySystem = {
     } else if (a.rank === 'veteran' && a.memory.battlesWon >= 4 && a.skills.leadership >= 3.5) {
       a.rank = 'captain'; a.profession = MILITARY_PROFS.has(a.profession) ? 'captain' : a.profession;
       EventSystem.add('war', `⭐ ${a.name} ได้เลื่อนขั้นเป็นนายกอง (captain) หลังชนะศึก ${a.memory.battlesWon} ครั้ง`);
+      addDeed(a, `เลื่อนขั้นเป็นนายกองหลังชนะศึก ${a.memory.battlesWon} ครั้ง`, 8);
     } else if (a.rank === 'captain' && a.memory.battlesWon >= 7 && a.skills.leadership >= 5) {
       a.rank = 'commander'; a.profession = 'commander';
       EventSystem.add('war', `⭐⭐ ${a.name} ได้เลื่อนขั้นเป็นแม่ทัพ (commander) ชื่อเสียงเลื่องลือ`);
+      addDeed(a, `ก้าวขึ้นเป็นแม่ทัพผู้เกรียงไกร ผ่านศึกชนะ ${a.memory.battlesWon} ครั้ง`, 15, 'แม่ทัพผู้เกรียงไกร');
+      Chronicle.add({
+        category: 'legend', importance: 4,
+        title: `⭐⭐ ${a.name} ก้าวขึ้นเป็นแม่ทัพ`,
+        description: lifeSummary(a), agents: [a.id]
+      });
     }
   },
 
@@ -1310,7 +1554,10 @@ const MilitarySystem = {
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
     const defUnits = garrison ? [garrison] : [];
     const defenseBonus = (s.buildings.includes('Wall') ? 40 : 0) + (s.buildings.includes('Watchtower') ? 15 : 0) + s.security * 0.4;
-    const result = this.battle([u], defUnits, { defenseBonus, label: s.name });
+    const result = this.battle([u], defUnits, {
+      defenseBonus, label: s.name, kind: 'raid', settlementId: s.id,
+      atkFactionId: u.factionId, defFactionId: s.factionId
+    });
 
     if (result.attackerWins) {
       // ปล้นของจริงจากคลัง
@@ -1323,13 +1570,19 @@ const MilitarySystem = {
       u.lootGoods = u.lootGoods || newStock();
       u.lootGoods.weapons += stolenWeapons;
       s.raidedRecently = 5;
+      s.timesRaided++;
       s.prosperity = clamp(s.prosperity - 8, 0, 100);
       s.loyalty = clamp(s.loyalty - 6, 0, 100);
       s.security = clamp(s.security - 10, 0, 100);
       s.unrest = clamp(s.unrest + 8, 0, 100);
-      for (const m of unitMembers(u)) m.memory.raidsDone++;
+      for (const m of unitMembers(u)) {
+        m.memory.raidsDone++;
+        if (m.memory.raidsDone === 5) addDeed(m, `ร่วมปล้นสำเร็จครบ 5 ครั้ง ล่าสุดที่${s.name}`, 8, 'นักปล้นเส้นทางป่า');
+      }
+      const raidLeader = getAgent(u.leaderId);
+      if (raidLeader) addDeed(raidLeader, `นำ${u.name}ปล้น${s.name}สำเร็จ`, 5);
       EventSystem.add('bandit', `🔥 ${u.name} ปล้น${s.name}สำเร็จ! ได้อาหาร ${stolenFood} ทอง ${stolenGold} — ชาวบ้านหวาดกลัว`);
-      s.history.push(`Day ${world.day}: ถูก${u.name}ปล้น`);
+      settlementHistory(s, `ถูก${u.name}ปล้น (ครั้งที่ ${s.timesRaided})`);
     } else {
       EventSystem.add('war', `🛡 ${s.name} ป้องกันการปล้นของ${u.name}ได้ (ตาย ${result.atkResult.dead + result.defResult.dead} คน)`);
       s.security = clamp(s.security + 5, 0, 100);
@@ -1346,16 +1599,22 @@ const MilitarySystem = {
     // เมือง unrest สูง loyalty ต่ำ อาจเปิดประตู
     const gatesOpen = s.unrest > 65 && s.loyalty < 30 && chance(0.5);
     const result = gatesOpen ? { attackerWins: true, atkResult: { dead: 0 }, defResult: { dead: 0 } }
-      : this.battle(attUnits, defUnits, { defenseBonus, label: s.name });
+      : this.battle(attUnits, defUnits, {
+          defenseBonus, label: s.name, kind: 'capture', settlementId: s.id,
+          atkFactionId: attFaction.id, defFactionId: s.factionId
+        });
 
     if (result.attackerWins) {
       const oldFaction = getFaction(s.factionId);
+      const oldOwner = s.ownerId ? getAgent(s.ownerId) : null;
+      if (oldOwner) s.pastRulers.push(oldOwner.name);
       s.factionId = attFaction.id;
       s.ownerId = attFaction.rulerId || commander.id;
       s.governorId = commander.id;
       commander.gov = commander.gov || makeGovAttrs();
       s.loyalty = 30; s.unrest = clamp(s.unrest + 10, 0, 100);
       s.lastCapturedDay = world.day;
+      s.timesCaptured++;
       // ปล้นคลังบางส่วน
       const lootGold = Math.floor(s.treasury * 0.4);
       s.treasury -= lootGold;
@@ -1368,7 +1627,22 @@ const MilitarySystem = {
       }
       if (gatesOpen) EventSystem.add('war', `🏳 ประชาชน${s.name}เปิดประตูเมืองให้${attFaction.name} — เมืองเปลี่ยนมือโดยไม่เสียเลือด`);
       else EventSystem.add('war', `⚔ ${attFaction.name} ยึด${s.name}ได้! ${commander.name} ขึ้นปกครอง (ปล้นคลัง ${lootGold} ทอง)`);
-      s.history.push(`Day ${world.day}: ถูก${attFaction.name}ยึดครอง`);
+      settlementHistory(s, `ถูก${attFaction.name}ยึดครอง${gatesOpen ? ' (ประชาชนเปิดประตู)' : ''} — ${commander.name} ขึ้นปกครอง`);
+      // ── ประวัติศาสตร์ ──
+      addDeed(commander, `ยึด${s.name}ได้สำเร็จ`, 15, `ผู้ยึด${s.name}`);
+      factionTimeline(attFaction, `ยึด${s.name}ได้`);
+      if (oldFaction) factionTimeline(oldFaction, `เสีย${s.name}ให้${attFaction.name}`);
+      const war = oldFaction ? activeWarBetween(attFaction.id, oldFaction.id) : null;
+      if (war) war.captured.push({ day: world.day, id: s.id, name: s.name, byFactionId: attFaction.id });
+      Chronicle.add({
+        category: 'war', importance: 5,
+        title: `🏰 ${s.name} เปลี่ยนมือ — ตกเป็นของ${attFaction.name}`,
+        description: gatesOpen
+          ? `ประชาชนที่สิ้นศรัทธาเปิดประตูเมืองให้ ${commander.name} เข้ายึดโดยไม่เสียเลือด`
+          : `${commander.name} นำทัพบุกยึด${s.name}จาก${oldFaction ? oldFaction.name : 'เจ้าของเดิม'} ปล้นคลังไป ${lootGold} ทอง`,
+        agents: [commander.id], settlements: [s.id],
+        factions: [attFaction.id, oldFaction ? oldFaction.id : null].filter(x => x)
+      });
       // ผู้ยึดกลายเป็น lord ถ้ายังไม่ใช่
       if (!RULER_PROFS.has(commander.profession)) {
         commander.profession = 'lord'; commander.rank = 'lord';
@@ -1378,6 +1652,7 @@ const MilitarySystem = {
       return true;
     } else {
       EventSystem.add('war', `🛡 ${s.name} ต้านการบุกของ${attFaction.name}ไว้ได้ (ตายรวม ${result.atkResult.dead + result.defResult.dead})`);
+      settlementHistory(s, `ต้านการบุกของ${attFaction.name}ไว้ได้`);
       return false;
     }
   },
@@ -1457,6 +1732,7 @@ const MilitarySystem = {
       leader.unitId = u.id;
       u.objective = { type: 'huntBandits' };
       EventSystem.add('war', `⚔ ${leader.name} รวบรวมคน ${recruits.length + 1} คนตั้ง${u.name} ออกปราบโจร`);
+      addDeed(leader, `ก่อตั้ง${u.name}ด้วยกำลังพล ${recruits.length + 1} นาย`, 10, `ผู้ก่อตั้ง${u.name}`);
     }
   },
 
@@ -1488,7 +1764,8 @@ const MilitarySystem = {
         // หา warband ที่ไม่เดินทางอยู่ หรือบุกค่ายโจร
         const target = world.units.find(w => w.kind === 'warband' && !w.travel && w.locationId === u.locationId && unitMembers(w).length > 0);
         if (target) {
-          const result = this.battle([u], [target], { label: target.name });
+          const s = getSettlement(u.locationId);
+          const result = this.battle([u], [target], { label: s ? s.name : target.name, kind: 'field', settlementId: s ? s.id : null });
           if (result.attackerWins) {
             EventSystem.add('war', `⚔ ${u.name} ปราบ${target.name}สำเร็จ!`);
             const leader = getAgent(u.leaderId);
@@ -1534,7 +1811,7 @@ const MilitarySystem = {
           tempUnit = createUnit({ name: 'โจรป้องกันค่าย', kind: 'warband', leaderId: looseBandits[0].id, memberIds: looseBandits.map(b => b.id), factionId: camp.factionId, locationId: camp.id, food: 10 });
           defenders.push(tempUnit);
         }
-        const result = this.battle([u], defenders, { defenseBonus: 15, label: camp.name });
+        const result = this.battle([u], defenders, { defenseBonus: 15, label: camp.name, kind: 'capture', settlementId: camp.id });
         if (result.attackerWins) {
           EventSystem.add('war', `🔥 ${u.name} บุกทำลาย${camp.name}! โจรแตกกระเจิง`);
           camp.stock.food = Math.floor(camp.stock.food * 0.3);
@@ -1586,13 +1863,23 @@ const MilitarySystem = {
           if ((target.type === 'castle' || target.buildings.includes('Wall')) && !target.siege && chance(0.6)) {
             target.siege = { armyId: ar.id, days: 0 };
             EventSystem.add('war', `🏰 กองทัพ${faction.name}เริ่มล้อม${target.name} — เสบียงเข้าออกไม่ได้`);
+            settlementHistory(target, `ถูกกองทัพ${faction.name}ล้อมเมือง`);
+            Chronicle.add({
+              category: 'war', importance: 4,
+              title: `🏰 ${battleName('siege', target.name, sum(units, u => unitMembers(u).length))}เริ่มขึ้น`,
+              description: `กองทัพ${faction.name}ปิดล้อม${target.name} เสบียงเข้าออกไม่ได้ ราคาอาหารภายในพุ่งสูง`,
+              settlements: [target.id], factions: [faction.id, target.factionId].filter(x => x)
+            });
             continue;
           }
+          const oldFactionId = target.factionId;
           const captured = this.resolveCapture(units, faction, commander || getAgent(units[0].leaderId), target);
           target.siege = null;
           if (captured) {
-            // จบภารกิจ กองทัพพักในเมือง
+            // จบภารกิจ กองทัพพักในเมือง — สงครามจบด้วยชัยชนะฝ่ายบุก
             ar.objective = { type: 'idle' };
+            const war = oldFactionId ? activeWarBetween(ar.factionId, oldFactionId) : null;
+            if (war) endWar(war, ar.factionId, 'ฝ่ายบุกบรรลุเป้าหมายสงคราม');
             const f = getFaction(ar.factionId);
             if (f) { f.warState = false; }
           } else {
@@ -1623,8 +1910,17 @@ const MilitarySystem = {
         const faction = getFaction(ar.factionId);
         const commander = getAgent(ar.commanderId);
         EventSystem.add('war', `🏳 ${s.name} ยอมจำนนหลังถูกล้อม ${s.siege.days} วัน`);
+        settlementHistory(s, `ยอมจำนนหลังถูกล้อม ${s.siege.days} วัน`);
+        const siegeDays = s.siege.days;
+        const oldFactionId = s.factionId;
         s.siege = null;
-        if (faction && commander) this.resolveCapture(ar.unitIds.map(getUnit).filter(Boolean), faction, commander, s);
+        if (faction && commander) {
+          const captured = this.resolveCapture(ar.unitIds.map(getUnit).filter(Boolean), faction, commander, s);
+          if (captured) {
+            const war = oldFactionId ? activeWarBetween(ar.factionId, oldFactionId) : null;
+            if (war) endWar(war, ar.factionId, `${s.name}ยอมจำนนหลังถูกล้อม ${siegeDays} วัน`);
+          }
+        }
         ar.objective = { type: 'idle' };
       } else if (ar.supply.food <= 0 || ar.morale < 25) {
         EventSystem.add('war', `💨 กองทัพที่ล้อม${s.name}ถอยทัพเพราะขาดเสบียง`);
@@ -1766,6 +2062,31 @@ const GovernanceSystem = {
     s.crime = clamp(s.crime + (s.security < 30 ? 1 : -1) + (hungryCount > 3 ? 1.5 : 0) + (s.unrest > 60 ? 0.8 : 0), 0, 100);
     s.prosperity = clamp(s.prosperity + (s.treasury > 400 ? 0.4 : s.treasury < 80 ? -0.5 : 0) + (foodPriceRatio < 1.5 ? 0.3 : -0.3) - (s.raidedRecently > 0 ? 0.5 : 0), 0, 100);
 
+    /* ── บันทึกช่วงวิกฤต/ปีทองของเมือง ── */
+    if (s.stock.food < 8 && pop >= 5 && !s._famineFlag) {
+      s._famineFlag = true;
+      settlementHistory(s, `เกิดทุพภิกขภัย อาหารเกือบหมดคลัง ราคาพุ่งเป็น ${fmt(s.prices.food, 1)}`);
+      Chronicle.add({
+        category: 'disaster', importance: 4,
+        title: `🍞 ทุพภิกขภัยที่${s.name}`,
+        description: `คลังอาหารของ${s.name}เกือบหมดขณะมีประชากร ${pop} คน ราคาอาหารพุ่งเป็น ${fmt(s.prices.food, 1)} ทอง ผู้คนเริ่มหนีออกจากเมือง`,
+        settlements: [s.id]
+      });
+    } else if (s.stock.food > 60 && s._famineFlag) {
+      s._famineFlag = false;
+      settlementHistory(s, `ผ่านพ้นวิกฤตอาหาร คลังกลับมาอุดมสมบูรณ์`);
+    }
+    if (s.prosperity > 85 && !s._goldenFlag) {
+      s._goldenFlag = true;
+      settlementHistory(s, `เข้าสู่ยุคทอง — มั่งคั่งรุ่งเรืองที่สุดในประวัติศาสตร์`);
+      Chronicle.add({
+        category: 'settlement', importance: 3,
+        title: `✨ ยุคทองของ${s.name}`,
+        description: `${s.name} มั่งคั่งถึงขีดสุด คลังเมือง ${fmt(s.treasury)} ทอง ประชากร ${pop} คน`,
+        settlements: [s.id]
+      });
+    } else if (s.prosperity < 50) s._goldenFlag = false;
+
     if (s.raidedRecently > 0) s.raidedRecently--;
     if (s.drought > 0) { s.drought--; if (s.drought === 0) EventSystem.add('system', `🌧 ฝนกลับมาตกที่${s.name} ภัยแล้งสิ้นสุด`); }
     if (s.plague > 0) { s.plague -= 0.1; if (s.plague <= 0) { s.plague = 0; EventSystem.add('system', `💚 โรคระบาดที่${s.name}สงบลง`); } }
@@ -1859,11 +2180,17 @@ const GovernanceSystem = {
     for (const a of agentsAt(s.id)) a.factionId = newF.id;
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
     if (garrison) garrison.factionId = newF.id;
-    oldFaction.enemies.push(newF.id);
-    newF.enemies.push(oldFaction.id);
-    oldFaction.warState = true; newF.warState = true;
+    startWar(newF, oldFaction, `${gov.name} ประกาศแยก${s.name}เป็นเอกราช`);
     EventSystem.add('politics', `🔥👑 ${gov.name} ประกาศแยก${s.name}เป็นอิสระจาก${oldFaction.name}! ตั้ง${newF.name} — สงครามกลางเมืองปะทุ`);
-    s.history.push(`Day ${world.day}: ประกาศเอกราช`);
+    settlementHistory(s, `ประกาศเอกราชจาก${oldFaction.name} ภายใต้${gov.name}`);
+    addDeed(gov, `ประกาศแยก${s.name}เป็นอิสระ ตั้งตนเป็นขุนศึก`, 20, 'ขุนศึกกบฏ');
+    factionTimeline(oldFaction, `${gov.name} พา${s.name}แยกตัวเป็นเอกราช`);
+    Chronicle.add({
+      category: 'rebellion', importance: 5,
+      title: `🔥 ${gov.name} ประกาศเอกราช${s.name}`,
+      description: `ผู้ปกครองที่ทะเยอทะยานตัดสัมพันธ์กับ${oldFaction.name} สถาปนา${newF.name} — สงครามกลางเมืองปะทุ`,
+      agents: [gov.id], settlements: [s.id], factions: [newF.id, oldFaction.id]
+    });
   },
 
   appointGovernor(s) {
@@ -1877,6 +2204,8 @@ const GovernanceSystem = {
     best.gov = best.gov || makeGovAttrs();
     if (!RULER_PROFS.has(best.profession)) best.profession = 'mayor';
     EventSystem.add('politics', `📜 ${best.name} ได้รับแต่งตั้งเป็นผู้ปกครอง${s.name}`);
+    addDeed(best, `ได้รับแต่งตั้งเป็นผู้ปกครอง${s.name}`, 6);
+    settlementHistory(s, `${best.name} ขึ้นเป็นผู้ปกครอง`);
   },
 
   rebellionCheck(s) {
@@ -1897,22 +2226,37 @@ const GovernanceSystem = {
 
     // สู้กับ garrison ทันที
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
-    const result = MilitarySystem.battle([u], garrison ? [garrison] : [], { defenseBonus: s.security * 0.3, label: s.name });
+    const result = MilitarySystem.battle([u], garrison ? [garrison] : [], {
+      defenseBonus: s.security * 0.3, label: s.name, kind: 'rebellion', settlementId: s.id,
+      defFactionId: s.factionId
+    });
     if (result.attackerWins) {
+      const oldOwner = s.ownerId ? getAgent(s.ownerId) : null;
+      if (oldOwner) s.pastRulers.push(oldOwner.name);
       const newF = createFaction({
         name: `สาธารณรัฐ${s.name.replace('เมือง', '').replace('บ้าน', '')}`,
         color: pick(['#ff5722', '#8bc34a', '#673ab7', '#009688']),
         rulerId: leader.id, treasury: s.treasury * 0.4
       });
       const oldFaction = getFaction(s.factionId);
-      if (oldFaction) { oldFaction.enemies.push(newF.id); newF.enemies.push(oldFaction.id); oldFaction.warState = true; }
+      if (oldFaction) startWar(newF, oldFaction, `กบฏยึด${s.name}ตั้ง${newF.name}`);
       s.factionId = newF.id;
       s.ownerId = leader.id;
       s.governorId = leader.id;
+      s.timesCaptured++;
       leader.profession = 'lord'; leader.rank = 'rebel_lord';
       leader.gov = makeGovAttrs();
       leader.factionId = newF.id;
       s.unrest = 30; s.loyalty = 55; s.taxRate = 0.06;
+      addDeed(leader, `นำประชาชนลุกฮือยึด${s.name} สถาปนา${newF.name}`, 22, 'ขุนศึกกบฏ');
+      if (oldFaction) factionTimeline(oldFaction, `เสีย${s.name}ให้กบฏของ${leader.name}`);
+      Chronicle.add({
+        category: 'rebellion', importance: 5,
+        title: `🔥 กบฏยึด${s.name}สำเร็จ — กำเนิด${newF.name}`,
+        description: `${leader.name} นำประชาชนที่อดอยากและโกรธแค้นลุกฮือโค่นผู้ปกครอง สถาปนา${newF.name}และลดภาษีเหลือ 6%`,
+        agents: [leader.id], settlements: [s.id],
+        factions: [newF.id, oldFaction ? oldFaction.id : null].filter(x => x)
+      });
       if (garrison) {
         for (const m of unitMembers(garrison)) { m.unitId = null; m.profession = 'unemployed'; }
         world.units = world.units.filter(x => x.id !== garrison.id);
@@ -1922,9 +2266,10 @@ const GovernanceSystem = {
       u.kind = 'guard'; u.factionId = newF.id; s.garrisonUnitId = u.id;
       for (const m of unitMembers(u)) { m.factionId = newF.id; m.profession = 'guard'; }
       EventSystem.add('politics', `👑 กบฏยึด${s.name}สำเร็จ! ${leader.name} สถาปนา${newF.name}`);
-      s.history.push(`Day ${world.day}: กบฏยึดเมือง ตั้ง${newF.name}`);
+      settlementHistory(s, `กบฏยึดเมือง ตั้ง${newF.name} ภายใต้${leader.name}`);
     } else {
       EventSystem.add('war', `🛡 กบฏที่${s.name}ถูกปราบ (ตาย ${result.atkResult.dead} คน) — ความไม่พอใจยังคุกรุ่น`);
+      settlementHistory(s, `การลุกฮือของประชาชนถูกปราบ (ตาย ${result.atkResult.dead})`);
       s.unrest = clamp(s.unrest - 15, 0, 100);
       BanditSystem.disband(u);
     }
@@ -2053,8 +2398,23 @@ function handleRulerDeath(dead) {
       heir.rank = heir.profession;
       for (const s of settlements) if (s.ownerId === dead.id) s.ownerId = heir.id;
       EventSystem.add('politics', `👑 ${heir.name} สืบทอดอำนาจปกครอง${f.name}ต่อจาก${dead.name}`);
+      addDeed(heir, `สืบทอดบัลลังก์${f.name}ต่อจาก${dead.name}`, 15);
+      factionTimeline(f, `${heir.name} ขึ้นเป็นผู้นำคนใหม่`);
+      Chronicle.add({
+        category: 'faction', importance: 4,
+        title: `👑 ${heir.name} ขึ้นครองอำนาจ${f.name}`,
+        description: `สืบทอดอำนาจต่อจาก${dead.name}ที่จากไป`,
+        agents: [heir.id], factions: [f.id]
+      });
     } else {
       EventSystem.add('politics', `💀 ${f.name} ไร้ผู้สืบทอด — อาณาจักรระส่ำระสาย`);
+      factionTimeline(f, `ไร้ผู้สืบทอดหลัง${dead.name}ตาย — ระส่ำระสาย`);
+      Chronicle.add({
+        category: 'faction', importance: 4,
+        title: `💀 ${f.name} เข้าสู่ยุคไร้ผู้นำ`,
+        description: `การตายของ${dead.name}ทิ้งบัลลังก์ว่างไว้ ความไม่สงบแผ่ไปทุกหัวเมือง`,
+        factions: [f.id]
+      });
       for (const s of settlements) { s.unrest = clamp(s.unrest + 25, 0, 100); s.loyalty = clamp(s.loyalty - 20, 0, 100); }
     }
   }
@@ -2071,6 +2431,20 @@ function checkFactionCollapse(f) {
   const remaining = world.settlements.filter(s => s.factionId === f.id);
   if (remaining.length === 0) {
     EventSystem.add('politics', `🏴 ${f.name} ล่มสลาย — สิ้นชื่อจากหน้าประวัติศาสตร์`);
+    factionTimeline(f, `ล่มสลาย สิ้นชื่อจากหน้าประวัติศาสตร์`);
+    const age = world.day - f.foundedDay;
+    Chronicle.add({
+      category: 'faction', importance: 5,
+      title: `🏴 ${f.name} ล่มสลาย`,
+      description: `หลังยืนหยัดมา ${age} วัน ${f.name} สูญสิ้นดินแดนทั้งหมดและหายไปจากหน้าประวัติศาสตร์`,
+      factions: [f.id]
+    });
+    // สงครามที่ค้างอยู่จบลง — ฝ่ายตรงข้ามชนะ
+    for (const w of world.wars) {
+      if (w.endDay) continue;
+      if (w.attackerId === f.id) endWar(w, w.defenderId, `${f.name}ล่มสลาย`);
+      else if (w.defenderId === f.id) endWar(w, w.attackerId, `${f.name}ล่มสลาย`);
+    }
     f.warState = false;
     for (const other of world.factions) other.enemies = other.enemies.filter(e => e !== f.id);
   }
@@ -2185,6 +2559,28 @@ function simulateDay() {
     }
   }
 
+  /* ── Phase 10: บันทึกประวัติอาชีพ (career) ของทุก agent ── */
+  for (const a of world.agents) {
+    if (!a.alive) continue;
+    const last = a.career[a.career.length - 1];
+    if (last.profession !== a.profession) {
+      a.career.push({ day: world.day, profession: a.profession });
+      if (a.career.length > 12) a.career.splice(1, 1); // เก็บอาชีพแรกไว้เสมอ
+    }
+  }
+
+  /* ── สงครามยืดเยื้อไร้ผลแพ้ชนะ → สงบศึก ── */
+  for (const w of world.wars) {
+    if (w.endDay) continue;
+    const lastBattleDay = w.battles.length ? w.battles[w.battles.length - 1].day : w.startDay;
+    if (world.day - lastBattleDay > 60 && world.day - w.startDay > 90) {
+      endWar(w, null, 'ทั้งสองฝ่ายอ่อนล้าจนสงครามค่อยๆ มอดดับ');
+    }
+  }
+
+  /* ── สรุปยุคสมัยอัตโนมัติทุก 50 วัน ── */
+  if (world.day % 50 === 0) generateEraSummary();
+
   /* สรุปสถานการณ์ทุก 15 วัน */
   if (world.day % 15 === 0) {
     const alive = world.agents.filter(a => a.alive).length;
@@ -2193,6 +2589,54 @@ function simulateDay() {
   }
 
   UI.inspectorDirty = true;
+}
+
+/* ── สร้างข้อความสรุปยุคสมัย 50 วันเป็นภาษาไทย ── */
+function generateEraSummary() {
+  const st = world.stats;
+  const prev = world._eraSnapshot || { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0 };
+  const d = {
+    deaths: st.deaths - prev.deaths,
+    battles: st.battles - prev.battles,
+    raids: (st.raids - prev.raids) + (st.caravansRobbed - prev.caravansRobbed)
+  };
+  world._eraSnapshot = { deaths: st.deaths, battles: st.battles, raids: st.raids, caravansRobbed: st.caravansRobbed };
+
+  const from = world.day - 49;
+  const mkts = marketSettlements();
+  const avgFood = sum(mkts, s => s.prices.food) / Math.max(mkts.length, 1);
+  const richest = mkts.reduce((m, s) => s.treasury > m.treasury ? s : m, mkts[0]);
+  const hungriest = mkts.reduce((m, s) => s.prices.food > m.prices.food ? s : m, mkts[0]);
+  const famous = world.agents.filter(a => a.alive && a.fame > 0).sort((a, b) => b.fame - a.fame)[0];
+  const activeWar = world.wars.find(w => !w.endDay);
+
+  let theme, detail;
+  if (d.battles >= 5 || activeWar) {
+    theme = 'ยุคแห่งสงคราม';
+    detail = activeWar
+      ? `${activeWar.name}ยังคุกรุ่น มีศึกปะทุ ${d.battles} ครั้งในช่วงนี้`
+      : `แผ่นดินลุกเป็นไฟด้วยศึก ${d.battles} ครั้ง`;
+  } else if (d.raids >= 10) {
+    theme = 'ยุคโจรชุกชุม';
+    detail = `เส้นทางการค้ากลายเป็นแดนอันตราย มีการปล้นถึง ${d.raids} ครั้ง พ่อค้าต้องเสี่ยงชีวิตแลกกำไร`;
+  } else if (d.deaths >= 20 || avgFood > 25) {
+    theme = 'ยุคแห่งความอดอยาก';
+    detail = `ราคาอาหารเฉลี่ยพุ่งสูงถึง ${fmt(avgFood, 1)} ทอง ${hungriest.name}เดือดร้อนหนักที่สุด มีผู้เสียชีวิต ${d.deaths} ราย`;
+  } else if (avgFood < 12 && d.deaths < 10) {
+    theme = 'ยุคแห่งความรุ่งเรือง';
+    detail = `การค้าคึกคัก อาหารถูก (เฉลี่ย ${fmt(avgFood, 1)} ทอง) ${richest.name}มั่งคั่งที่สุดด้วยคลัง ${fmt(richest.treasury)} ทอง`;
+  } else {
+    theme = 'ยุคแห่งการฟื้นตัว';
+    detail = `ผู้คนเริ่มตั้งหลักได้ ราคาอาหารเฉลี่ย ${fmt(avgFood, 1)} ทอง`
+      + (d.raids > 0 ? ` แม้ยังมีการปล้นอยู่บ้าง (${d.raids} ครั้ง)` : ' เส้นทางการค้าสงบผิดปกติ');
+  }
+  let text = `ช่วงวันที่ ${from}-${world.day} คือ${theme} — ${detail}`;
+  if (famous) text += ` ผู้ที่ถูกกล่าวขานมากที่สุดคือ ${famous.name}${famous.title ? ` "${famous.title}"` : ''}`;
+
+  world.eras.push({ from, to: world.day, theme, text });
+  if (world.eras.length > 40) world.eras.shift();
+  Chronicle.add({ category: 'era', importance: 4, title: `📜 ${theme} (วันที่ ${from}-${world.day})`, description: text });
+  EventSystem.add('system', `📜 ${text}`);
 }
 
 /* ═══════════════════ 16. RENDERER ═══════════════════ */
@@ -2431,6 +2875,7 @@ const Renderer = {
   drawSelection(ctx) {
     const sel = UI.selected;
     let x, y, r = 14;
+    if (sel.kind === 'faction') return; // faction ไม่มีตำแหน่งบนแผนที่
     if (sel.kind === 'settlement') {
       const s = getSettlement(sel.id); if (!s) return;
       x = this.sx(s.x); y = this.sy(s.y);
@@ -2508,6 +2953,9 @@ const UI = {
   roadPickFirst: null,
   logDirty: true,
   inspectorDirty: true,
+  chronicleDirty: true,
+  chronicleFilter: 'all',
+  chronicleOpen: false,
   _lastTickTime: 0,
 
   init() {
@@ -2530,6 +2978,39 @@ const UI = {
     document.getElementById('heatmapSelect').addEventListener('change', e => { this.heatmapMode = e.target.value; });
     document.getElementById('btnTools').addEventListener('click', () => {
       document.getElementById('toolPanel').classList.toggle('hidden');
+    });
+
+    // ── Phase 10: Chronicle panel ──
+    document.getElementById('btnChronicle').addEventListener('click', () => {
+      this.chronicleOpen = !this.chronicleOpen;
+      document.getElementById('chroniclePanel').classList.toggle('hidden', !this.chronicleOpen);
+      document.getElementById('summaryModal').classList.add('hidden');
+      if (this.chronicleOpen) { this.chronicleDirty = true; }
+    });
+    document.getElementById('chronClose').addEventListener('click', () => {
+      this.chronicleOpen = false;
+      document.getElementById('chroniclePanel').classList.add('hidden');
+    });
+    for (const btn of document.querySelectorAll('.chron-filter')) {
+      btn.addEventListener('click', () => {
+        this.chronicleFilter = btn.dataset.f;
+        document.querySelectorAll('.chron-filter').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.chronicleDirty = true;
+      });
+    }
+
+    // ── Phase 10: World summary ──
+    document.getElementById('btnWorldSummary').addEventListener('click', () => {
+      const modal = document.getElementById('summaryModal');
+      const opening = modal.classList.contains('hidden');
+      modal.classList.toggle('hidden');
+      document.getElementById('chroniclePanel').classList.add('hidden');
+      this.chronicleOpen = false;
+      if (opening) this.renderWorldSummary();
+    });
+    document.getElementById('summaryClose').addEventListener('click', () => {
+      document.getElementById('summaryModal').classList.add('hidden');
     });
 
     // ── sandbox tools ──
@@ -2560,7 +3041,127 @@ const UI = {
     document.getElementById('dayCounter').textContent = `Day ${world.day}`;
     if (this.logDirty) { this.renderLog(); this.logDirty = false; }
     if (this.inspectorDirty) { this.renderInspector(); this.inspectorDirty = false; }
+    if (this.chronicleOpen && this.chronicleDirty) { this.renderChronicle(); this.chronicleDirty = false; }
     requestAnimationFrame(t => this.loop(t));
+  },
+
+  /* ── Phase 10: Chronicle rendering ── */
+  renderChronicle() {
+    const el = document.getElementById('chronicleList');
+    const f = this.chronicleFilter;
+
+    if (f === 'heroes') {
+      // หอเกียรติยศ — ตัวละคร fame สูงสุด (รวมที่ตายแล้วผ่าน legacy ใน chronicle)
+      const heroes = world.agents.filter(a => a.alive && a.fame >= 8)
+        .sort((a, b) => b.fame - a.fame).slice(0, 30);
+      el.innerHTML = heroes.length
+        ? heroes.map(a =>
+          `<div class="hero-row" data-agent="${a.id}">
+             <span><span class="hr-name">${a.name}</span>${a.title ? ` <span class="hr-title">"${a.title}"</span>` : ''}
+             <div class="ce-desc">${a.profession} · ${a.deeds.length ? a.deeds[a.deeds.length - 1].text : '—'}</div></span>
+             <span class="hr-fame">⭐ ${fmt(a.fame)}</span>
+           </div>`).join('')
+        : '<p class="hint">ยังไม่มีผู้ใดสร้างชื่อ — รอวีรบุรุษคนแรกของแผ่นดิน</p>';
+      for (const row of el.querySelectorAll('.hero-row')) {
+        row.addEventListener('click', () => {
+          this.selected = { kind: 'agent', id: +row.dataset.agent };
+          this.inspectorDirty = true;
+        });
+      }
+      return;
+    }
+
+    if (f === 'wars') {
+      // ประวัติสงครามทั้งหมด
+      const wars = world.wars.slice().reverse();
+      el.innerHTML = wars.length
+        ? wars.map(w => {
+          const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
+          const status = w.endDay
+            ? w.summary
+            : `กำลังดำเนินอยู่ (เริ่มวันที่ ${w.startDay}) — ศึกแล้ว ${w.battles.length} ครั้ง สูญเสีย ${w.casualties} ชีวิต ยึดได้ ${w.captured.length} แห่ง`;
+          return `<div class="war-block ${w.endDay ? '' : 'active-war'}">
+                    <div class="wb-name">${w.endDay ? '🕊' : '⚔'} ${w.name}</div>
+                    <div class="ce-desc">${att ? att.name : '?'} vs ${def ? def.name : '?'} · ${w.cause || ''}</div>
+                    <div class="wb-sum">${status}</div>
+                    ${w.battles.slice(-4).map(b => `<div class="timeline-entry"><span class="tl-day">Day ${b.day}</span><span class="tl-text">${b.name} (${b.attackerWon ? 'ฝ่ายบุกชนะ' : 'ฝ่ายรับชนะ'} ตาย ${b.dead})</span></div>`).join('')}
+                  </div>`;
+        }).join('')
+        : '<p class="hint">แผ่นดินยังไม่เคยมีสงครามใหญ่ — สันติภาพอันเปราะบาง</p>';
+      return;
+    }
+
+    const entries = world.chronicle.filter(e => f === 'all' || e.category === f).slice(-200).reverse();
+    el.innerHTML = entries.length
+      ? entries.map(e =>
+        `<div class="chron-entry imp-${e.importance} cat-${e.category}">
+           <div class="ce-title"><span class="ce-day">Day ${e.day}</span>${e.title}</div>
+           ${e.description ? `<div class="ce-desc">${e.description}</div>` : ''}
+         </div>`).join('')
+      : '<p class="hint">ยังไม่มีบันทึกในหมวดนี้ — ประวัติศาสตร์กำลังรอถูกเขียน</p>';
+  },
+
+  /* ── Phase 10: World summary ── */
+  renderWorldSummary() {
+    const el = document.getElementById('summaryBody');
+    const alive = world.agents.filter(a => a.alive);
+    const mkts = marketSettlements();
+    const liveFactions = world.factions.filter(fc => world.settlements.some(s => s.factionId === fc.id));
+
+    // faction ที่แข็งแกร่งสุด = ถิ่นฐาน×100 + ทหาร×10 + คลัง×0.1
+    const strongest = liveFactions.reduce((m, fc) => {
+      const power = world.settlements.filter(s => s.factionId === fc.id).length * 100
+        + alive.filter(a => a.factionId === fc.id && MILITARY_PROFS.has(a.profession)).length * 10
+        + fc.treasury * 0.1;
+      return power > m.power ? { f: fc, power } : m;
+    }, { f: null, power: -1 }).f;
+
+    const richest = mkts.reduce((m, s) => s.treasury > m.treasury ? s : m, mkts[0]);
+    const hungriest = mkts.reduce((m, s) => (s.prices.food / Math.max(s.stock.food, 1)) > (m.prices.food / Math.max(m.stock.food, 1)) ? s : m, mkts[0]);
+    const famous = alive.filter(a => a.fame > 0).sort((a, b) => b.fame - a.fame)[0];
+    const activeWars = world.wars.filter(w => !w.endDay);
+    const banditCount = alive.filter(a => a.profession === 'bandit').length;
+    const starvingTowns = mkts.filter(s => s.stock.food < 15 && populationOf(s) > 3);
+    const unrestTowns = mkts.filter(s => s.unrest > 55);
+
+    // ภัยคุกคามหลัก
+    const threats = [];
+    if (activeWars.length) threats.push(`สงคราม ${activeWars.length} ศึกที่ยังไม่จบ`);
+    if (banditCount >= 8) threats.push(`โจร ${banditCount} คนที่คุกคามเส้นทางการค้า`);
+    if (starvingTowns.length) threats.push(`${starvingTowns.map(s => s.name).join(', ')} กำลังขาดแคลนอาหาร`);
+    if (unrestTowns.length) threats.push(`ความไม่สงบคุกรุ่นใน${unrestTowns.map(s => s.name).join(', ')}`);
+    if (!threats.length) threats.push('ไม่มีภัยคุกคามใหญ่ — แผ่นดินอยู่ในความสงบ (ชั่วคราว?)');
+
+    let html = `<div class="sum-section"><span class="sum-head">ภาพรวม ณ วันที่ ${world.day}</span><br>`;
+    html += `แผ่นดินนี้มีประชากร ${alive.length} ชีวิตใน ${world.settlements.length} ถิ่นฐาน ภายใต้ ${liveFactions.length} ฝ่าย `;
+    html += `ตลอดประวัติศาสตร์เกิดศึก ${world.stats.battles} ครั้ง การปล้น ${world.stats.raids + world.stats.caravansRobbed} ครั้ง และมีผู้เสียชีวิตรวม ${world.stats.deaths} ราย</div>`;
+
+    if (strongest) {
+      const ruler = getAgent(strongest.rulerId);
+      html += `<div class="sum-section"><span class="sum-head">มหาอำนาจ</span><br><span style="color:${strongest.color}">■</span> ${strongest.name} คือฝ่ายที่แข็งแกร่งที่สุด`;
+      if (ruler) html += ` ภายใต้การนำของ ${ruler.name}${ruler.title ? ` "${ruler.title}"` : ''}`;
+      html += `</div>`;
+    }
+    html += `<div class="sum-section"><span class="sum-head">เศรษฐกิจ</span><br>`;
+    html += `เมืองที่มั่งคั่งที่สุดคือ ${richest.name} (คลัง ${fmt(richest.treasury)} ทอง) `;
+    html += `ส่วนที่เดือดร้อนที่สุดคือ ${hungriest.name} (อาหารเหลือ ${fmt(hungriest.stock.food)} ราคา ${fmt(hungriest.prices.food, 1)})</div>`;
+
+    if (famous) {
+      html += `<div class="sum-section"><span class="sum-head">บุคคลแห่งยุค</span><br>`;
+      html += `${famous.name}${famous.title ? ` "${famous.title}"` : ''} (fame ${fmt(famous.fame)}) — ${lifeSummary(famous)}</div>`;
+    }
+    if (activeWars.length) {
+      html += `<div class="sum-section"><span class="sum-head">สงครามที่กำลังดำเนิน</span><br>`;
+      html += activeWars.map(w => `${w.name} (เริ่มวันที่ ${w.startDay} ศึกแล้ว ${w.battles.length} ครั้ง)`).join('<br>');
+      html += `</div>`;
+    }
+    html += `<div class="sum-section"><span class="sum-head">ภัยคุกคามหลัก</span><br>${threats.join('<br>')}</div>`;
+
+    if (world.eras.length) {
+      const era = world.eras[world.eras.length - 1];
+      html += `<div class="sum-section"><span class="sum-head">ยุคสมัยล่าสุด</span><br>${era.text}</div>`;
+    }
+    el.innerHTML = html;
   },
 
   renderLog() {
@@ -2581,6 +3182,7 @@ const UI = {
     if (!sel) {
       title.textContent = 'Inspector — ภาพรวมโลก';
       body.innerHTML = this.worldSummaryHTML();
+      this.wireInspectorLinks(body);
       return;
     }
     if (sel.kind === 'agent') {
@@ -2603,8 +3205,17 @@ const UI = {
       if (!ar) { this.selected = null; return; }
       title.textContent = `🚩 ${ar.name}`;
       body.innerHTML = this.armyHTML(ar);
+    } else if (sel.kind === 'faction') {
+      const fc = getFaction(sel.id);
+      if (!fc) { this.selected = null; return; }
+      title.textContent = `🚩 ${fc.name}`;
+      body.innerHTML = this.factionHTML(fc);
     }
-    // ทำ links คลิกได้
+    this.wireInspectorLinks(body);
+  },
+
+  // ทำ links ใน inspector ให้คลิกได้
+  wireInspectorLinks(body) {
     for (const link of body.querySelectorAll('[data-sel-kind]')) {
       link.addEventListener('click', () => {
         this.selected = { kind: link.dataset.selKind, id: +link.dataset.selId };
@@ -2631,15 +3242,22 @@ const UI = {
     html += this.kv('การปล้น', world.stats.raids + world.stats.caravansRobbed);
     html += this.kv('ผู้เสียชีวิต', world.stats.deaths, 'bad');
     html += `</div>`;
-    html += `<div class="insp-section"><h4>ฝ่าย (Factions)</h4>`;
+    html += `<div class="insp-section"><h4>ฝ่าย (Factions) — คลิกดู timeline</h4>`;
     for (const f of world.factions) {
       const n = world.settlements.filter(s => s.factionId === f.id).length;
       if (n === 0 && !f.isBandit) continue;
       const ruler = getAgent(f.rulerId);
-      html += this.kv(`<span style="color:${f.color}">■</span> ${f.name}${f.warState ? ' ⚔' : ''}`,
+      html += this.kv(this.link('faction', f.id, `<span style="color:${f.color}">■</span> ${f.name}${f.warState ? ' ⚔' : ''}`),
         `${n} ถิ่นฐาน${ruler ? ' · ' + this.link('agent', ruler.id, ruler.name.split(' ')[0]) : ''}`);
     }
     html += `</div>`;
+    // ตัวละครที่โด่งดังที่สุด
+    const topFame = alive.filter(a => a.fame > 0).sort((a, b) => b.fame - a.fame).slice(0, 5);
+    if (topFame.length) {
+      html += `<div class="insp-section"><h4>บุคคลแห่งยุค</h4>`;
+      for (const a of topFame) html += this.kv(this.link('agent', a.id, a.name), `⭐ ${fmt(a.fame)}${a.title ? ` "${a.title}"` : ''}`);
+      html += `</div>`;
+    }
     html += `<div class="insp-section"><h4>อาชีพ</h4>`;
     for (const [p, n] of Object.entries(profCount).sort((a, b) => b[1] - a[1])) html += this.kv(p, n);
     html += `</div>`;
@@ -2650,16 +3268,20 @@ const UI = {
     const s = getSettlement(a.locationId);
     const f = getFaction(a.factionId);
     const u = a.unitId ? getUnit(a.unitId) : null;
-    let html = `<div class="thought">💭 "${a.currentThought}"</div>`;
+    let html = '';
+    if (a.title) html += `<div class="thought" style="border-color:#ffd54f">🏅 "${a.title}" ${a.notable ? '· ตัวละครสำคัญแห่งยุค' : ''}</div>`;
+    html += `<div class="thought">💭 "${a.currentThought}"</div>`;
     html += `<div class="insp-section"><h4>ข้อมูลทั่วไป</h4>`;
     html += this.kv('อาชีพ', `<span style="color:${PROF_COLOR[a.profession] || '#fff'}">${a.profession}</span> (${a.rank})`);
     html += this.kv('อายุ', a.age);
-    html += this.kv('ฝ่าย', f ? f.name : '—');
+    html += this.kv('ฝ่าย', f ? this.link('faction', f.id, f.name) : '—');
     html += this.kv('อยู่ที่', s ? this.link('settlement', s.id, s.name) : 'ระหว่างเดินทาง');
     html += this.kv('เป้าหมาย', a.currentGoal);
     if (u) html += this.kv('สังกัดหน่วย', this.link('unit', u.id, u.name));
-    html += this.kv('ชื่อเสียง', fmt(a.reputation));
+    html += this.kv('ชื่อเสียง (rep)', fmt(a.reputation));
+    html += this.kv('Fame', fmt(a.fame), a.fame >= 20 ? 'warn' : '');
     html += `</div>`;
+    html += `<div class="insp-section"><h4>เรื่องราวชีวิต</h4><div class="ce-desc" style="font-size:11.5px;line-height:1.5">${lifeSummary(a)}</div></div>`;
     html += `<div class="insp-section"><h4>สถานะ</h4>`;
     html += this.kv('Hunger', fmt(a.stats.hunger), a.stats.hunger < 30 ? 'bad' : 'good') + this.bar(a.stats.hunger, a.stats.hunger < 30 ? '#ef5350' : '#5dbb63');
     html += this.kv('Health', fmt(a.stats.health)) + this.bar(a.stats.health, '#42a5f5');
@@ -2682,7 +3304,27 @@ const UI = {
     html += this.kv('รอดจากศึก', a.memory.survivedBattles);
     html += this.kv('เมืองที่เคยไป', a.memory.citiesVisited.length);
     if (a.memory.raidsDone) html += this.kv('เคยปล้น', a.memory.raidsDone + ' ครั้ง', 'bad');
+    if (a.memory.tradeProfit > 0) html += this.kv('กำไรค้าขายสะสม', fmt(a.memory.tradeProfit) + ' ทอง', 'good');
     html += `</div>`;
+    // ── Phase 10: เส้นทางอาชีพ ──
+    if (a.career.length > 1) {
+      html += `<div class="insp-section"><h4>เส้นทางอาชีพ</h4>`;
+      html += a.career.slice(-8).map(c =>
+        `<div class="timeline-entry"><span class="tl-day">Day ${c.day}</span><span class="tl-text">${c.profession}</span></div>`).join('');
+      html += `</div>`;
+    }
+    // ── Phase 10: วีรกรรม ──
+    if (a.deeds.length) {
+      html += `<div class="insp-section"><h4>วีรกรรม (Notable Deeds)</h4>`;
+      html += a.deeds.slice(-8).reverse().map(d =>
+        `<div class="timeline-entry"><span class="tl-day">Day ${d.day}</span><span class="tl-text">${d.text}</span></div>`).join('');
+      html += `</div>`;
+    }
+    // เมืองที่เคยอยู่/ผ่าน
+    if (a.memory.citiesVisited.length) {
+      const names = a.memory.citiesVisited.map(id => (getSettlement(id) || {}).name).filter(x => x);
+      if (names.length) html += `<div class="insp-section"><h4>ถิ่นฐานที่เคยผ่าน</h4><div class="ce-desc">${names.join(' · ')}</div></div>`;
+    }
     return html;
   },
 
@@ -2695,7 +3337,8 @@ const UI = {
     if (s.siege) html += `<div class="thought" style="border-color:#ef5350">⚠ เมืองกำลังถูกล้อม! (วันที่ ${s.siege.days})</div>`;
     html += `<div class="insp-section"><h4>การปกครอง</h4>`;
     html += this.kv('ประเภท', s.type);
-    html += this.kv('ฝ่าย', f ? `<span style="color:${f.color}">■</span> ${f.name}` : '—');
+    html += this.kv('ก่อตั้งเมื่อ', s.foundedDay === 0 ? 'ยุคก่อตั้งโลก' : `Day ${s.foundedDay}`);
+    html += this.kv('ฝ่าย', f ? this.link('faction', f.id, `<span style="color:${f.color}">■</span> ${f.name}`) : '—');
     html += this.kv('เจ้าของ', owner && owner.alive ? this.link('agent', owner.id, owner.name) : '—');
     html += this.kv('ผู้ปกครอง', gov && gov.alive ? this.link('agent', gov.id, gov.name) : '—');
     if (gov && gov.gov) {
@@ -2734,9 +3377,52 @@ const UI = {
       html += this.kv('Morale', fmt(garrison.morale), garrison.morale < 35 ? 'bad' : '');
     } else html += `<div class="kv"><span class="k">— ไม่มีทหารประจำการ —</span></div>`;
     html += `</div>`;
+    // ── Phase 10: ประวัติเมือง ──
+    html += `<div class="insp-section"><h4>สถิติประวัติศาสตร์</h4>`;
+    html += this.kv('เคยถูกปล้น', s.timesRaided + ' ครั้ง', s.timesRaided > 2 ? 'bad' : '');
+    html += this.kv('เคยถูกยึด', s.timesCaptured + ' ครั้ง', s.timesCaptured > 0 ? 'warn' : '');
+    if (s.pastRulers.length) html += this.kv('ผู้ปกครองในอดีต', s.pastRulers.slice(-3).join(', '));
+    html += `</div>`;
     if (s.history.length) {
-      html += `<div class="insp-section"><h4>ประวัติเมือง</h4>`;
-      html += s.history.slice(-6).map(h => `<div class="kv"><span class="k">${h}</span></div>`).join('');
+      html += `<div class="insp-section"><h4>เหตุการณ์สำคัญของเมือง (Timeline)</h4>`;
+      html += s.history.slice(-10).map(h => `<div class="timeline-entry"><span class="tl-text">${h}</span></div>`).join('');
+      html += `</div>`;
+    }
+    return html;
+  },
+
+  /* ── Phase 10: Faction inspector ── */
+  factionHTML(f) {
+    const ruler = getAgent(f.rulerId);
+    const settlements = world.settlements.filter(s => s.factionId === f.id);
+    const members = world.agents.filter(a => a.alive && a.factionId === f.id);
+    const soldiers = members.filter(a => MILITARY_PROFS.has(a.profession));
+    const wars = world.wars.filter(w => w.attackerId === f.id || w.defenderId === f.id);
+    let html = `<div class="insp-section"><h4>ข้อมูลฝ่าย</h4>`;
+    html += this.kv('สถานะ', settlements.length ? (f.warState ? '⚔ อยู่ในสงคราม' : '🕊 สงบ') : '🏴 ล่มสลายแล้ว', f.warState ? 'bad' : '');
+    html += this.kv('ก่อตั้งเมื่อ', f.foundedDay === 0 ? 'ยุคก่อตั้งโลก' : `Day ${f.foundedDay}`);
+    html += this.kv('ผู้นำ', ruler && ruler.alive ? this.link('agent', ruler.id, ruler.name + (ruler.title ? ` "${ruler.title}"` : '')) : '— ไร้ผู้นำ —');
+    html += this.kv('ถิ่นฐาน', settlements.length);
+    html += this.kv('ประชากรในสังกัด', members.length);
+    html += this.kv('กำลังทหาร', soldiers.length);
+    html += this.kv('คลังกลาง', fmt(f.treasury) + ' ทอง');
+    html += `</div>`;
+    if (settlements.length) {
+      html += `<div class="insp-section"><h4>ดินแดน</h4>`;
+      for (const s of settlements) html += this.kv(this.link('settlement', s.id, s.name), s.type);
+      html += `</div>`;
+    }
+    if (wars.length) {
+      html += `<div class="insp-section"><h4>สงคราม</h4>`;
+      for (const w of wars.slice(-4).reverse()) {
+        html += `<div class="timeline-entry"><span class="tl-day">Day ${w.startDay}${w.endDay ? '-' + w.endDay : '+'}</span><span class="tl-text">${w.name} ${w.endDay ? (w.winner === f.id ? '(ชนะ)' : w.winner ? '(แพ้)' : '(เสมอ)') : '(ดำเนินอยู่)'}</span></div>`;
+      }
+      html += `</div>`;
+    }
+    if (f.timeline.length) {
+      html += `<div class="insp-section"><h4>Timeline ของฝ่าย</h4>`;
+      html += f.timeline.slice(-12).reverse().map(t =>
+        `<div class="timeline-entry"><span class="tl-day">Day ${t.day}</span><span class="tl-text">${t.text}</span></div>`).join('');
       html += `</div>`;
     }
     return html;
@@ -2853,8 +3539,7 @@ const SandboxTools = {
         const kingdoms = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
         if (kingdoms.length >= 2) {
           const [f1, f2] = [kingdoms[0], kingdoms[1]];
-          f1.enemies.push(f2.id); f2.enemies.push(f1.id);
-          f1.warState = true; f2.warState = true;
+          startWar(f1, f2, 'พลังลึกลับปลุกปั่นความเกลียดชังระหว่างสองฝ่าย');
           EventSystem.add('war', `💥 [Sandbox] ${f1.name} ประกาศสงครามกับ ${f2.name}!`);
         } else if (kingdoms.length === 1) {
           // มีอาณาจักรเดียว → บังคับเมืองหนึ่งแยกตัวแล้วเปิดสงคราม
@@ -2964,6 +3649,13 @@ const SandboxTools = {
           createAgent({ locationId: s.id, factionId: s.factionId, profession: type === 'fort' ? 'guard' : 'unemployed' });
         }
         EventSystem.add('system', `✨ [Sandbox] ${s.name} ถือกำเนิดขึ้นบนแผนที่ เชื่อมถนนกับ${nearest.name}`);
+        settlementHistory(s, `ก่อตั้งขึ้นด้วยพลังเหนือธรรมชาติ`);
+        Chronicle.add({
+          category: 'settlement', importance: 3,
+          title: `✨ ${s.name} ถือกำเนิด`,
+          description: `ถิ่นฐานใหม่ปรากฏขึ้นบนแผนที่ เชื่อมเส้นทางกับ${nearest.name}`,
+          settlements: [s.id]
+        });
         this.disarm();
         break;
       }

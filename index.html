@@ -40,6 +40,8 @@
       <option value="faction">เขตอิทธิพล (Faction Control)</option>
     </select>
     <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
+    <button id="btnChronicle" class="tb-btn accent">📖 Chronicle</button>
+    <button id="btnWorldSummary" class="tb-btn">🌍 สรุปโลก</button>
   </div>
 </header>
 
@@ -70,6 +72,36 @@
         <button class="tool-btn" data-tool="giveWealth">💰 ให้เงินเมือง (คลิกเมือง)</button>
       </div>
       <p class="tool-note">เครื่องมือที่ต้องคลิกเป้าหมาย: เลือกเครื่องมือแล้วคลิกบนแผนที่ (คลิกขวาเพื่อยกเลิก)</p>
+    </div>
+
+    <!-- Chronicle panel (Phase 10) -->
+    <div id="chroniclePanel" class="hidden">
+      <div class="chron-header">
+        <h3>📖 Chronicle — ตำนานแห่งแผ่นดิน</h3>
+        <button id="chronClose" class="tb-btn">✕</button>
+      </div>
+      <div class="chron-filters">
+        <button class="chron-filter active" data-f="all">ทั้งหมด</button>
+        <button class="chron-filter" data-f="heroes">🏆 ตัวละครสำคัญ</button>
+        <button class="chron-filter" data-f="wars">⚔ สงคราม</button>
+        <button class="chron-filter" data-f="legend">ตำนาน</button>
+        <button class="chron-filter" data-f="rebellion">กบฏ</button>
+        <button class="chron-filter" data-f="settlement">เมือง</button>
+        <button class="chron-filter" data-f="trade">การค้า</button>
+        <button class="chron-filter" data-f="disaster">ภัยพิบัติ</button>
+        <button class="chron-filter" data-f="faction">ฝ่าย</button>
+        <button class="chron-filter" data-f="era">ยุคสมัย</button>
+      </div>
+      <div id="chronicleList"></div>
+    </div>
+
+    <!-- World summary modal (Phase 10) -->
+    <div id="summaryModal" class="hidden">
+      <div class="chron-header">
+        <h3>🌍 สรุปโลกปัจจุบัน</h3>
+        <button id="summaryClose" class="tb-btn">✕</button>
+      </div>
+      <div id="summaryBody"></div>
     </div>
 
     <!-- Legend -->
