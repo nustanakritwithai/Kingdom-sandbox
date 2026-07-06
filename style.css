@@ -57,6 +57,18 @@ body { display: flex; flex-direction: column; }
   font-variant-numeric: tabular-nums;
 }
 
+.version-badge {
+  margin-left: 6px;
+  padding: 2px 7px;
+  background: rgba(93, 187, 99, 0.15);
+  border: 1px solid rgba(93, 187, 99, 0.45);
+  border-radius: 10px;
+  color: var(--good);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
 .tb-btn {
   background: var(--panel-2);
   color: var(--text);

@@ -23,6 +23,7 @@
     17. UI              (toolbar / inspector / sandbox tools)
     18. INIT
    Phase 10.5: Simulation Stability + Ambition + Combat Depth
+   Phase 10.6: Logistics Cleanup + Local Consumption Fix
    ═══════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -376,6 +377,7 @@ function createSettlement(opt) {
     maxFoodExportRatio: opt.maxFoodExportRatio != null ? opt.maxFoodExportRatio : 0.5,
     recentInbound: 0,
     townCaravanId: null,
+    emergencyCaravanId: null,
     caravanSubsidy: 0
   };
   world.settlements.push(s);
@@ -462,6 +464,9 @@ function createAgent(opt) {
     lastMigrationDay: -99,
     isTownCaravan: !!opt.isTownCaravan,
     caravanOwnerId: opt.caravanOwnerId || null,
+    isEmergencyCaravan: !!opt.isEmergencyCaravan,
+    emergencyDestId: opt.emergencyDestId || null,
+    emergencyDonorId: opt.emergencyDonorId || null,
     wantedLevel: 0,
     skills: Object.assign(DEFAULT_SKILLS(), opt.skills || {}),
     traits: {
@@ -548,7 +553,7 @@ function generateWorld() {
     settlements: [], routes: [], agents: [], units: [], armies: [], factions: [],
     events: [],
     chronicle: [], wars: [], eras: [],
-    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0 }
+    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0 }
   };
 
   // ── Factions ──
@@ -768,8 +773,14 @@ function advanceTravel(entity, speed) {
   while (moved > 0 && t.seg < t.path.length - 1) {
     const aId = t.path[t.seg], bId = t.path[t.seg + 1];
     const r = getRoute(aId, bId);
-    if (!r) { // ถนนถูกทำลายระหว่างทาง — หาทางใหม่หรือย้อนกลับ
-      entity.locationId = aId; entity.travel = null; return false;
+    if (!r) { // ถนนถูกทำลายระหว่างทาง
+      entity.locationId = aId;
+      if (entity.alive !== undefined && (entity.isTownCaravan || entity.isEmergencyCaravan)) {
+        clearTownCaravan(entity, 'lost');
+        if (entity.cargo) entity.cargo = null;
+      }
+      entity.travel = null;
+      return false;
     }
     r.traffic += 0.5;
     const remain = r.distance - t.progress;
@@ -795,8 +806,45 @@ function buyProvisions(a, s, want) {
   if (!s || s.type === 'camp') return;
   const need = Math.max(0, (want || 4) - a.inventory.food);
   if (need <= 0) return;
-  const got = EconomySystem.buyFromSettlement(a, s, 'food', need);
+  const forExport = a.cargo || a.isTownCaravan || a.isEmergencyCaravan || (a.profession === 'trader' && a.cargo);
+  const got = forExport
+    ? EconomySystem.buyFoodForExport(a, s, need)
+    : EconomySystem.buyFoodForLocalConsumption(a, s, need);
   a.inventory.food += got;
+}
+
+/* ── Phase 10.6: town/emergency caravan slot cleanup ── */
+function clearTownCaravan(agent, reason) {
+  if (!agent) return;
+  const wasTown = agent.isTownCaravan && agent.caravanOwnerId;
+  const wasEmergency = agent.isEmergencyCaravan;
+
+  if (wasTown) {
+    const owner = getSettlement(agent.caravanOwnerId);
+    if (owner && owner.townCaravanId === agent.id) {
+      owner.townCaravanId = null;
+      if (reason === 'robbed' || reason === 'lost' || reason === 'death') {
+        EventSystem.add('trade', `🚨 คาราวานเมือง${owner.name}สูญหาย (${reason === 'robbed' ? 'ถูกปล้น' : reason === 'death' ? 'ผู้ขนตาย' : 'สูญหาย'})`);
+        world.stats.townCaravansLost = (world.stats.townCaravansLost || 0) + 1;
+        owner._lastTownCaravanLostDay = world.day;
+      } else if (reason === 'delivered') {
+        if (owner) owner.stock.food += Math.floor((agent.cargo?.qty || 0) * 0.1);
+      } else if (reason === 'replaced') {
+        EventSystem.add('trade', `🐪 ${owner.name} จัดคาราวานเมืองใหม่แทนที่เดิม`);
+        world.stats.townCaravansReplaced = (world.stats.townCaravansReplaced || 0) + 1;
+      }
+    }
+    agent.isTownCaravan = false;
+    agent.caravanOwnerId = null;
+  }
+
+  if (wasEmergency) {
+    const needy = agent.emergencyDestId ? getSettlement(agent.emergencyDestId) : null;
+    if (needy && needy.emergencyCaravanId === agent.id) needy.emergencyCaravanId = null;
+    agent.isEmergencyCaravan = false;
+    agent.emergencyDestId = null;
+    agent.emergencyDonorId = null;
+  }
 }
 
 function agentSpeed(a) {
@@ -928,7 +976,7 @@ const CombatSystem = {
     const dMT = defender.equipment?.mount?.type;
     const dOH = defender.equipment?.offHand?.type;
     if (aMH === 'spear' && dMT) mod *= 1.25;
-    if (aMT && dMH === 'archer') mod *= 1.2;
+    if (aMT && (defender.equipment?.ranged?.type === 'bow' || defender.profession === 'archer') && terrain === 'open') mod *= 1.2;
     if (aRG === 'bow' && terrain === 'range') mod *= 1.2;
     if (aRG === 'bow' && dOH === 'shield') mod *= 0.75;
     if (dMH === 'sword' && terrain === 'close') mod *= 0.9;
@@ -966,6 +1014,17 @@ const CombatSystem = {
     if (eq.mainHand?.type === 'sword' || eq.mainHand?.type === 'axe') return 'swordsman';
     if (MILITARY_PROFS.has(a.profession)) return a.profession;
     return a.profession;
+  },
+
+  // สำหรับทดสอบ matchup cavalry vs archer
+  testCavalryVsArcher() {
+    const cav = { equipment: { mount: { type: 'horse', durability: 70, maxDurability: 70 } }, profession: 'cavalry', combatStats: defaultCombatStats(), skills: DEFAULT_SKILLS(), stats: { morale: 70, health: 100, energy: 80 }, alive: true };
+    const archMH = { equipment: { ranged: { type: 'bow', durability: 50, maxDurability: 50 } }, profession: 'archer', combatStats: defaultCombatStats(), skills: DEFAULT_SKILLS(), stats: { morale: 70, health: 100, energy: 80 }, alive: true };
+    const archWrong = { equipment: { mainHand: { type: 'sword', durability: 50, maxDurability: 50 } }, profession: 'cavalry', combatStats: defaultCombatStats(), skills: DEFAULT_SKILLS(), stats: { morale: 70, health: 100, energy: 80 }, alive: true };
+    const withMatch = this.matchupMod(cav, archMH, 'open');
+    const withoutMatch = this.matchupMod(cav, archWrong, 'open');
+    const closeNoBonus = this.matchupMod(cav, archMH, 'close');
+    return { withMatch, withoutMatch, closeNoBonus, diff: withMatch - withoutMatch };
   }
 };
 
@@ -1089,6 +1148,7 @@ const AmbitionSystem = {
 const LogisticsSystem = {
   updateSettlement(s) {
     if (s.type === 'camp') return;
+    LogisticsSystem.validateCaravanSlots(s);
     const pop = populationOf(s);
     const daysFood = pop > 0 ? s.stock.food / Math.max(pop * 2, 1) : 99;
     const exportable = SettlementMetrics.exportableFood(s);
@@ -1118,7 +1178,10 @@ const LogisticsSystem = {
   },
 
   spawnTownCaravan(s, dest) {
-    let carrier = agentsAt(s.id).find(a => (a.profession === 'trader' || a.profession === 'unemployed') && !a.travel && !a.unitId);
+    LogisticsSystem.validateCaravanSlots(s);
+    if (s.townCaravanId) return;
+    const isReplacement = s._lastTownCaravanLostDay && world.day - s._lastTownCaravanLostDay < 90;
+    let carrier = agentsAt(s.id).find(a => (a.profession === 'trader' || a.profession === 'unemployed') && !a.travel && !a.unitId && !a.isTownCaravan && !a.isEmergencyCaravan);
     if (!carrier) {
       carrier = createAgent({ locationId: s.id, factionId: s.factionId, profession: 'trader', isTownCaravan: true, caravanOwnerId: s.id });
       seedSkillForProfession(carrier, 'trader');
@@ -1134,20 +1197,104 @@ const LogisticsSystem = {
     carrier.currentGoal = `คาราวานเมืองขนอาหารไป${dest.name}`;
     buyProvisions(carrier, s, 4);
     startTravel(carrier, dest.id, 'town_caravan');
-    EventSystem.add('trade', `🐪 ${s.name} ส่งคาราวานเมืองขนอาหาร ${qty} หน่วยไป${dest.name}`);
+    EventSystem.add('trade', isReplacement
+      ? `🐪 ${s.name} จัดคาราวานเมืองใหม่ขนอาหาร ${qty} หน่วยไป${dest.name}`
+      : `🐪 ${s.name} ส่งคาราวานเมืองขนอาหาร ${qty} หน่วยไป${dest.name}`);
+    if (isReplacement) {
+      world.stats.townCaravansReplaced = (world.stats.townCaravansReplaced || 0) + 1;
+      s._lastTownCaravanLostDay = null;
+    }
     world.stats.townCaravans = (world.stats.townCaravans || 0) + 1;
   },
 
   spawnEmergencyRelief(donor, needy) {
     const qty = Math.min(SettlementMetrics.exportableFood(donor), Math.ceil(populationOf(needy) * 2));
     if (qty < 6) return;
+    const path = findPath(donor.id, needy.id);
+    const collapsing = needy.stock.food <= 2 && needy.unrest > 75 && populationOf(needy) > 3;
+    if (path && !collapsing && !needy.emergencyCaravanId) {
+      this.spawnEmergencyCaravan(donor, needy, qty);
+    } else {
+      this.directEmergencyReliefFallback(donor, needy, qty, path ? 'เมืองล่มสลายหนัก' : 'ไม่มีเส้นทาง');
+    }
+  },
+
+  spawnEmergencyCaravan(donor, needy, qty) {
+    if (needy.emergencyCaravanId) return;
+    let carrier = agentsAt(donor.id).find(a => !a.travel && !a.unitId && !a.isTownCaravan && !a.isEmergencyCaravan);
+    if (!carrier) {
+      carrier = createAgent({
+        locationId: donor.id, factionId: donor.factionId, profession: 'trader',
+        isEmergencyCaravan: true, emergencyDestId: needy.id, emergencyDonorId: donor.id
+      });
+      seedSkillForProfession(carrier, 'trader');
+    }
+    carrier.isEmergencyCaravan = true;
+    carrier.emergencyDestId = needy.id;
+    carrier.emergencyDonorId = donor.id;
+    carrier.profession = 'trader';
+    needy.emergencyCaravanId = carrier.id;
+    donor.stock.food -= qty;
+    carrier.cargo = { good: 'food', qty, buyCost: 0, destId: needy.id, emergency: true };
+    carrier.currentGoal = `คาราวานช่วยเหลือฉุกเฉินไป${needy.name}`;
+    buyProvisions(carrier, donor, 4);
+    if (!startTravel(carrier, needy.id, 'emergency_relief')) {
+      needy.emergencyCaravanId = null;
+      carrier.isEmergencyCaravan = false;
+      carrier.emergencyDestId = null;
+      carrier.emergencyDonorId = null;
+      donor.stock.food += qty;
+      carrier.cargo = null;
+      this.directEmergencyReliefFallback(donor, needy, qty, 'เดินทางล้มเหลว');
+      return;
+    }
+    EventSystem.add('economy', `🆘 ${donor.name} ส่งคาราวานช่วยเหลือฉุกเฉิน ${qty} หน่วยอาหารมุ่งหน้า${needy.name}`);
+    world.stats.emergencyCaravans = (world.stats.emergencyCaravans || 0) + 1;
+  },
+
+  directEmergencyReliefFallback(donor, needy, qty, cause) {
+    if (qty < 6) return;
     donor.stock.food -= qty;
     const cost = Math.min(needy.treasury * 0.25, qty * needy.prices.food * 0.9);
     needy.treasury -= cost;
     donor.treasury += cost;
     needy.stock.food += qty;
-    EventSystem.add('economy', `🆘 ${donor.name} ส่งคาราวานช่วยเหลือฉุกเฉินอาหาร ${qty} หน่วยให้${needy.name}`);
-    settlementHistory(needy, `ได้รับความช่วยเหลืออาหารฉุกเฉินจาก${donor.name} ${qty} หน่วย`);
+    world.stats.emergencyFallbacks = (world.stats.emergencyFallbacks || 0) + 1;
+    EventSystem.add('economy', `⚠️ [Emergency Fallback] ${donor.name} ส่งอาหารตรงถึง${needy.name} ${qty} หน่วย (${cause})`);
+    settlementHistory(needy, `ได้รับความช่วยเหลือฉุกเฉินแบบ fallback จาก${donor.name} ${qty} หน่วย`);
+  },
+
+  validateCaravanSlots(s) {
+    if (s.townCaravanId) {
+      const ag = getAgent(s.townCaravanId);
+      const stuck = !ag || !ag.alive || !ag.isTownCaravan || (!ag.cargo && !ag.travel);
+      if (stuck) {
+        if (ag) clearTownCaravan(ag, ag.alive ? 'cleanup' : 'death');
+        else s.townCaravanId = null;
+      }
+    }
+    if (s.emergencyCaravanId) {
+      const ag = getAgent(s.emergencyCaravanId);
+      const stuck = !ag || !ag.alive || !ag.isEmergencyCaravan || (!ag.cargo && !ag.travel);
+      if (stuck) {
+        if (ag) clearTownCaravan(ag, ag.alive ? 'cleanup' : 'death');
+        else s.emergencyCaravanId = null;
+      }
+    }
+  },
+
+  onEmergencyCaravanArrive(carrier, needy) {
+    if (!carrier.cargo || carrier.cargo.good !== 'food') return;
+    const qty = carrier.cargo.qty;
+    const donor = getSettlement(carrier.emergencyDonorId);
+    const cost = Math.min(needy.treasury * 0.25, qty * needy.prices.food * 0.9);
+    needy.treasury -= cost;
+    if (donor) donor.treasury += cost;
+    needy.stock.food += qty;
+    carrier.cargo = null;
+    clearTownCaravan(carrier, 'delivered');
+    EventSystem.add('economy', `✅ คาราวานช่วยเหลือฉุกเฉินถึง${needy.name} — ส่งอาหาร ${qty} หน่วย`);
+    settlementHistory(needy, `คาราวานช่วยเหลือฉุกเฉินจาก${donor ? donor.name : 'แดนไกล'}นำอาหาร ${qty} หน่วยมาถึง`);
   },
 
   convertToTrader(s, bonus) {
@@ -1180,6 +1327,8 @@ const LogisticsSystem = {
       if (!sa || !sb) continue;
       r.priceGapFood = Math.abs(sa.prices.food - sb.prices.food) / BASE_PRICE.food;
       r.threat = clamp(r.danger * 0.6 + r.recentRaids * 0.08 + r.caravanLosses * 0.04 - r.patrolLevel * 0.05, 0, 1);
+      r._peakThreat = Math.max(r._peakThreat || 0, r.threat);
+      if (r.threat < (r._peakThreat || 0) * 0.7) r._peakThreat = r.threat; // reset peak after recovery
     }
   }
 };
@@ -1206,6 +1355,7 @@ const RouteSecuritySystem = {
       if (offer < 15) continue;
       s.treasury -= offer;
       r.bounty += offer;
+      r.lifetimeBounty = (r.lifetimeBounty || 0) + offer;
       world.stats.bountiesPosted = (world.stats.bountiesPosted || 0) + 1;
       EventSystem.add('war', `💰 ${s.name} ตั้งค่าหัวโจร ${offer} ทองบนเส้นทางที่เชื่อม${sa.name}–${sb.name}`);
       break;
@@ -1339,13 +1489,42 @@ const EconomySystem = {
     return jobCrowd * housingCrowd;
   },
 
-  // agent ซื้อสินค้าจากคลังเมือง → เงินเข้าคลังเมือง
+  // agent ซื้อสินค้าจากคลังเมือง → เงินเข้าคลังเมือง (non-food หรือ legacy)
   buyFromSettlement(agent, s, good, qty) {
-    if (good === 'food' && !agent.isTownCaravan) {
-      const exportable = SettlementMetrics.exportableFood(s);
-      qty = Math.min(qty, exportable);
+    if (good === 'food') {
+      if (agent.isTownCaravan || agent.isEmergencyCaravan || agent.cargo) return this.buyFoodForExport(agent, s, qty);
+      if (!agent.travel && agent.locationId === s.id) return this.buyFoodForLocalConsumption(agent, s, qty);
+      return this.buyFoodForExport(agent, s, qty);
     }
-    qty = Math.min(qty, Math.floor(s.stock[good]));
+    return this._buyGood(agent, s, good, qty);
+  },
+
+  // อาหารสำหรับบริโภคในท้องถิ่น — ไม่จำกัด exportableFood แต่มี ration reserve
+  localFoodRationCap(s, wantQty) {
+    const pop = populationOf(s);
+    const minReserve = Math.max(4, pop * 1.5);
+    const available = Math.max(0, Math.floor(s.stock.food - minReserve));
+    return Math.min(wantQty, available);
+  },
+
+  buyFoodForLocalConsumption(agent, s, qty) {
+    if (!s || s.type === 'camp') return 0;
+    if (agent.locationId !== s.id && !agent.travel) return 0;
+    qty = this.localFoodRationCap(s, qty);
+    const got = this._buyGood(agent, s, 'food', qty);
+    if (got > 0) {
+      world.stats.localRations = (world.stats.localRations || 0) + got;
+      if (chance(0.08)) EventSystem.add('economy', `🍞 ${agent.name} ซื้ออาหารท้องถิ่นจาก${s.name} ${got} หน่วย (ration)`);
+    }
+    return got;
+  },
+
+  buyFoodForExport(agent, s, qty) {
+    qty = Math.min(qty, SettlementMetrics.exportableFood(s));
+    return this._buyGood(agent, s, 'food', qty);
+  },
+
+  _buyGood(agent, s, good, qty) {
     if (qty <= 0) return 0;
     const price = s.prices[good];
     const affordable = Math.floor(agent.money / price);
@@ -1389,21 +1568,27 @@ const NeedSystem = {
       a.inventory.food -= 1;
       a.stats.hunger = clamp(a.stats.hunger + 38, 0, 100);
     }
-    // ซื้ออาหาร (ถ้าอยู่ในถิ่นฐานที่มีตลาด)
+    // ซื้ออาหารท้องถิ่น (ration path — ไม่ใช้ export cap)
     if (a.stats.hunger < 55 && !a.travel && s && s.type !== 'camp') {
       const want = a.stats.hunger < 30 ? 3 : 2;
-      const got = EconomySystem.buyFromSettlement(a, s, 'food', want);
+      const got = EconomySystem.buyFoodForLocalConsumption(a, s, want);
       if (got > 0) {
         a.inventory.food += got - 1;
         a.stats.hunger = clamp(a.stats.hunger + 38, 0, 100);
       }
     }
-    // ระหว่างเดินทาง: แวะซื้อเสบียงจากถิ่นฐานหลังสุดที่ผ่าน (ราคาแพงกว่าปกติ)
+    // ระหว่างเดินทาง: แวะซื้อเสบียง — ใช้ local ration ถ้าอยู่ที่เมืองชั่วคราว
     if (a.stats.hunger < 45 && a.travel && a.inventory.food <= 0 && s && s.type !== 'camp' && s.stock.food >= 1) {
-      const price = s.prices.food * 1.2;
-      if (a.money >= price) {
-        a.money -= price; s.treasury += price; s.stock.food -= 1;
+      const got = EconomySystem.buyFoodForLocalConsumption(a, s, 1);
+      if (got > 0) {
         a.stats.hunger = clamp(a.stats.hunger + 38, 0, 100);
+      } else {
+        const price = s.prices.food * 1.2;
+        if (a.money >= price && EconomySystem.localFoodRationCap(s, 1) > 0) {
+          a.money -= price; s.treasury += price; s.stock.food -= 1;
+          a.stats.hunger = clamp(a.stats.hunger + 38, 0, 100);
+          world.stats.localRations = (world.stats.localRations || 0) + 1;
+        }
       }
     }
     // หาของป่า/ล่าสัตว์ระหว่างเดินทางเมื่อไม่มีทั้งอาหารและเงิน (โจรชำนาญกว่า)
@@ -1450,6 +1635,8 @@ const NeedSystem = {
 
   kill(a, causeText) {
     if (!a.alive) return;
+    if (a.cargo) { clearTownCaravan(a, 'death'); a.cargo = null; }
+    else clearTownCaravan(a, 'death');
     a.alive = false;
     a.deathDay = world.day;
     a.deathCause = causeText;
@@ -1804,7 +1991,9 @@ const TraderSystem = {
 
     if (best) {
       buyProvisions(a, s, 5);
-      const bought = EconomySystem.buyFromSettlement(a, s, best.good, best.qty);
+      const bought = best.good === 'food'
+        ? EconomySystem.buyFoodForExport(a, s, best.qty)
+        : EconomySystem.buyFromSettlement(a, s, best.good, best.qty);
       if (bought > 0) {
         a.cargo = { good: best.good, qty: bought, buyCost: best.buyPrice * bought, destId: best.destId };
         a.currentGoal = `ขน${best.good}ไปขายที่${best.destName}`;
@@ -1822,7 +2011,15 @@ const TraderSystem = {
 
   onArrive(a) {
     const s = getSettlement(a.locationId);
-    if (!a.cargo || !s) return;
+    if (!s) return;
+
+    // คาราวานช่วยเหลือฉุกเฉินถึงปลายทาง
+    if (a.isEmergencyCaravan && a.cargo && s.id === a.cargo.destId) {
+      LogisticsSystem.onEmergencyCaravanArrive(a, s);
+      return;
+    }
+
+    if (!a.cargo) return;
     if (s.id !== a.cargo.destId && s.type !== 'camp') {
       // แวะกลางทาง — ขายเลยถ้าราคาดีพอ ไม่งั้นเติมเสบียงแล้วเดินต่อ
       if (s.prices[a.cargo.good] * 0.85 > (a.cargo.buyCost / a.cargo.qty) * 1.3) { /* ขายที่นี่เลย */ }
@@ -1833,12 +2030,7 @@ const TraderSystem = {
       const revenue = sold * s.prices[a.cargo.good] * 0.85 * (1 - s.taxRate);
       const profit = revenue - a.cargo.buyCost * (sold / a.cargo.qty);
       a.skills.trading = Math.min(10, a.skills.trading + 0.06);
-      if (a.isTownCaravan && a.caravanOwnerId) {
-        const owner = getSettlement(a.caravanOwnerId);
-        if (owner) { owner.townCaravanId = null; owner.stock.food += Math.floor(sold * 0.1); }
-        a.isTownCaravan = false;
-        a.caravanOwnerId = null;
-      }
+      if (a.isTownCaravan) clearTownCaravan(a, 'delivered');
       a.stats.morale = clamp(a.stats.morale + (profit > 0 ? 4 : -4), 0, 100);
       a.currentThought = profit > 0 ? `ขายได้กำไร ${fmt(profit)} ทอง — การค้าคือชีวิต` : `ขาดทุน ${fmt(-profit)} ทอง... คำนวณพลาด`;
       a.cargo.qty -= sold;
@@ -1858,11 +2050,16 @@ const TraderSystem = {
         }
       }
     }
-    if (a.cargo.qty <= 0) a.cargo = null;
+    if (a.cargo && a.cargo.qty <= 0) { a.cargo = null; clearTownCaravan(a, 'cleanup'); }
     else if (sold === 0) {
       // เมืองไม่มีเงินซื้อ — เก็บของไว้ ลองเมืองอื่น
       const alt = marketSettlements().filter(x => x.id !== s.id && x.treasury > 100);
       if (alt.length) { buyProvisions(a, s, 4); a.cargo.destId = pick(alt).id; startTravel(a, a.cargo.destId, 'trade'); }
+      else {
+        clearTownCaravan(a, 'lost');
+        a.cargo = null;
+        EventSystem.add('trade', `🚨 ${a.name} ยอมแพ้เส้นทางค้า — ไม่มีเมืองไหนซื้อได้`);
+      }
     }
   }
 };
@@ -1982,6 +2179,7 @@ const BanditSystem = {
       }
       trader.money -= stolenGold;
       const good = trader.cargo.good;
+      if (trader.isTownCaravan || trader.isEmergencyCaravan) clearTownCaravan(trader, 'robbed');
       trader.cargo = null;
       trader.stats.morale -= 15;
       trader.stats.health -= randInt(0, 25);
@@ -3170,12 +3368,16 @@ function simulateDay() {
   for (const a of world.agents) {
     if (!a.alive) continue;
     if (a.travel && !a.unitId) {
+      const wasTraveling = !!a.travel;
       const arrived = advanceTravel(a, agentSpeed(a));
       if (a.cargo) BanditSystem.interceptCaravan(a);
       if (arrived) {
         if (!a.memory.citiesVisited.includes(a.locationId)) a.memory.citiesVisited.push(a.locationId);
-        if (a.cargo) TraderSystem.onArrive(a);
+        if (a.cargo || a.isEmergencyCaravan) TraderSystem.onArrive(a);
         else if (a.travel === null && a.profession === 'migrant') { a.profession = 'unemployed'; a.homeId = a.locationId; }
+      } else if (wasTraveling && !a.travel && (a.isTownCaravan || a.isEmergencyCaravan)) {
+        clearTownCaravan(a, 'lost');
+        if (!a.cargo) { /* already cleared */ }
       }
       continue;
     }
@@ -3196,7 +3398,10 @@ function simulateDay() {
   GovernanceSystem.updateFactions();
 
   // เติม garrison จากทหารว่าง
-  for (const s of world.settlements) ensureGarrison(s);
+  for (const s of world.settlements) {
+    ensureGarrison(s);
+    if (s.type !== 'camp') LogisticsSystem.validateCaravanSlots(s);
+  }
 
   /* route dynamics */
   for (const r of world.routes) {
@@ -4109,6 +4314,21 @@ const UI = {
     html += this.kv('Exportable food', SettlementMetrics.exportableFood(s));
     html += this.kv('Food reserve', s.foodReserveTargetDays + ' วัน');
     html += this.kv('Max export', fmt(s.maxFoodExportRatio * 100) + '%');
+    // ── Phase 10.6: town caravan status ──
+    let caravanStatus = 'idle';
+    let caravanCls = '';
+    if (s.townCaravanId) {
+      const tc = getAgent(s.townCaravanId);
+      if (!tc || !tc.alive) { caravanStatus = 'stuck ⚠'; caravanCls = 'bad'; }
+      else if (tc.travel && tc.cargo) { caravanStatus = `active → ${(getSettlement(tc.cargo.destId) || {}).name || '?'}`; caravanCls = 'good'; }
+      else if (tc.cargo) { caravanStatus = 'loading'; caravanCls = 'warn'; }
+      else { caravanStatus = 'stuck ⚠ (no cargo)'; caravanCls = 'bad'; }
+    }
+    if (s.emergencyCaravanId) {
+      const ec = getAgent(s.emergencyCaravanId);
+      caravanStatus += (caravanStatus !== 'idle' ? ' · ' : '') + `emergency ${ec && ec.travel ? 'en route' : 'pending'}`;
+    }
+    html += this.kv('Town Caravan', caravanStatus, caravanCls);
     html += this.kv('Prosperity', fmt(s.prosperity)) + this.bar(s.prosperity, '#5dbb63');
     html += this.kv('Loyalty', fmt(s.loyalty), s.loyalty < 35 ? 'bad' : '') + this.bar(s.loyalty, '#42a5f5');
     html += this.kv('Unrest', fmt(s.unrest), s.unrest > 55 ? 'bad' : '') + this.bar(s.unrest, '#ef5350');
@@ -4261,6 +4481,13 @@ const UI = {
       const pu = getUnit(r.patrolMissionId);
       html += this.kv('Patrol Mission', pu ? this.link('unit', pu.id, pu.name) : 'active');
     }
+    const recovery = (r._peakThreat || r.threat || 0) - (r.threat || 0);
+  html += `</div><div class="insp-section"><h4>Recovery (Phase 10.6)</h4>`;
+    html += this.kv('Peak Threat', fmt((r._peakThreat || r.threat || 0) * 100, 0) + '%');
+    html += this.kv('Threat Δ', recovery > 0.05 ? `↓ ${fmt(recovery * 100, 0)}%` : 'stable', recovery > 0.05 ? 'good' : '');
+    html += this.kv('Recent Raids decay', fmt(Math.max(0, r.recentRaids), 1) + ' (decays daily)');
+    html += this.kv('Lifetime Bounty', fmt(r.lifetimeBounty || 0) + ' ทอง', (r.lifetimeBounty || 0) > 15 ? 'good' : '');
+    html += this.kv('Patrol recovery', r.patrolLevel > 1 ? `active (${fmt(r.patrolLevel, 1)})` : 'low', r.patrolLevel > 1 ? 'good' : '');
     html += `</div>`;
     return html;
   },
