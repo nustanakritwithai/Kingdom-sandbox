@@ -149,10 +149,11 @@ let nextId = 1;
 function uid() { return nextId++; }
 
 const EventSystem = {
-  add(category, text) {
-    world.events.push({ day: world.day, category, text });
+  add(category, text, refs) {
+    world.events.push({ day: world.day, category, text, refs: refs || null });
     if (world.events.length > 600) world.events.splice(0, world.events.length - 600);
     UI.logDirty = true;
+    if (typeof ObserverSystem !== 'undefined') ObserverSystem.observerDirty = true;
   }
 };
 
@@ -255,6 +256,14 @@ function startWar(attackerF, defenderF, cause) {
     description: cause || 'ความขัดแย้งบานปลายเป็นสงครามเต็มรูปแบบ',
     factions: [attackerF.id, defenderF.id]
   });
+  EventSystem.add('war', `⚔ สงครามปะทุ: ${attackerF.name} vs ${defenderF.name}`, {
+    factions: [attackerF.id, defenderF.id]
+  });
+  if (typeof ObserverSystem !== 'undefined') {
+    ObserverSystem.onMajorEvent('war_declaration', `สงครามปะทุ: ${attackerF.name} vs ${defenderF.name}`, {
+      factions: [attackerF.id, defenderF.id]
+    });
+  }
   return w;
 }
 
@@ -740,6 +749,13 @@ function generateWorld() {
 
   EventSystem.add('system', `🌍 โลกใหม่ถือกำเนิด — ${world.agents.length} ชีวิตใน ${world.settlements.length} ถิ่นฐาน ภายใต้${kingdom.name}`);
   DiplomacySystem.initWorld();
+  if (typeof ObserverSystem !== 'undefined') {
+    ObserverSystem.follow = null;
+    ObserverSystem.updateFollowLabel();
+    ObserverSystem.observerDirty = true;
+    Renderer.resetView();
+  }
+  UI.dashboardDirty = true;
 }
 
 function makeGovAttrs() {
@@ -1719,9 +1735,12 @@ const NeedSystem = {
       const f = getFaction(a.factionId);
       if (f) factionTimeline(f, `ผู้ปกครอง ${a.name} เสียชีวิต (${causeText})`);
       handleRulerDeath(a);
-    } else if (a.notable) {
+    } else if (a.notable || (a.fame || 0) >= 20) {
       // ตำนานจบชีวิต — บันทึกลง chronicle พร้อมสรุปชีวิต
-      EventSystem.add('life', `⚰ ${a.title ? a.title + ' ' : ''}${a.name} ${causeText}ที่${s ? s.name : 'กลางทาง'}`);
+      EventSystem.add('legend', `⚰ ${a.title ? a.title + ' ' : ''}${a.name} ${causeText}ที่${s ? s.name : 'กลางทาง'}`, { agents: [a.id] });
+      if (typeof ObserverSystem !== 'undefined') {
+        ObserverSystem.onMajorEvent('legendary_death', `ตำนาน ${a.name} สิ้นชีวิต`, { agents: [a.id] });
+      }
       Chronicle.add({
         category: 'legend', importance: 4,
         title: `⚰ ตำนาน ${a.name}${a.title ? ' "' + a.title + '"' : ''} จบชีวิตลง`,
@@ -2535,6 +2554,11 @@ const MilitarySystem = {
         EventSystem.add('politics', `👑 ${commander.name} สถาปนาตนเป็นเจ้าเมือง${s.name}`);
       }
       if (oldFaction && !oldFaction.isBandit) checkFactionCollapse(oldFaction);
+      if (typeof ObserverSystem !== 'undefined') {
+        ObserverSystem.onMajorEvent('city_captured', `${s.name} เปลี่ยนมือ — ${attFaction.name}`, {
+          settlements: [s.id], agents: [commander.id], factions: [attFaction.id, oldFaction ? oldFaction.id : null].filter(x => x)
+        });
+      }
       return true;
     } else {
       EventSystem.add('war', `🛡 ${s.name} ต้านการบุกของ${attFaction.name}ไว้ได้ (ตายรวม ${result.atkResult.dead + result.defResult.dead})`);
@@ -3121,6 +3145,11 @@ const GovernanceSystem = {
       description: `ผู้ปกครองที่ทะเยอทะยานตัดสัมพันธ์กับ${oldFaction.name} สถาปนา${newF.name} — สงครามกลางเมืองปะทุ`,
       agents: [gov.id], settlements: [s.id], factions: [newF.id, oldFaction.id]
     });
+    if (typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.onMajorEvent('rebellion', `${gov.name} ประกาศเอกราช${s.name}`, {
+        agents: [gov.id], settlements: [s.id], factions: [newF.id, oldFaction.id]
+      });
+    }
   },
 
   appointGovernor(s) {
@@ -3195,8 +3224,15 @@ const GovernanceSystem = {
       // กบฏกลายเป็น garrison ใหม่
       u.kind = 'guard'; u.factionId = newF.id; s.garrisonUnitId = u.id;
       for (const m of unitMembers(u)) { m.factionId = newF.id; m.profession = 'guard'; }
-      EventSystem.add('politics', `👑 กบฏยึด${s.name}สำเร็จ! ${leader.name} สถาปนา${newF.name}`);
+      EventSystem.add('politics', `👑 กบฏยึด${s.name}สำเร็จ! ${leader.name} สถาปนา${newF.name}`, {
+        settlements: [s.id], agents: [leader.id], factions: [newF.id, oldFaction ? oldFaction.id : null].filter(x => x)
+      });
       settlementHistory(s, `กบฏยึดเมือง ตั้ง${newF.name} ภายใต้${leader.name}`);
+      if (typeof ObserverSystem !== 'undefined') {
+        ObserverSystem.onMajorEvent('rebellion', `กบฏยึด${s.name} — ${newF.name}`, {
+          settlements: [s.id], agents: [leader.id], factions: [newF.id, oldFaction ? oldFaction.id : null].filter(x => x)
+        });
+      }
     } else {
       EventSystem.add('war', `🛡 กบฏที่${s.name}ถูกปราบ (ตาย ${result.atkResult.dead} คน) — ความไม่พอใจยังคุกรุ่น`);
       settlementHistory(s, `การลุกฮือของประชาชนถูกปราบ (ตาย ${result.atkResult.dead})`);
@@ -3379,6 +3415,9 @@ function checkFactionCollapse(f) {
       description: `หลังยืนหยัดมา ${age} วัน ${f.name} สูญสิ้นดินแดนทั้งหมดและหายไปจากหน้าประวัติศาสตร์`,
       factions: [f.id]
     });
+    if (typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.onMajorEvent('faction_collapse', `${f.name} ล่มสลาย`, { factions: [f.id] });
+    }
     // สงครามที่ค้างอยู่จบลง — ฝ่ายตรงข้ามชนะ
     for (const w of world.wars) {
       if (w.endDay) continue;
@@ -3537,8 +3576,11 @@ function breakTreaty(fA, fB, reason) {
       t.history.push(`Day ${world.day}: ถูกทำลายโดย${fA.name} — ${reason}`);
     }
   }
-  EventSystem.add('politics', `⚔ ${fA.name} หักหลัง${fB.name}! (${reason})`);
+  EventSystem.add('diplomacy', `⚔ ${fA.name} หักหลัง${fB.name}! (${reason})`, { factions: [fA.id, fB.id] });
   Chronicle.add({ category: 'diplomacy', importance: 5, title: `⚔ การทรยศทางการทูต: ${fA.name} หักหลัง ${fB.name}`, description: reason, factions: [fA.id, fB.id] });
+  if (typeof ObserverSystem !== 'undefined') {
+    ObserverSystem.onMajorEvent('treaty_betrayal', `${fA.name} หักหลัง ${fB.name}`, { factions: [fA.id, fB.id] });
+  }
   factionTimeline(fA, `หักหลัง${fB.name}`);
   factionTimeline(fB, `ถูก${fA.name}หักหลังสนธิสัญญา`);
 }
@@ -4077,6 +4119,7 @@ function simulateDay() {
   }
 
   UI.inspectorDirty = true;
+  UI.dashboardDirty = true;
   if (typeof SaveSystem !== 'undefined') SaveSystem.tickAutoSave();
 }
 
@@ -4128,10 +4171,535 @@ function generateEraSummary() {
   EventSystem.add('system', `📜 ${text}`);
 }
 
+/* ═══════════════════ 15.5 PHASE 15: OBSERVER UX ═══════════════════ */
+
+const ObserverSystem = {
+  rankingTab: 'famous',
+  follow: null,
+  logFilter: 'all',
+  logSearch: '',
+  observerOpen: false,
+  observerDirty: true,
+  _toastTimer: null,
+  pauseOn: {
+    war_declaration: true,
+    city_captured: true,
+    faction_collapse: true,
+    legendary_death: true,
+    rebellion: true,
+    treaty_betrayal: true
+  },
+
+  defaultPauseOn() {
+    return {
+      war_declaration: true, city_captured: true, faction_collapse: true,
+      legendary_death: true, rebellion: true, treaty_betrayal: true
+    };
+  },
+
+  init() {
+    const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+    bind('btnObserver', () => this.togglePanel());
+    bind('observerClose', () => this.closePanel());
+    for (const btn of document.querySelectorAll('.obs-tab')) {
+      btn.addEventListener('click', () => {
+        this.rankingTab = btn.dataset.tab;
+        document.querySelectorAll('.obs-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === this.rankingTab));
+        this.renderPanel();
+      });
+    }
+    const search = document.getElementById('globalSearch');
+    if (search) {
+      search.addEventListener('input', () => {
+        this.renderSearchResults(search.value.trim());
+      });
+      search.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const results = this.search(search.value.trim());
+          if (results.length) this.focusTarget(results[0].kind, results[0].id);
+        }
+      });
+    }
+    for (const cb of document.querySelectorAll('.pause-on-cb')) {
+      cb.addEventListener('change', () => {
+        this.pauseOn[cb.dataset.pause] = cb.checked;
+      });
+    }
+    for (const btn of document.querySelectorAll('.log-filter')) {
+      btn.addEventListener('click', () => {
+        this.logFilter = btn.dataset.f;
+        document.querySelectorAll('.log-filter').forEach(b => b.classList.toggle('active', b.dataset.f === this.logFilter));
+        UI.logDirty = true;
+      });
+    }
+    const logSearch = document.getElementById('logSearch');
+    if (logSearch) {
+      logSearch.addEventListener('input', () => {
+        this.logSearch = logSearch.value.trim().toLowerCase();
+        UI.logDirty = true;
+      });
+    }
+    this.syncPauseTogglesUI();
+  },
+
+  syncPauseTogglesUI() {
+    for (const cb of document.querySelectorAll('.pause-on-cb')) {
+      if (cb.dataset.pause) cb.checked = !!this.pauseOn[cb.dataset.pause];
+    }
+  },
+
+  togglePanel() {
+    this.observerOpen = !this.observerOpen;
+    const p = document.getElementById('observerPanel');
+    if (p) p.classList.toggle('hidden', !this.observerOpen);
+    document.getElementById('chroniclePanel')?.classList.add('hidden');
+    document.getElementById('diplomacyPanel')?.classList.add('hidden');
+    document.getElementById('summaryModal')?.classList.add('hidden');
+    document.getElementById('savePanel')?.classList.add('hidden');
+    UI.chronicleOpen = false;
+    if (this.observerOpen) { this.observerDirty = true; this.renderPanel(); }
+  },
+
+  markDirty() { this.observerDirty = true; },
+
+  closePanel() {
+    this.observerOpen = false;
+    document.getElementById('observerPanel')?.classList.add('hidden');
+  },
+
+  computeRankings() {
+    if (!world) return null;
+    const alive = world.agents.filter(a => a.alive);
+    const mkts = marketSettlements();
+    const liveFactions = world.factions.filter(fc => world.settlements.some(s => s.factionId === fc.id));
+    const factionPower = f => {
+      if (!f) return 0;
+      return world.settlements.filter(s => s.factionId === f.id).length * 100
+        + alive.filter(a => a.factionId === f.id && MILITARY_PROFS.has(a.profession)).length * 10
+        + (f.treasury || 0) * 0.1;
+    };
+    const units = world.units.filter(u => unitMembers(u).length > 0).map(u => ({
+      unit: u,
+      power: u.combatPower || MilitarySystem.unitPower(u),
+      members: unitMembers(u).length
+    })).sort((a, b) => b.power - a.power).slice(0, 10);
+    const armies = world.armies.map(ar => {
+      const units = ar.unitIds.map(getUnit).filter(Boolean);
+      const power = sum(units, u => u.combatPower || MilitarySystem.unitPower(u));
+      return { army: ar, power, size: sum(units, u => unitMembers(u).length) };
+    }).sort((a, b) => b.power - a.power).slice(0, 10);
+    return {
+      famousAgents: alive.filter(a => a.fame > 0).sort((a, b) => b.fame - a.fame).slice(0, 10),
+      richestAgents: alive.slice().sort((a, b) => b.money - a.money).slice(0, 10),
+      strongestUnits: units,
+      strongestArmies: armies,
+      prosperousSettlements: mkts.slice().sort((a, b) => b.prosperity - a.prosperity).slice(0, 10),
+      starvingSettlements: mkts.filter(s => s.stock.food < 15 && populationOf(s) > 3)
+        .sort((a, b) => a.stock.food - b.stock.food).slice(0, 10),
+      dangerousRoutes: world.routes.filter(r => !r.destroyed).slice()
+        .sort((a, b) => b.danger - a.danger).slice(0, 10),
+      strongestFactions: liveFactions.map(f => ({ f, power: factionPower(f) }))
+        .sort((a, b) => b.power - a.power).slice(0, 10),
+      exhaustedFactions: liveFactions.filter(f => !f.isBandit && f.diplomacy)
+        .map(f => ({ f, ex: f.diplomacy.warExhaustion || 0 }))
+        .sort((a, b) => b.ex - a.ex).slice(0, 10),
+      activeWars: world.wars.filter(w => !w.endDay),
+      activeTreaties: (world.treaties || []).filter(t => t.status === 'active'),
+      recentEvents: world.chronicle.slice(-20).reverse()
+    };
+  },
+
+  search(query) {
+    if (!world || !query) return [];
+    const q = query.toLowerCase().trim();
+    if (!q) return [];
+    const results = [];
+    const push = (kind, id, label, sub) => {
+      if (results.some(r => r.kind === kind && r.id === id)) return;
+      results.push({ kind, id, label, sub: sub || '' });
+    };
+    for (const a of world.agents) {
+      if (!a.alive) continue;
+      const hay = [a.name, a.title, a.profession, a.rank, a.currentGoal].filter(Boolean).join(' ').toLowerCase();
+      if (hay.includes(q)) push(a.cargo ? 'agent' : 'agent', a.id, a.name + (a.title ? ` "${a.title}"` : ''), a.profession + (a.cargo ? ' · คาราวาน' : ''));
+    }
+    for (const s of world.settlements) {
+      if (s.name.toLowerCase().includes(q)) push('settlement', s.id, s.name, s.type);
+    }
+    for (const f of world.factions) {
+      if (f.name.toLowerCase().includes(q)) push('faction', f.id, f.name, f.warState ? 'สงคราม' : 'ฝ่าย');
+    }
+    for (const u of world.units) {
+      if (unitMembers(u).length && u.name.toLowerCase().includes(q)) push('unit', u.id, u.name, `${unitMembers(u).length} คน`);
+    }
+    for (const ar of world.armies) {
+      if (ar.name.toLowerCase().includes(q)) push('army', ar.id, ar.name, `${ar.unitIds.length} หน่วย`);
+    }
+    return results.slice(0, 25);
+  },
+
+  getTargetLabel(kind, id) {
+    if (!world) return '?';
+    if (kind === 'agent') {
+      const a = getAgent(id);
+      if (!a) return '?';
+      return a.name + (a.cargo ? ' (คาราวาน)' : '');
+    }
+    if (kind === 'settlement') return getSettlement(id)?.name || '?';
+    if (kind === 'faction') return getFaction(id)?.name || '?';
+    if (kind === 'unit') return getUnit(id)?.name || '?';
+    if (kind === 'army') return getArmy(id)?.name || '?';
+    if (kind === 'route') {
+      const r = world.routes.find(x => x.id === id);
+      if (!r) return '?';
+      const sa = getSettlement(r.a), sb = getSettlement(r.b);
+      return `${sa ? sa.name : '?'} ↔ ${sb ? sb.name : '?'}`;
+    }
+    return '?';
+  },
+
+  getTargetPosition(kind, id) {
+    if (!world) return null;
+    if (kind === 'settlement') {
+      const s = getSettlement(id);
+      return s ? { x: s.x, y: s.y } : null;
+    }
+    if (kind === 'agent') {
+      const a = getAgent(id);
+      if (!a || !a.alive) return null;
+      if (a.travel && !a.unitId) { const p = travelPos(a); return { x: p.x, y: p.y }; }
+      const s = getSettlement(a.locationId);
+      return s ? { x: s.x, y: s.y } : null;
+    }
+    if (kind === 'unit') {
+      const u = getUnit(id);
+      if (!u) return null;
+      if (u.travel) { const p = travelPos(u); return { x: p.x, y: p.y }; }
+      const s = getSettlement(u.locationId);
+      return s ? { x: s.x, y: s.y } : null;
+    }
+    if (kind === 'army') {
+      const ar = getArmy(id);
+      if (!ar) return null;
+      const u = ar.unitIds.map(getUnit).find(Boolean);
+      if (!u) return null;
+      if (u.travel) { const p = travelPos(u); return { x: p.x, y: p.y }; }
+      const s = getSettlement(u.locationId);
+      return s ? { x: s.x, y: s.y } : null;
+    }
+    if (kind === 'route') {
+      const r = world.routes.find(x => x.id === id);
+      if (!r) return null;
+      const a = getSettlement(r.a), b = getSettlement(r.b);
+      if (!a || !b) return null;
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+    if (kind === 'faction') {
+      const s = world.settlements.find(x => x.factionId === id);
+      return s ? { x: s.x, y: s.y } : null;
+    }
+    return null;
+  },
+
+  centerOn(kind, id) {
+    const pos = this.getTargetPosition(kind, id);
+    if (pos) Renderer.centerOnMap(pos.x, pos.y);
+  },
+
+  focusTarget(kind, id) {
+    UI.selected = { kind, id };
+    UI.inspectorDirty = true;
+    this.centerOn(kind, id);
+    const search = document.getElementById('globalSearch');
+    if (search) search.value = '';
+    const box = document.getElementById('searchResults');
+    if (box) box.innerHTML = '';
+  },
+
+  startFollow(kind, id) {
+    if (this.follow && this.follow.kind === kind && this.follow.id === id) {
+      this.stopFollow('ยกเลิกการติดตาม');
+      return;
+    }
+    this.follow = { kind, id, label: this.getTargetLabel(kind, id) };
+    this.centerOn(kind, id);
+    this.updateFollowLabel();
+  },
+
+  stopFollow(reason) {
+    if (!this.follow) return;
+    const label = this.follow.label;
+    this.follow = null;
+    this.updateFollowLabel();
+    if (reason) EventSystem.add('system', `👁 หยุดติดตาม ${label} — ${reason}`);
+  },
+
+  isFollowValid() {
+    if (!this.follow || !world) return false;
+    const { kind, id } = this.follow;
+    if (kind === 'agent') { const a = getAgent(id); return !!(a && a.alive); }
+    if (kind === 'settlement') return !!getSettlement(id);
+    if (kind === 'unit') { const u = getUnit(id); return !!(u && unitMembers(u).length); }
+    if (kind === 'army') { const ar = getArmy(id); return !!(ar && ar.unitIds.some(uid => { const u = getUnit(uid); return u && unitMembers(u).length; })); }
+    if (kind === 'faction') return world.settlements.some(s => s.factionId === id);
+    return false;
+  },
+
+  tickFollow() {
+    if (!this.follow) return;
+    if (!this.isFollowValid()) {
+      this.stopFollow('เป้าหมายหายไปหรือสูญสิ้นแล้ว');
+      return;
+    }
+    this.centerOn(this.follow.kind, this.follow.id);
+    this.updateFollowLabel();
+  },
+
+  updateFollowLabel() {
+    const el = document.getElementById('followLabel');
+    if (!el) return;
+    if (!this.follow) { el.classList.add('hidden'); el.textContent = ''; return; }
+    el.classList.remove('hidden');
+    el.textContent = `👁 กำลังติดตาม: ${this.follow.label}`;
+  },
+
+  onMajorEvent(type, title, refs) {
+    if (!this.pauseOn[type]) return;
+    UI.paused = true;
+    const bp = document.getElementById('btnPause');
+    if (bp) bp.textContent = '▶ Resume';
+    this.showToast(title, `Day ${world.day} — simulation หยุดชั่วคราว`);
+    UI.logDirty = true;
+  },
+
+  showToast(title, body) {
+    const el = document.getElementById('observerToast');
+    if (!el) return;
+    el.querySelector('.toast-title').textContent = title;
+    el.querySelector('.toast-body').textContent = body || '';
+    el.classList.remove('hidden');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => el.classList.add('hidden'), 4500);
+  },
+
+  eventMatchesFilter(ev) {
+    if (this.logFilter === 'all') return true;
+    const cat = ev.category || 'system';
+    const text = (ev.text || '').toLowerCase();
+    if (this.logFilter === 'diplomacy') {
+      return cat === 'diplomacy' || (cat === 'politics' && /สนธิ|ทูต|พันธมิตร|เมืองขึ้น|หักหลัง|vassal|alliance/.test(text));
+    }
+    if (this.logFilter === 'disaster') {
+      return /แล้ง|โรค|ภัย|plague|drought/.test(text) || cat === 'disaster';
+    }
+    if (this.logFilter === 'legend') return cat === 'legend';
+    return cat === this.logFilter;
+  },
+
+  firstEventRef(refs) {
+    if (!refs) return null;
+    if (refs.agents && refs.agents.length) return { kind: 'agent', id: refs.agents[0] };
+    if (refs.settlements && refs.settlements.length) return { kind: 'settlement', id: refs.settlements[0] };
+    if (refs.factions && refs.factions.length) return { kind: 'faction', id: refs.factions[0] };
+    return null;
+  },
+
+  chronicleTargetButtons(entry) {
+    const parts = [];
+    const add = (kind, id, label) => {
+      parts.push(`<button class="chron-target" data-sel-kind="${kind}" data-sel-id="${id}">📍 ${label}</button>`);
+    };
+    for (const id of (entry.agents || []).slice(0, 2)) {
+      const a = getAgent(id);
+      if (a) add('agent', id, a.name);
+    }
+    for (const id of (entry.settlements || []).slice(0, 2)) {
+      const s = getSettlement(id);
+      if (s) add('settlement', id, s.name);
+    }
+    for (const id of (entry.factions || []).slice(0, 2)) {
+      const f = getFaction(id);
+      if (f) add('faction', id, f.name);
+    }
+    return parts.length ? `<div class="chron-targets">${parts.join(' ')}</div>` : '';
+  },
+
+  getDashboardStats() {
+    if (!world) return {};
+    const alive = world.agents.filter(a => a.alive);
+    const liveFactions = world.factions.filter(fc => world.settlements.some(s => s.factionId === fc.id));
+    const activeWars = world.wars.filter(w => !w.endDay);
+    const treaties = (world.treaties || []).filter(t => t.status === 'active');
+    const foodCrisis = marketSettlements().filter(s => s.stock.food < 15 && populationOf(s) > 3).length;
+    const routes = world.routes.filter(r => !r.destroyed);
+    const banditAvg = routes.length ? sum(routes, r => r.danger) / routes.length : 0;
+    const strongest = liveFactions.reduce((m, fc) => {
+      const power = world.settlements.filter(s => s.factionId === fc.id).length * 100
+        + alive.filter(a => a.factionId === fc.id && MILITARY_PROFS.has(a.profession)).length * 10;
+      return power > m.power ? { f: fc, power } : m;
+    }, { f: null, power: -1 }).f;
+    return {
+      population: alive.length,
+      factions: liveFactions.length,
+      wars: activeWars.length,
+      treaties: treaties.length,
+      foodCrisis,
+      banditAvg,
+      strongest: strongest ? strongest.name : '—',
+      day: world.day
+    };
+  },
+
+  renderSearchResults(query) {
+    const box = document.getElementById('searchResults');
+    if (!box) return;
+    if (!query) { box.innerHTML = ''; return; }
+    const results = this.search(query);
+    box.innerHTML = results.length
+      ? results.map(r =>
+        `<div class="search-hit" data-kind="${r.kind}" data-id="${r.id}">
+           <span class="sh-label">${r.label}</span>
+           <span class="sh-sub">${r.sub}</span>
+         </div>`).join('')
+      : '<div class="search-empty">ไม่พบผลลัพธ์</div>';
+    for (const hit of box.querySelectorAll('.search-hit')) {
+      hit.addEventListener('click', () => {
+        this.focusTarget(hit.dataset.kind, +hit.dataset.id);
+      });
+    }
+  },
+
+  renderPanel() {
+    const body = document.getElementById('observerBody');
+    if (!body || !world) return;
+    const r = this.computeRankings();
+    if (!r) return;
+    const tab = this.rankingTab;
+    const row = (label, sub, kind, id) =>
+      `<div class="obs-row" data-kind="${kind}" data-id="${id}"><span>${label}</span><span class="obs-sub">${sub || ''}</span></div>`;
+    let html = '';
+    if (tab === 'famous') {
+      html = r.famousAgents.length
+        ? r.famousAgents.map(a => row(a.name + (a.title ? ` "${a.title}"` : ''), `⭐ ${fmt(a.fame)} · ${a.profession}`, 'agent', a.id)).join('')
+        : '<p class="hint">ยังไม่มีตัวละครที่โด่งดัง</p>';
+    } else if (tab === 'richest') {
+      html = r.richestAgents.map(a => row(a.name, `${fmt(a.money, 1)} ทอง · ${a.profession}`, 'agent', a.id)).join('');
+    } else if (tab === 'military') {
+      html = '<div class="obs-section-head">หน่วยทหาร</div>';
+      html += r.strongestUnits.map(x => row(x.unit.name, `พลัง ${fmt(x.power)} · ${x.members} คน`, 'unit', x.unit.id)).join('');
+      html += '<div class="obs-section-head">กองทัพ</div>';
+      html += r.strongestArmies.map(x => row(x.army.name, `พลัง ${fmt(x.power)} · ${x.size} คน`, 'army', x.army.id)).join('');
+    } else if (tab === 'settlements') {
+      html = '<div class="obs-section-head">มั่งคั่ง</div>';
+      html += r.prosperousSettlements.map(s => row(s.name, `prosperity ${fmt(s.prosperity)}`, 'settlement', s.id)).join('');
+      html += '<div class="obs-section-head">ขาดแคลนอาหาร</div>';
+      html += (r.starvingSettlements.length
+        ? r.starvingSettlements.map(s => row(s.name, `อาหาร ${fmt(s.stock.food)}`, 'settlement', s.id)).join('')
+        : '<p class="hint">ไม่มีเมืองที่อดอยากรุนแรง</p>');
+    } else if (tab === 'routes') {
+      html = r.dangerousRoutes.map(rt => {
+        const sa = getSettlement(rt.a), sb = getSettlement(rt.b);
+        return row(`${sa ? sa.name : '?'} ↔ ${sb ? sb.name : '?'}`, `danger ${fmt(rt.danger * 100, 0)}%`, 'route', rt.id);
+      }).join('');
+    } else if (tab === 'factions') {
+      html = '<div class="obs-section-head">แข็งแกร่ง</div>';
+      html += r.strongestFactions.map(x => row(x.f.name, `power ${fmt(x.power, 0)}`, 'faction', x.f.id)).join('');
+      html += '<div class="obs-section-head">เหนื่อยล้าสงคราม</div>';
+      html += r.exhaustedFactions.map(x => row(x.f.name, `${fmt(x.ex, 0)}%`, 'faction', x.f.id)).join('');
+    } else if (tab === 'wars') {
+      html = r.activeWars.length
+        ? r.activeWars.map(w => {
+          const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
+          return `<div class="obs-war">${w.name}<br><span class="obs-sub">${att ? att.name : '?'} vs ${def ? def.name : '?'} · Day ${w.startDay}+</span></div>`;
+        }).join('')
+        : '<p class="hint">ไม่มีสงครามที่กำลังดำเนินอยู่</p>';
+    } else if (tab === 'treaties') {
+      html = r.activeTreaties.length
+        ? r.activeTreaties.map(t => {
+          const names = t.factions.map(id => getFaction(id)?.name || '?').join(' ↔ ');
+          return `<div class="obs-war">${t.type}<br><span class="obs-sub">${names} · Day ${t.startDay}</span></div>`;
+        }).join('')
+        : '<p class="hint">ไม่มีสนธิสัญญาที่ใช้งานอยู่</p>';
+    } else if (tab === 'events') {
+      html = r.recentEvents.map(e =>
+        `<div class="obs-event imp-${e.importance}">
+           <span class="ce-day">Day ${e.day}</span> ${e.title}
+           ${this.chronicleTargetButtons(e)}
+         </div>`).join('');
+    }
+    body.innerHTML = html;
+    for (const rowEl of body.querySelectorAll('.obs-row')) {
+      rowEl.addEventListener('click', () => this.focusTarget(rowEl.dataset.kind, +rowEl.dataset.id));
+    }
+    for (const btn of body.querySelectorAll('.chron-target')) {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        this.focusTarget(btn.dataset.selKind, +btn.dataset.selId);
+      });
+    }
+  },
+
+  renderMiniDashboard() {
+    const el = document.getElementById('miniDashboard');
+    if (!el || !world) return;
+    const d = this.getDashboardStats();
+    el.innerHTML = [
+      ['👥', d.population, 'pop'],
+      ['🚩', d.factions, 'fac'],
+      ['⚔', d.wars, 'war'],
+      ['📜', d.treaties, 'trt'],
+      ['🍞', d.foodCrisis, 'food'],
+      ['🗡', fmt(d.banditAvg * 100, 0) + '%', 'band'],
+      ['👑', d.strongest, 'str'],
+      ['📅', 'Day ' + d.day, 'day']
+    ].map(([icon, val, cls]) => `<span class="dash-item ${cls}" title="${cls}">${icon} ${val}</span>`).join('');
+  },
+
+  getPrefs() {
+    return {
+      rankingTab: this.rankingTab,
+      follow: this.follow ? { kind: this.follow.kind, id: this.follow.id } : null,
+      pauseOn: { ...this.pauseOn },
+      logFilter: this.logFilter,
+      logSearch: this.logSearch,
+      panX: Renderer.panX,
+      panY: Renderer.panY,
+      zoom: Renderer.zoom
+    };
+  },
+
+  applyPrefs(prefs) {
+    if (!prefs) return;
+    if (prefs.rankingTab) this.rankingTab = prefs.rankingTab;
+    if (prefs.pauseOn) this.pauseOn = { ...this.defaultPauseOn(), ...prefs.pauseOn };
+    if (prefs.logFilter) this.logFilter = prefs.logFilter;
+    if (prefs.logSearch != null) this.logSearch = prefs.logSearch;
+    if (prefs.panX != null) Renderer.panX = prefs.panX;
+    if (prefs.panY != null) Renderer.panY = prefs.panY;
+    if (prefs.zoom != null) Renderer.zoom = clamp(prefs.zoom, 0.4, 3);
+    this.syncPauseTogglesUI();
+    const logSearch = document.getElementById('logSearch');
+    if (logSearch && prefs.logSearch != null) logSearch.value = prefs.logSearch;
+    document.querySelectorAll('.log-filter').forEach(b => b.classList.toggle('active', b.dataset.f === this.logFilter));
+    document.querySelectorAll('.obs-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === this.rankingTab));
+    if (prefs.follow && prefs.follow.kind && prefs.follow.id) {
+      if (this.getTargetPosition(prefs.follow.kind, prefs.follow.id)) {
+        this.follow = { kind: prefs.follow.kind, id: prefs.follow.id, label: this.getTargetLabel(prefs.follow.kind, prefs.follow.id) };
+      } else {
+        this.follow = null;
+        EventSystem.add('system', '👁 เป้าหมายติดตามหลังโหลดไม่พบ — ยกเลิก follow');
+      }
+    }
+    this.updateFollowLabel();
+  }
+};
+
 /* ═══════════════════ 16. RENDERER ═══════════════════ */
 
 const Renderer = {
   canvas: null, ctx: null, w: 0, h: 0, scaleX: 1, scaleY: 1,
+  panX: 0, panY: 0, zoom: 1,
+  _dragging: false, _dragMoved: false, _dragLast: null,
 
   init() {
     this.canvas = document.getElementById('mapCanvas');
@@ -4147,10 +4715,55 @@ const Renderer = {
     };
     window.addEventListener('resize', resize);
     resize();
+    this.bindCamera();
   },
 
-  sx(x) { return x * this.scaleX; },
-  sy(y) { return y * this.scaleY; },
+  bindCamera() {
+    const c = this.canvas;
+    if (!c) return;
+    c.addEventListener('wheel', e => {
+      if (UI.armedTool) return;
+      e.preventDefault();
+      const rect = c.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const oldZoom = this.zoom;
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      this.zoom = clamp(this.zoom * factor, 0.4, 3);
+      const scale = this.zoom / oldZoom;
+      this.panX = mx - (mx - this.panX) * scale;
+      this.panY = my - (my - this.panY) * scale;
+    }, { passive: false });
+    c.addEventListener('mousedown', e => {
+      if (e.button !== 0 || UI.armedTool) return;
+      this._dragging = true;
+      this._dragMoved = false;
+      this._dragLast = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener('mousemove', e => {
+      if (!this._dragging || !this._dragLast) return;
+      const dx = e.clientX - this._dragLast.x, dy = e.clientY - this._dragLast.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) this._dragMoved = true;
+      this.panX += dx; this.panY += dy;
+      this._dragLast = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener('mouseup', () => { this._dragging = false; this._dragLast = null; });
+    c.addEventListener('dblclick', e => {
+      if (UI.armedTool) return;
+      if (!this._dragMoved) this.resetView();
+    });
+  },
+
+  resetView() {
+    this.panX = 0; this.panY = 0; this.zoom = 1;
+  },
+
+  centerOnMap(x, y) {
+    this.panX = this.w / 2 - x * this.scaleX * this.zoom;
+    this.panY = this.h / 2 - y * this.scaleY * this.zoom;
+  },
+
+  sx(x) { return x * this.scaleX * this.zoom + this.panX; },
+  sy(y) { return y * this.scaleY * this.zoom + this.panY; },
 
   settlementStatusColor(s) {
     if (s.siege) return '#111111';
@@ -4410,7 +5023,11 @@ const Renderer = {
   // แปลง client coords → map coords
   toMap(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
-    return { x: (clientX - rect.left) / this.scaleX, y: (clientY - rect.top) / this.scaleY };
+    const px = clientX - rect.left, py = clientY - rect.top;
+    return {
+      x: (px - this.panX) / (this.scaleX * this.zoom),
+      y: (py - this.panY) / (this.scaleY * this.zoom)
+    };
   },
 
   pickAt(clientX, clientY) {
@@ -4436,7 +5053,8 @@ const Renderer = {
     // 3) settlements
     for (const s of world.settlements) {
       const d = Math.hypot(px - this.sx(s.x), py - this.sy(s.y));
-      if (d < SETTLEMENT_RADIUS[s.type] * Math.min(this.scaleX, this.scaleY) * 1.4 + 8) {
+      const hitR = SETTLEMENT_RADIUS[s.type] * Math.min(this.scaleX, this.scaleY) * this.zoom * 1.4 + 8;
+      if (d < hitR) {
         return { kind: 'settlement', id: s.id };
       }
     }
@@ -4473,6 +5091,7 @@ const UI = {
   chronicleDirty: true,
   chronicleFilter: 'all',
   chronicleOpen: false,
+  dashboardDirty: true,
   _lastTickTime: 0,
 
   init() {
@@ -4509,6 +5128,8 @@ const UI = {
       this.chronicleOpen = !this.chronicleOpen;
       document.getElementById('chroniclePanel').classList.toggle('hidden', !this.chronicleOpen);
       document.getElementById('summaryModal').classList.add('hidden');
+      document.getElementById('observerPanel')?.classList.add('hidden');
+      if (typeof ObserverSystem !== 'undefined') ObserverSystem.observerOpen = false;
       if (this.chronicleOpen) { this.chronicleDirty = true; }
     });
     document.getElementById('chronClose').addEventListener('click', () => {
@@ -4544,6 +5165,8 @@ const UI = {
       document.getElementById('chroniclePanel')?.classList.add('hidden');
       document.getElementById('summaryModal')?.classList.add('hidden');
       document.getElementById('savePanel')?.classList.add('hidden');
+      document.getElementById('observerPanel')?.classList.add('hidden');
+      ObserverSystem.observerOpen = false;
       this.chronicleOpen = false;
       const body = document.getElementById('diplomacyBody');
       if (body) body.innerHTML = DiplomacySystem.diplomacySummaryHTML();
@@ -4560,6 +5183,7 @@ const UI = {
     // ── map interaction ──
     const canvas = document.getElementById('mapCanvas');
     canvas.addEventListener('click', e => {
+      if (Renderer._dragMoved) { Renderer._dragMoved = false; return; }
       if (this.armedTool) { SandboxTools.applyAt(e.clientX, e.clientY); return; }
       this.selected = Renderer.pickAt(e.clientX, e.clientY);
       this.inspectorDirty = true;
@@ -4568,6 +5192,8 @@ const UI = {
       e.preventDefault();
       SandboxTools.disarm();
     });
+
+    if (typeof ObserverSystem !== 'undefined') ObserverSystem.init();
   },
 
   loop(ts) {
@@ -4577,10 +5203,19 @@ const UI = {
       simulateDay();
     }
     Renderer.draw();
+    if (typeof ObserverSystem !== 'undefined') ObserverSystem.tickFollow();
     document.getElementById('dayCounter').textContent = world ? `Day ${world.day}` : 'Day —';
     if (this.logDirty) { this.renderLog(); this.logDirty = false; }
     if (this.inspectorDirty) { this.renderInspector(); this.inspectorDirty = false; }
     if (this.chronicleOpen && this.chronicleDirty) { this.renderChronicle(); this.chronicleDirty = false; }
+    if (this.dashboardDirty) {
+      if (typeof ObserverSystem !== 'undefined') ObserverSystem.renderMiniDashboard();
+      this.dashboardDirty = false;
+    }
+    if (typeof ObserverSystem !== 'undefined' && ObserverSystem.observerOpen && ObserverSystem.observerDirty) {
+      ObserverSystem.renderPanel();
+      ObserverSystem.observerDirty = false;
+    }
     requestAnimationFrame(t => this.loop(t));
   },
 
@@ -4636,8 +5271,15 @@ const UI = {
         `<div class="chron-entry imp-${e.importance} cat-${e.category}">
            <div class="ce-title"><span class="ce-day">Day ${e.day}</span>${e.title}</div>
            ${e.description ? `<div class="ce-desc">${e.description}</div>` : ''}
+           ${typeof ObserverSystem !== 'undefined' ? ObserverSystem.chronicleTargetButtons(e) : ''}
          </div>`).join('')
       : '<p class="hint">ยังไม่มีบันทึกในหมวดนี้ — ประวัติศาสตร์กำลังรอถูกเขียน</p>';
+    for (const btn of el.querySelectorAll('.chron-target')) {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        ObserverSystem.focusTarget(btn.dataset.selKind, +btn.dataset.selId);
+      });
+    }
   },
 
   /* ── Phase 10: World summary ── */
@@ -4736,10 +5378,23 @@ const UI = {
 
   renderLog() {
     const el = document.getElementById('eventLog');
-    const html = world.events.slice(-250).map(ev =>
-      `<div class="log-entry ev-${ev.category}"><span class="log-day">Day ${ev.day}</span>${ev.text}</div>`
-    ).join('');
-    el.innerHTML = html;
+    const obs = typeof ObserverSystem !== 'undefined' ? ObserverSystem : null;
+    const events = world.events.slice(-250).filter(ev => {
+      if (obs && !obs.eventMatchesFilter(ev)) return false;
+      if (obs && obs.logSearch && !(ev.text || '').toLowerCase().includes(obs.logSearch)) return false;
+      return true;
+    });
+    const html = events.map(ev => {
+      const ref = obs ? obs.firstEventRef(ev.refs) : null;
+      const jump = ref
+        ? ` <button class="log-jump" data-kind="${ref.kind}" data-id="${ref.id}">📍 ไปยังเป้าหมาย</button>`
+        : '';
+      return `<div class="log-entry ev-${ev.category}"><span class="log-day">Day ${ev.day}</span>${ev.text}${jump}</div>`;
+    }).join('');
+    el.innerHTML = html || '<div class="hint" style="padding:6px">ไม่มีเหตุการณ์ในตัวกรองนี้</div>';
+    for (const btn of el.querySelectorAll('.log-jump')) {
+      btn.addEventListener('click', () => ObserverSystem.focusTarget(btn.dataset.kind, +btn.dataset.id));
+    }
     if (document.getElementById('logAutoScroll').checked) el.scrollTop = el.scrollHeight;
   },
 
@@ -4788,6 +5443,22 @@ const UI = {
       body.innerHTML = this.factionHTML(fc);
     }
     this.wireInspectorLinks(body);
+    this.wireFollowButtons(body);
+  },
+
+  followBtn(kind, id) {
+    const active = ObserverSystem.follow && ObserverSystem.follow.kind === kind && ObserverSystem.follow.id === id;
+    return `<button type="button" class="follow-btn ${active ? 'active' : ''}" data-follow-kind="${kind}" data-follow-id="${id}">${active ? '📍 กำลัง Follow' : '👁 Follow'}</button>`;
+  },
+
+  wireFollowButtons(body) {
+    for (const btn of body.querySelectorAll('[data-follow-kind]')) {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        ObserverSystem.startFollow(btn.dataset.followKind, +btn.dataset.followId);
+        this.inspectorDirty = true;
+      });
+    }
   },
 
   // ทำ links ใน inspector ให้คลิกได้
@@ -4844,7 +5515,7 @@ const UI = {
     const s = getSettlement(a.locationId);
     const f = getFaction(a.factionId);
     const u = a.unitId ? getUnit(a.unitId) : null;
-    let html = '';
+    let html = `<div class="insp-actions">${this.followBtn('agent', a.id)}</div>`;
     if (a.title) html += `<div class="thought" style="border-color:#ffd54f">🏅 "${a.title}" ${a.notable ? '· ตัวละครสำคัญแห่งยุค' : ''}</div>`;
     html += `<div class="thought">💭 "${a.currentThought}"</div>`;
     html += `<div class="insp-section"><h4>ข้อมูลทั่วไป</h4>`;
@@ -4935,7 +5606,7 @@ const UI = {
     const owner = s.ownerId ? getAgent(s.ownerId) : null;
     const gov = s.governorId ? getAgent(s.governorId) : null;
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
-    let html = '';
+    let html = `<div class="insp-actions">${this.followBtn('settlement', s.id)}</div>`;
     if (s.siege) html += `<div class="thought" style="border-color:#ef5350">⚠ เมืองกำลังถูกล้อม! (วันที่ ${s.siege.days})</div>`;
     html += `<div class="insp-section"><h4>การปกครอง</h4>`;
     html += this.kv('ประเภท', s.type);
@@ -5100,7 +5771,8 @@ const UI = {
     const s = getSettlement(u.locationId);
     const comp = {};
     for (const m of members) comp[m.profession] = (comp[m.profession] || 0) + 1;
-    let html = `<div class="insp-section"><h4>ข้อมูลหน่วย</h4>`;
+    let html = `<div class="insp-actions">${this.followBtn('unit', u.id)}</div>`;
+    html += `<div class="insp-section"><h4>ข้อมูลหน่วย</h4>`;
     html += this.kv('ประเภท', u.kind);
     html += this.kv('ผู้นำ', leader ? this.link('agent', leader.id, leader.name) : '—');
     html += this.kv('ฝ่าย', f ? f.name : 'อิสระ/กบฏ');
@@ -5184,7 +5856,8 @@ const UI = {
     const f = getFaction(ar.factionId);
     const units = ar.unitIds.map(getUnit).filter(Boolean);
     const totalMen = sum(units, u => unitMembers(u).length);
-    let html = `<div class="insp-section"><h4>กองทัพ</h4>`;
+    let html = `<div class="insp-actions">${this.followBtn('army', ar.id)}</div>`;
+    html += `<div class="insp-section"><h4>กองทัพ</h4>`;
     html += this.kv('แม่ทัพ', commander ? this.link('agent', commander.id, commander.name) : '—');
     html += this.kv('ฝ่าย', f ? f.name : '—');
     html += this.kv('กำลังพลรวม', totalMen);
@@ -5416,7 +6089,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '13.1';
+const SAVE_SCHEMA_VERSION = '15.0';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -5452,6 +6125,8 @@ const SaveSystem = {
     document.getElementById('toolPanel')?.classList.add('hidden');
     document.getElementById('chroniclePanel')?.classList.add('hidden');
     document.getElementById('summaryModal')?.classList.add('hidden');
+    document.getElementById('observerPanel')?.classList.add('hidden');
+    if (typeof ObserverSystem !== 'undefined') ObserverSystem.observerOpen = false;
     this.refreshContinueUI();
     this.updateStatusUI();
   },
@@ -5483,7 +6158,8 @@ const SaveSystem = {
       uiPrefs: {
         speed: UI.speed,
         heatmapMode: UI.heatmapMode,
-        paused: UI.paused
+        paused: UI.paused,
+        observer: typeof ObserverSystem !== 'undefined' ? ObserverSystem.getPrefs() : null
       },
       world: this.serializeWorld()
     };
@@ -5558,12 +6234,16 @@ const SaveSystem = {
     world.seed = migrated.seed != null ? migrated.seed : (world.seed || 0);
     this.applyPostLoad();
     if (migrated.uiPrefs) this.applyUiPrefs(migrated.uiPrefs);
+    if (migrated.uiPrefs?.observer && typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.applyPrefs(migrated.uiPrefs.observer);
+    }
     this.lastSaveDay = world.day;
     this.lastSaveKind = 'loaded';
     UI.selected = null;
     UI.logDirty = true;
     UI.inspectorDirty = true;
     UI.chronicleDirty = true;
+    UI.dashboardDirty = true;
     this.updateStatusUI();
     this.refreshContinueUI();
   },

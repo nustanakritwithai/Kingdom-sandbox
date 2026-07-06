@@ -15,7 +15,12 @@
     <span class="logo">⬢</span>
     <span>Living Kingdom Sandbox</span>
     <span id="dayCounter" class="day-counter">Day 0</span>
-    <span class="version-badge" title="Phase 11 — Diplomacy + Phase 13 Save">v13.1</span>
+    <span class="version-badge" title="Phase 15 Observer UX">v15</span>
+  </div>
+
+  <div class="tb-group tb-search">
+    <input type="search" id="globalSearch" placeholder="🔍 ค้นหา agent / เมือง / ฝ่าย..." autocomplete="off">
+    <div id="searchResults" class="search-results"></div>
   </div>
 
   <div class="tb-group">
@@ -43,11 +48,14 @@
       <option value="faction">เขตอิทธิพล (Faction Control)</option>
     </select>
     <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
+    <button id="btnObserver" class="tb-btn accent">🧭 Observer</button>
     <button id="btnChronicle" class="tb-btn accent">📖 Chronicle</button>
     <button id="btnDiplomacy" class="tb-btn accent">🌐 Diplomacy</button>
     <button id="btnWorldSummary" class="tb-btn">🌍 สรุปโลก</button>
   </div>
 </header>
+
+<div id="miniDashboard" class="mini-dashboard" aria-label="สรุปโลก"></div>
 
 <!-- ══════════════ MAIN AREA ══════════════ -->
 <main id="main">
@@ -87,6 +95,41 @@
           <button id="btnNewWorldOverlay" class="save-btn">↺ New World</button>
         </div>
       </div>
+    </div>
+
+    <!-- Observer / Rankings panel (Phase 15) -->
+    <div id="observerPanel" class="hidden">
+      <div class="chron-header">
+        <h3>🧭 Observer — แผนที่ข่าวกรอง</h3>
+        <button id="observerClose" class="tb-btn">✕</button>
+      </div>
+      <div class="obs-tabs">
+        <button class="obs-tab active" data-tab="famous">⭐ Famous</button>
+        <button class="obs-tab" data-tab="richest">💰 Rich</button>
+        <button class="obs-tab" data-tab="military">⚔ Military</button>
+        <button class="obs-tab" data-tab="settlements">🏘 Towns</button>
+        <button class="obs-tab" data-tab="routes">🛤 Routes</button>
+        <button class="obs-tab" data-tab="factions">🚩 Factions</button>
+        <button class="obs-tab" data-tab="wars">💥 Wars</button>
+        <button class="obs-tab" data-tab="treaties">📜 Treaties</button>
+        <button class="obs-tab" data-tab="events">📰 Events</button>
+      </div>
+      <div class="obs-pause-toggles">
+        <span class="obs-pause-label">Pause on:</span>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="war_declaration" checked> สงคราม</label>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="city_captured" checked> ยึดเมือง</label>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="faction_collapse" checked> ฝ่ายล่ม</label>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="legendary_death" checked> ตำนานตาย</label>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="rebellion" checked> กบฏ</label>
+        <label><input type="checkbox" class="pause-on-cb" data-pause="treaty_betrayal" checked> หักสนธิ</label>
+      </div>
+      <div id="observerBody" class="observer-body"></div>
+    </div>
+
+    <div id="followLabel" class="follow-label hidden"></div>
+    <div id="observerToast" class="observer-toast hidden">
+      <div class="toast-title"></div>
+      <div class="toast-body"></div>
     </div>
 
     <!-- Sandbox tools floating panel -->
@@ -197,7 +240,21 @@
 <footer id="eventLogWrap">
   <div class="log-header">
     <b>📜 Event Log — บันทึกประวัติศาสตร์</b>
-    <label><input type="checkbox" id="logAutoScroll" checked> เลื่อนอัตโนมัติ</label>
+    <div class="log-controls">
+      <input type="search" id="logSearch" placeholder="ค้นหา log..." class="log-search">
+      <div class="log-filters">
+        <button class="log-filter active" data-f="all">ทั้งหมด</button>
+        <button class="log-filter" data-f="economy">economy</button>
+        <button class="log-filter" data-f="trade">trade</button>
+        <button class="log-filter" data-f="bandit">bandit</button>
+        <button class="log-filter" data-f="war">war</button>
+        <button class="log-filter" data-f="politics">politics</button>
+        <button class="log-filter" data-f="diplomacy">diplomacy</button>
+        <button class="log-filter" data-f="disaster">disaster</button>
+        <button class="log-filter" data-f="legend">legend</button>
+      </div>
+      <label><input type="checkbox" id="logAutoScroll" checked> เลื่อนอัตโนมัติ</label>
+    </div>
   </div>
   <div id="eventLog"></div>
 </footer>
