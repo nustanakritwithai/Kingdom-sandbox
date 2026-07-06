@@ -174,8 +174,8 @@ else fail('siege equipment effect');
 
 // Save/load
 const payload = run('SaveSystem.buildSavePayload("test")');
-if (payload.schemaVersion === '18.1') ok('save schema 18.1');
-else fail('schema not 18.1: ' + payload.schemaVersion);
+if (payload.schemaVersion === '18.2') ok('save schema 18.2');
+else fail('schema not 18.2: ' + payload.schemaVersion);
 
 run(`
   const saved = SaveSystem.buildSavePayload('test');

@@ -417,7 +417,7 @@ const RANGE_BANDS = ['far', 'missile', 'reach', 'melee', 'close', 'grapple'];
 const ATTACK_DIRS = ['overhead', 'left', 'right', 'thrust'];
 const DEFENSE_ACTIONS = ['block_high', 'block_left', 'block_right', 'parry', 'shield_block', 'dodge', 'armor_absorb'];
 const FORMATIONS = ['loose', 'shield_wall', 'spear_line', 'skirmish', 'charge', 'defensive', 'ambush', 'retreat'];
-const MAX_BATTLE_REPORTS = 60;
+const MAX_BATTLE_REPORTS = 100;
 
 function syncLegacyInventory(a) {
   if (!a.equipment) a.equipment = emptyEquipment();
@@ -911,7 +911,8 @@ function createUnit(opt) {
     retreating: false,
     // ── Phase 18.1 ──
     composition: opt.composition || defaultUnitComposition(),
-    formation: opt.formation || 'loose'
+    formation: opt.formation || 'loose',
+    formationStats: opt.formationStats || defaultFormationStats()
   };
   world.units.push(u);
   for (const id of u.memberIds) { const m = getAgent(id); if (m) m.unitId = u.id; }
@@ -973,6 +974,7 @@ function generateWorld() {
     guilds: [], warehouses: [], tradeContracts: [],
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
+    largeBattleRecords: [], activeBattlefields: [],
     marketIndex: defaultMarketIndex(),
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0, contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0 }
   };
@@ -1141,6 +1143,7 @@ function generateWorld() {
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
+  if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -1949,6 +1952,906 @@ const TextCombatCore = {
     if (!world.legendaryWeapons) world.legendaryWeapons = [];
     for (const a of world.agents) this.ensureAgent(a);
     for (const u of world.units) { this.updateUnitComposition(u); if (!u.formation) u.formation = 'loose'; }
+  }
+};
+
+/* ═══════════ Phase 18.2: Large Scale Text Battlefield ═══════════ */
+
+const BATTLEFIELD_W = 7;
+const BATTLEFIELD_H = 5;
+const LARGE_BATTLE_MIN_TOTAL = 80;
+const LARGE_BATTLE_MIN_SIDE = 40;
+const MAX_LARGE_BATTLE_SAMPLES = 40;
+const MAX_LARGE_BATTLE_REPORTS = 100;
+const LARGE_BATTLE_TICKS = 8;
+const LARGE_FORMATIONS = ['loose', 'shield_wall', 'spear_line', 'skirmish', 'charge', 'hold_position', 'advance', 'flank_left', 'flank_right', 'defensive', 'reserve', 'retreat', 'rout'];
+
+function defaultFormationStats() {
+  return { battles: 0, wins: 0, charges: 0, volleys: 0, holds: 0, routs: 0, flankIntercepts: 0 };
+}
+
+const LargeBattlefieldSystem = {
+  initWorld() {
+    if (!world.largeBattleRecords) world.largeBattleRecords = [];
+    if (!world.activeBattlefields) world.activeBattlefields = [];
+    if (!world.battleReports) world.battleReports = [];
+    for (const u of world.units) {
+      if (!u.formationStats) u.formationStats = defaultFormationStats();
+      if (!u.battleHistory) u.battleHistory = [];
+    }
+    this.cleanupStaleBattlefields();
+  },
+
+  cleanupStaleBattlefields() {
+    if (!world.activeBattlefields) return;
+    world.activeBattlefields = world.activeBattlefields.filter(bf => {
+      if (bf.resolved) return false;
+      for (const bu of Object.values(bf.unitStates || {})) {
+        if (getUnit(bu.originalUnitId)) return true;
+      }
+      return false;
+    });
+  },
+
+  isLargeBattle(attackerUnits, defenderUnits) {
+    const atk = sum(attackerUnits, u => unitMembers(u).length);
+    const def = sum(defenderUnits, u => unitMembers(u).length);
+    return atk + def >= LARGE_BATTLE_MIN_TOTAL || atk >= LARGE_BATTLE_MIN_SIDE || def >= LARGE_BATTLE_MIN_SIDE;
+  },
+
+  sectorAt(bf, x, y) {
+    return bf.sectors.find(s => s.x === x && s.y === y);
+  },
+
+  adjacentSectors(bf, x, y) {
+    const out = [];
+    for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+      const s = this.sectorAt(bf, x + dx, y + dy);
+      if (s) out.push(s);
+    }
+    return out;
+  },
+
+  createSectors(terrainType, isSiege) {
+    const sectors = [];
+    const rowBase = {
+      plain: ['plain', 'plain', 'plain', 'hill', 'forest'],
+      forest: ['forest', 'forest', 'plain', 'hill', 'marsh'],
+      hill: ['hill', 'plain', 'hill', 'forest', 'plain'],
+      marsh: ['marsh', 'plain', 'marsh', 'forest', 'plain'],
+      road: ['road', 'plain', 'road', 'hill', 'plain']
+    };
+    const rows = rowBase[terrainType] || rowBase.plain;
+    for (let y = 0; y < BATTLEFIELD_H; y++) {
+      for (let x = 0; x < BATTLEFIELD_W; x++) {
+        let terr = rows[y % rows.length];
+        if (isSiege) {
+          if (y === 0 && x >= 2 && x <= 4) terr = x === 3 ? 'gate' : 'wall';
+          if (y === 1 && x === 3) terr = 'settlement';
+        }
+        if (!isSiege && x === 1 && y === 2) terr = 'river';
+        sectors.push({
+          x, y, terrain: terr,
+          elevation: terr === 'hill' ? 0.45 : terr === 'wall' ? 0.55 : 0,
+          cover: terr === 'forest' ? 0.55 : terr === 'wall' ? 0.75 : terr === 'settlement' ? 0.6 : 0.12,
+          mud: terr === 'marsh' ? 0.65 : 0,
+          control: null, unitIds: [],
+          arrowExposure: ['plain', 'road'].includes(terr) ? 1 : terr === 'forest' ? 0.55 : 0.85,
+          cavalryLane: ['plain', 'road'].includes(terr) ? 1.25 : terr === 'forest' ? 0.45 : terr === 'marsh' ? 0.25 : 0.75,
+          chokePoint: ['river', 'wall', 'gate', 'settlement'].includes(terr),
+          danger: terr === 'marsh' ? 0.35 : 0.1
+        });
+      }
+    }
+    return sectors;
+  },
+
+  sectorCapacity(sector) {
+    if (!sector) return 20;
+    const t = sector.terrain;
+    if (sector.chokePoint || t === 'gate') return 12;
+    if (t === 'river' || t === 'marsh') return 14;
+    if (t === 'forest') return 18;
+    if (t === 'wall' || t === 'settlement') return 10;
+    return 28;
+  },
+
+  formationWidth(formation) {
+    const w = {
+      shield_wall: 1.35, spear_line: 1.25, skirmish: 0.85, charge: 0.9, loose: 1,
+      hold_position: 1.1, advance: 1, flank_left: 0.75, flank_right: 0.75,
+      defensive: 1.15, reserve: 0.6, retreat: 0.7, rout: 0.4
+    };
+    return w[formation] || 1;
+  },
+
+  frontage(bu, sector) {
+    const cap = this.sectorCapacity(sector) * (sector.chokePoint ? 0.65 : 1);
+    const terrainMod = sector.terrain === 'plain' || sector.terrain === 'road' ? 1.1 : sector.chokePoint ? 0.55 : 0.85;
+    return Math.floor(Math.min(bu.aliveCount, cap * this.formationWidth(bu.formation) * terrainMod));
+  },
+
+  largeFormationMod(formation, role) {
+    const m = {
+      shield_wall: { def: 1.28, arrow: 0.62, spd: 0.72, flank: 1.35 },
+      spear_line: { def: 1.18, cav: 1.42, close: 0.82, chargeRes: 1.35 },
+      skirmish: { rng: 1.22, spd: 1.15, cav: 0.78, def: 0.88 },
+      charge: { atk: 1.38, fat: 1.45, def: 0.82 },
+      hold_position: { def: 1.15, mor: 1.1, spd: 0.8 },
+      advance: { atk: 1.08, spd: 1.05 },
+      flank_left: { atk: 1.12, flank: 1.2 },
+      flank_right: { atk: 1.12, flank: 1.2 },
+      defensive: { def: 1.2, mor: 1.15 },
+      reserve: { mor: 1.25, def: 1.05 },
+      retreat: { cas: 0.68, mor: 0.9 },
+      rout: { cas: 1.5, mor: 0.4, def: 0.35 },
+      loose: { atk: 1, def: 1 }
+    }[formation] || { atk: 1, def: 1 };
+    if (role === 'archer' || role === 'ranged') return m.rng || m.atk || 1;
+    if (role === 'cavalry') return m.cav || m.atk || 1;
+    if (role === 'defense') return m.def || 1;
+    return m.atk || m.def || 1;
+  },
+
+  averageRolePower(bu) {
+    const c = bu.composition;
+    const total = Math.max(1, bu.aliveCount);
+    let p = 0;
+    p += (c.spearmen || 0) * 1.15 + (c.swordsmen || 0) * 1.05 + (c.shieldmen || 0) * 1.1;
+    p += (c.archers || 0) * 0.85 + (c.cavalry || 0) * 1.35 + (c.veterans || 0) * 1.2;
+    p += (c.engineers || 0) * 0.9 + (c.scouts || 0) * 0.75 + (c.militia || 0) * 0.65;
+    p += (c.heroes || 0) * 1.5;
+    return (p / total) * (0.85 + bu.morale / 200);
+  },
+
+  createBattleUnit(unit, side, context) {
+    const members = unitMembers(unit);
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(unit);
+    const comp = Object.assign(defaultUnitComposition(), unit.composition || {});
+    comp.heroes = members.filter(m => (m.fame || 0) >= 12 || m.notable).length;
+    const cmd = getAgent(unit.leaderId);
+    const ammo = Math.floor((unit.supply?.arrows || 10) + comp.archers * 3);
+    return {
+      id: uid(),
+      originalUnitId: unit.id,
+      side,
+      factionId: unit.factionId,
+      name: unit.name,
+      members: members.map(m => m.id),
+      size: members.length,
+      aliveCount: members.length,
+      woundedCount: 0,
+      routedCount: 0,
+      capturedCount: 0,
+      commanderId: unit.leaderId,
+      position: { x: 0, y: 0 },
+      targetPosition: null,
+      facing: side === 'attacker' ? 'east' : 'west',
+      formation: unit.formation || 'loose',
+      order: side === 'attacker' ? 'advance' : 'hold_position',
+      morale: unit.morale || 65,
+      cohesion: unit.cohesion || 70,
+      fatigue: unit.fatigue || 0,
+      supply: unit.supply?.food || 10,
+      ammo,
+      frontage: 0,
+      depth: 1,
+      speed: 1,
+      engagedWith: [],
+      reserveState: unit.formation === 'reserve' ? 'waiting' : 'front',
+      flankThreat: { left: 0, right: 0, rear: 0, surrounded: false },
+      lastShockReason: null,
+      composition: comp,
+      notableEvents: []
+    };
+  },
+
+  pickFormation(unit, enemyComp, terrainType, strategy, side) {
+    if (typeof TextCombatCore !== 'undefined') {
+      return TextCombatCore.pickFormation(unit, enemyComp, terrainType, strategy);
+    }
+    const c = unit.composition || defaultUnitComposition();
+    if (side === 'defender') {
+      if (c.spearmen > c.cavalry) return 'spear_line';
+      if (c.shieldmen > 2) return 'shield_wall';
+      return 'defensive';
+    }
+    if (c.cavalry > c.spearmen && ['plain', 'road'].includes(terrainType)) return 'charge';
+    if (c.archers > c.swordsmen) return 'skirmish';
+    return 'advance';
+  },
+
+  deployUnits(bf, atkUnits, defUnits, context) {
+    const isSiege = context.isSiege || false;
+    let ax = 1, ay = 2;
+    for (let i = 0; i < atkUnits.length; i++) {
+      const u = atkUnits[i];
+      const bu = bf.unitStates['a' + u.id];
+      if (!bu) continue;
+      const row = i % 3, col = Math.floor(i / 3);
+      bu.position = { x: Math.min(BATTLEFIELD_W - 2, 1 + col), y: clamp(1 + row, 0, BATTLEFIELD_H - 1) };
+      if (i === atkUnits.length - 1 && atkUnits.length > 2) {
+        bu.position = { x: 1, y: 4 };
+        bu.formation = 'reserve';
+        bu.reserveState = 'waiting';
+      }
+      if (bu.composition.cavalry > 2 && col === 0) bu.position.y = 0;
+      this.placeUnitOnSector(bf, bu);
+      bu.formation = this.pickFormation(u, defUnits[0]?.composition, bf.terrainType, context.strategy, 'attacker');
+    }
+    for (let i = 0; i < defUnits.length; i++) {
+      const u = defUnits[i];
+      const bu = bf.unitStates['d' + u.id];
+      if (!bu) continue;
+      const row = i % 3, col = Math.floor(i / 3);
+      bu.position = { x: Math.max(1, BATTLEFIELD_W - 2 - col), y: clamp(1 + row, 0, BATTLEFIELD_H - 1) };
+      if (i === defUnits.length - 1 && defUnits.length > 2) {
+        bu.position = { x: BATTLEFIELD_W - 2, y: 4 };
+        bu.formation = 'reserve';
+        bu.reserveState = 'waiting';
+      }
+      if (isSiege && i === 0) bu.position = { x: BATTLEFIELD_W - 2, y: 2 };
+      this.placeUnitOnSector(bf, bu);
+      bu.formation = this.pickFormation(u, atkUnits[0]?.composition, bf.terrainType, 'defensive', 'defender');
+    }
+  },
+
+  placeUnitOnSector(bf, bu) {
+    for (const s of bf.sectors) s.unitIds = s.unitIds.filter(id => id !== bu.id);
+    const s = this.sectorAt(bf, bu.position.x, bu.position.y);
+    if (!s) return;
+    s.unitIds.push(bu.id);
+    s.control = bu.factionId;
+    bu.frontage = this.frontage(bu, s);
+    bu.depth = Math.ceil(bu.aliveCount / Math.max(1, bu.frontage));
+  },
+
+  battleUnits(bf) {
+    return Object.values(bf.unitStates).filter(bu => bu.aliveCount > 0 && bu.formation !== 'rout');
+  },
+
+  getBU(bf, id) {
+    return bf.unitStates[id] || Object.values(bf.unitStates).find(b => b.id === id);
+  },
+
+  resolveVolley(bf, shooter, target, sector, context) {
+    if (!shooter || !target || shooter.ammo <= 0) return null;
+    const archers = shooter.composition.archers || 0;
+    if (archers < 1) return null;
+    const dist = Math.abs(shooter.position.x - target.position.x) + Math.abs(shooter.position.y - target.position.y);
+    if (dist > 3 || dist < 1) return null;
+    const s = this.sectorAt(bf, shooter.position.x, shooter.position.y);
+    const ts = this.sectorAt(bf, target.position.x, target.position.y);
+    let accuracy = 0.35 + archers * 0.02 + (s?.elevation || 0) * 0.2;
+    if (bf.visibility < 0.7) accuracy *= 0.85;
+    if (target.formation === 'charge') accuracy *= 0.7;
+    let shieldReduction = target.formation === 'shield_wall' ? 0.45 : (target.composition.shieldmen || 0) * 0.03;
+    shieldReduction = clamp(shieldReduction, 0, 0.55);
+    const coverReduction = (ts?.cover || 0) * 0.35;
+    const arrowsFired = Math.min(shooter.ammo, Math.floor(archers * rand(2, 5)));
+    shooter.ammo -= arrowsFired;
+    const hitRate = clamp(accuracy - shieldReduction - coverReduction, 0.08, 0.65);
+    const casualties = Math.floor(arrowsFired * hitRate * rand(0.15, 0.35));
+    const wounded = Math.floor(casualties * 0.6);
+    const moraleShock = clamp(casualties * 0.8 + (casualties > 5 ? 6 : 0), 0, 18);
+    target.aliveCount = Math.max(0, target.aliveCount - casualties);
+    target.woundedCount += wounded;
+    target.morale = clamp(target.morale - moraleShock, 0, 100);
+    target.cohesion = clamp(target.cohesion - casualties * 0.4, 5, 100);
+    shooter.fatigue += 3;
+    if (casualties > 3) shooter.notableEvents.push(`ยิงธนูสร้างความเสียหาย ${casualties}`);
+    return { shooterUnitId: shooter.id, targetUnitId: target.id, arrowsFired, accuracy, shieldReduction, coverReduction, casualties, wounded, moraleShock, ammoUsed: arrowsFired };
+  },
+
+  resolveCavalryCharge(cavalry, target, sector, context) {
+    const cavCount = cavalry.composition.cavalry || Math.floor(cavalry.aliveCount * 0.3);
+    if (cavCount < 2 || cavalry.formation !== 'charge') return null;
+    const lane = sector?.cavalryLane || 1;
+    if (lane < 0.4) {
+      cavalry.notableEvents.push('ทหารม้าติดหนูบน terrain');
+      cavalry.morale -= 8;
+      cavalry.cohesion -= 10;
+      return { failed: true, reason: 'bad_terrain' };
+    }
+    const cmd = getAgent(cavalry.commanderId);
+    const chargePower = cavCount * lane * (cavalry.morale / 70) * (cmd?.skills?.tactics || 3) * 0.15 * rand(0.85, 1.15);
+    const spearMod = target.formation === 'spear_line' ? 1.35 : 0.7;
+    const defense = (target.composition.spearmen || 0) * spearMod * (target.cohesion / 80) * (target.morale / 70) * 0.12;
+    const chargeWins = chargePower > defense * rand(0.9, 1.1);
+    let casualties = 0, moraleShock = 0, cohesionDamage = 0;
+    if (chargeWins) {
+      casualties = Math.floor(cavCount * rand(0.08, 0.2) + chargePower * 0.15);
+      const targetCas = Math.floor(chargePower * rand(0.2, 0.45));
+      target.aliveCount = Math.max(0, target.aliveCount - targetCas);
+      moraleShock = clamp(12 + targetCas * 0.5, 8, 28);
+      cohesionDamage = clamp(targetCas * 0.6, 5, 35);
+      target.morale -= moraleShock;
+      target.cohesion -= cohesionDamage;
+      target.lastShockReason = 'cavalry_charge';
+      cavalry.notableEvents.push('ชาร์จทหารม้าสำเร็จ');
+      if (target.formation === 'spear_line' && target.cohesion < 40) {
+        target.formation = 'loose';
+        target.notableEvents.push('แนวหอกแตก');
+      }
+    } else {
+      const cavCas = Math.floor(cavCount * rand(0.15, 0.35));
+      cavalry.aliveCount = Math.max(0, cavalry.aliveCount - cavCas);
+      cavalry.morale -= 12;
+      cavalry.cohesion -= 15;
+      cavalry.formation = 'loose';
+      cavalry.notableEvents.push('ชาร์จล้มเหลว — ม้าหลายตัวล้ม');
+      target.notableEvents.push('ตั้งรับหอกหยุดทหารม้า');
+    }
+    cavalry.fatigue += 18;
+    return { chargePower, defense, chargeWins, casualties, moraleShock, cohesionDamage };
+  },
+
+  resolveUnitEngagement(unitA, unitB, sector, context) {
+    const engagedA = this.frontage(unitA, sector);
+    const engagedB = this.frontage(unitB, sector);
+    const engaged = Math.min(engagedA, engagedB, unitA.aliveCount, unitB.aliveCount);
+    if (engaged < 1) return null;
+
+    const roleA = unitA.composition.cavalry > unitA.composition.spearmen ? 'cavalry' : 'melee';
+    const roleB = unitB.composition.cavalry > unitB.composition.spearmen ? 'cavalry' : 'melee';
+    const terrModA = sector.terrain === 'hill' && unitA.side === 'defender' ? 1.12 : 1;
+    const terrModB = sector.terrain === 'hill' && unitB.side === 'defender' ? 1.12 : 1;
+
+    const scoreA = engaged * this.averageRolePower(unitA)
+      * this.largeFormationMod(unitA.formation, roleA)
+      * (unitA.morale / 70) * (unitA.cohesion / 80) * terrModA
+      * (1 + (unitA.flankThreat.surrounded ? -0.2 : 0))
+      * rand(0.88, 1.12);
+    const scoreB = engaged * this.averageRolePower(unitB)
+      * this.largeFormationMod(unitB.formation, roleB)
+      * (unitB.morale / 70) * (unitB.cohesion / 80) * terrModB
+      * (1 + (unitB.flankThreat.surrounded ? -0.2 : 0))
+      * rand(0.88, 1.12);
+
+    const total = scoreA + scoreB;
+    const ratioA = total > 0 ? scoreA / total : 0.5;
+    const casA = Math.floor(engaged * (1 - ratioA) * rand(0.12, 0.28));
+    const casB = Math.floor(engaged * ratioA * rand(0.12, 0.28));
+    const woundA = Math.floor(casA * 0.55);
+    const woundB = Math.floor(casB * 0.55);
+    const shockA = clamp(casA * 0.7, 0, 15);
+    const shockB = clamp(casB * 0.7, 0, 15);
+
+    unitA.aliveCount = Math.max(0, unitA.aliveCount - casA);
+    unitB.aliveCount = Math.max(0, unitB.aliveCount - casB);
+    unitA.woundedCount += woundA;
+    unitB.woundedCount += woundB;
+    unitA.morale = clamp(unitA.morale - shockA, 0, 100);
+    unitB.morale = clamp(unitB.morale - shockB, 0, 100);
+    unitA.cohesion = clamp(unitA.cohesion - casA * 0.35, 5, 100);
+    unitB.cohesion = clamp(unitB.cohesion - casB * 0.35, 5, 100);
+    unitA.fatigue += 6;
+    unitB.fatigue += 6;
+    unitA.engagedWith.push(unitB.id);
+    unitB.engagedWith.push(unitA.id);
+
+    const moments = [];
+    if (casA > 4 || casB > 4) moments.push(`ปะทะที่(${sector.x},${sector.y}) สูญเสีย ${casA + casB}`);
+
+    return {
+      casualtiesA: casA, casualtiesB: casB, woundedA: woundA, woundedB: woundB,
+      moraleShockA: shockA, moraleShockB: shockB,
+      cohesionDamageA: casA * 0.35, cohesionDamageB: casB * 0.35,
+      fatigueGainA: 6, fatigueGainB: 6, notableMoments: moments
+    };
+  },
+
+  computeFlankThreat(bf, bu) {
+    const threat = { left: 0, right: 0, rear: 0, surrounded: false };
+    const enemies = this.battleUnits(bf).filter(u => u.side !== bu.side && u.aliveCount > 0);
+    for (const e of enemies) {
+      const dx = e.position.x - bu.position.x;
+      const dy = e.position.y - bu.position.y;
+      const dist = Math.abs(dx) + Math.abs(dy);
+      if (dist > 2) continue;
+      if (bu.side === 'attacker') {
+        if (dy < 0) threat.left += e.aliveCount * 0.02;
+        if (dy > 0) threat.right += e.aliveCount * 0.02;
+        if (dx < 0) threat.rear += e.aliveCount * 0.03;
+      } else {
+        if (dy < 0) threat.right += e.aliveCount * 0.02;
+        if (dy > 0) threat.left += e.aliveCount * 0.02;
+        if (dx > 0) threat.rear += e.aliveCount * 0.03;
+      }
+    }
+    threat.surrounded = threat.rear > 0.15 && (threat.left > 0.1 || threat.right > 0.1);
+    bu.flankThreat = threat;
+    if (threat.surrounded) {
+      bu.morale = clamp(bu.morale - 8, 0, 100);
+      bu.cohesion = clamp(bu.cohesion - 6, 5, 100);
+    }
+    return threat;
+  },
+
+  checkReserveTriggers(bf, bu) {
+    if (bu.reserveState !== 'waiting') return false;
+    const frontAllies = this.battleUnits(bf).filter(u => u.side === bu.side && u.reserveState === 'front');
+    const lowMorale = frontAllies.some(u => u.morale < 40);
+    const flank = frontAllies.some(u => u.flankThreat.left > 0.12 || u.flankThreat.right > 0.12);
+    const cavThreat = this.battleUnits(bf).some(u => u.side !== bu.side && u.formation === 'charge' && u.aliveCount > 3);
+    return lowMorale || flank || cavThreat;
+  },
+
+  deployReserve(bf, bu, targetBU) {
+    bu.reserveState = 'committed';
+    bu.formation = bu.composition.cavalry > 2 ? 'charge' : 'advance';
+    if (targetBU) {
+      bu.position = { ...targetBU.position };
+      bu.position.y = clamp(bu.position.y + (bu.side === 'attacker' ? 1 : -1), 0, BATTLEFIELD_H - 1);
+    }
+    bu.morale = clamp(bu.morale + 6, 0, 100);
+    bu.notableEvents.push('กองหนุนเข้าสนาม');
+    for (const u of this.battleUnits(bf).filter(x => x.side === bu.side && x.id !== bu.id)) {
+      u.morale = clamp(u.morale + 3, 0, 100);
+    }
+    return true;
+  },
+
+  applyMoraleNetwork(bf, event) {
+    for (const bu of this.battleUnits(bf)) {
+      const nearby = this.battleUnits(bf).filter(u => {
+        const dist = Math.abs(u.position.x - bu.position.x) + Math.abs(u.position.y - bu.position.y);
+        return dist <= 2;
+      });
+      let delta = 0;
+      for (const n of nearby) {
+        if (n.side === bu.side) {
+          if (n.formation === 'rout') delta -= 6;
+          if (n.reserveState === 'committed' && n.notableEvents.some(e => e.includes('หนุน'))) delta += 2;
+        } else {
+          if (n.formation === 'rout') delta += 3;
+          if (n.lastShockReason === 'cavalry_charge') delta -= 4;
+        }
+      }
+      if (event === 'commander_died') delta -= bu.side === event.side ? 15 : 4;
+      bu.morale = clamp(bu.morale + delta, 0, 100);
+      if (bu.morale < 20 && bu.cohesion < 35 && bu.formation !== 'retreat') {
+        if (chance(0.35)) { bu.formation = 'rout'; bu.lastShockReason = 'morale_collapse'; }
+        else if (chance(0.25)) bu.formation = 'retreat';
+      }
+    }
+  },
+
+  sampleNamedAgents(bf, totalMen) {
+    const limit = totalMen >= 200 ? randInt(20, 40) : totalMen >= 120 ? randInt(12, 30) : randInt(8, 20);
+    const picks = new Map();
+    const add = (a, reason) => {
+      if (!a || !a.alive || picks.size >= limit) return;
+      if (!picks.has(a.id)) picks.set(a.id, { agent: a, reason });
+    };
+    for (const bu of Object.values(bf.unitStates)) {
+      const cmd = getAgent(bu.commanderId);
+      if (cmd) add(cmd, 'commander');
+      for (const mid of bu.members) {
+        const m = getAgent(mid);
+        if (!m || !m.alive) continue;
+        if ((m.fame || 0) >= 10) add(m, 'famous');
+        if ((m.memory?.survivedBattles || 0) >= 2) add(m, 'veteran');
+        if ((m.motives?.revenge || 0) > 25) add(m, 'revenge');
+        if (world.legendaryWeapons?.some(lw => lw.wielderHistory?.some(w => w.agentId === m.id))) add(m, 'legendary');
+      }
+    }
+    const pool = [];
+    for (const bu of Object.values(bf.unitStates)) {
+      for (const mid of bu.members) {
+        const m = getAgent(mid);
+        if (m?.alive && !picks.has(m.id)) pool.push(m);
+      }
+    }
+    while (picks.size < limit && pool.length) add(pick(pool), 'soldier');
+    return [...picks.values()];
+  },
+
+  runSampledEvents(bf, samples, context) {
+    const events = [];
+    for (let i = 0; i < samples.length - 1 && events.length < 8; i += 2) {
+      const a = samples[i]?.agent, b = samples[i + 1]?.agent;
+      if (!a || !b || a.factionId === b.factionId) continue;
+      if (typeof TextCombatCore === 'undefined') continue;
+      const duel = TextCombatCore.resolveDuel(a, b, {
+        terrainType: bf.terrainType, rangeBand: 'melee', stakes: 'battle', maxRounds: randInt(3, 5)
+      });
+      events.push({ type: 'duel', log: duel.notableLog, winnerId: duel.winnerId });
+      if (duel.killed && typeof AgentMemorySystem !== 'undefined') {
+        AgentMemorySystem.recordPersonalEvent(getAgent(duel.winnerId), 'killed_enemy', 'สังหารศัตรูในสนามรบ', b.name, 3, { agents: [b.id] });
+      }
+    }
+    return events;
+  },
+
+  runBattleTick(bf, phaseName, context) {
+    const log = [];
+    const engagedPairs = new Set();
+
+    for (const bu of this.battleUnits(bf)) {
+      this.computeFlankThreat(bf, bu);
+      if (bu.reserveState === 'waiting' && this.checkReserveTriggers(bf, bu)) {
+        const target = this.battleUnits(bf).find(u => u.side === bu.side && u.reserveState === 'front' && u.morale < 45);
+        this.deployReserve(bf, bu, target);
+        log.push(`${bu.name} กองหนุนเข้าปิดปีก`);
+      }
+    }
+
+    if (phaseName === 'ranged' || phaseName === 'skirmish') {
+      for (const bu of this.battleUnits(bf).filter(u => (u.composition.archers || 0) > 0 && u.ammo > 0)) {
+        const enemies = this.battleUnits(bf).filter(e => e.side !== bu.side);
+        if (!enemies.length) continue;
+        const target = pick(enemies);
+        const sector = this.sectorAt(bf, bu.position.x, bu.position.y);
+        const vol = this.resolveVolley(bf, bu, target, sector, context);
+        if (vol && vol.casualties > 0) log.push(`ธนู${bu.name} → ${target.name} (${vol.casualties} ตาย)`);
+      }
+    }
+
+    if (phaseName === 'advance' || phaseName === 'main_clash') {
+      for (const bu of this.battleUnits(bf).filter(u => u.side === 'attacker' && u.formation !== 'reserve' && u.formation !== 'rout')) {
+        if (bu.position.x < BATTLEFIELD_W - 3) bu.position.x++;
+        this.placeUnitOnSector(bf, bu);
+      }
+    }
+
+    if (phaseName === 'main_clash' || phaseName === 'breakthrough') {
+      for (const bu of this.battleUnits(bf)) {
+        if (bu.formation === 'charge' && bu.composition.cavalry > 1) {
+          const enemies = this.battleUnits(bf).filter(e => e.side !== bu.side && Math.abs(e.position.x - bu.position.x) <= 1);
+          for (const tgt of enemies.slice(0, 1)) {
+            const sector = this.sectorAt(bf, bu.position.x, bu.position.y);
+            const ch = this.resolveCavalryCharge(bu, tgt, sector, context);
+            if (ch) log.push(ch.chargeWins ? `ทหารม้า${bu.name} ชาร์จสำเร็จ` : `ชาร์จ${bu.name} ล้มเหลว`);
+          }
+        }
+      }
+      for (const bu of this.battleUnits(bf)) {
+        const sector = this.sectorAt(bf, bu.position.x, bu.position.y);
+        const enemies = this.battleUnits(bf).filter(e => e.side !== bu.side
+          && Math.abs(e.position.x - bu.position.x) + Math.abs(e.position.y - bu.position.y) <= 1);
+        for (const e of enemies) {
+          const key = [Math.min(bu.id, e.id), Math.max(bu.id, e.id)].join('-');
+          if (engagedPairs.has(key)) continue;
+          engagedPairs.add(key);
+          const res = this.resolveUnitEngagement(bu, e, sector, context);
+          if (res && (res.casualtiesA + res.casualtiesB) > 0) {
+            log.push(`ปะทะ ${bu.name} vs ${e.name}`);
+          }
+        }
+      }
+    }
+
+    if (phaseName === 'morale' || phaseName === 'breakthrough') {
+      this.applyMoraleNetwork(bf, context._moraleEvent || '');
+      for (const bu of this.battleUnits(bf)) {
+        if (bu.morale < 25 && bu.cohesion < 30 && chance(0.4)) {
+          bu.formation = 'rout';
+          bu.lastShockReason = 'morale_collapse';
+          log.push(`${bu.name} แตกพ่าย!`);
+        }
+      }
+    }
+
+    if (phaseName === 'pursuit') {
+      const routers = Object.values(bf.unitStates).filter(u => u.formation === 'rout');
+      const pursuers = this.battleUnits(bf).filter(u => u.composition.cavalry > 0 && u.formation !== 'rout');
+      for (const r of routers) {
+        const p = pursuers.find(x => x.side !== r.side);
+        if (!p) continue;
+        const loss = Math.floor(r.aliveCount * (r.formation === 'retreat' ? 0.08 : 0.18) * rand(0.8, 1.2));
+        r.aliveCount = Math.max(0, r.aliveCount - loss);
+        r.routedCount += loss;
+        log.push(`ไล่ตาม${r.name} สูญเสีย ${loss}`);
+      }
+    }
+
+    return log;
+  },
+
+  syncCasualtiesToWorld(bf, attackerUnits, defenderUnits, attackerWins) {
+    let totalDead = 0, totalFled = 0;
+    const apply = (units, prefix) => {
+      for (const u of units) {
+        const bu = bf.unitStates[prefix + u.id];
+        if (!bu) continue;
+        const members = unitMembers(u);
+        const lost = members.length - bu.aliveCount;
+        if (lost <= 0) continue;
+        const toProcess = Math.min(lost, members.length);
+        const shuffled = members.slice().sort(() => Math.random() - 0.5);
+        for (let i = 0; i < toProcess; i++) {
+          const m = shuffled[i];
+          if (!m) continue;
+          if (chance(0.55)) {
+            NeedSystem.kill(m, 'ตายในสนามรบ');
+            totalDead++;
+          } else if (chance(0.35) && typeof TextCombatCore !== 'undefined') {
+            TextCombatCore.applyInjury(m, pick(['minor_cut', 'deep_cut', 'arrow_wound']), randInt(2, 5));
+          } else {
+            m.unitId = null;
+            u.memberIds = u.memberIds.filter(id => id !== m.id);
+            m.profession = 'refugee';
+            totalFled++;
+          }
+        }
+        u.morale = clamp(bu.morale, 5, 100);
+        u.cohesion = clamp(bu.cohesion, 5, 100);
+        u.fatigue = clamp(bu.fatigue, 0, 100);
+        if (!u.formationStats) u.formationStats = defaultFormationStats();
+        u.formationStats.battles++;
+        if ((attackerWins && prefix === 'a') || (!attackerWins && prefix === 'd')) u.formationStats.wins++;
+        if (bu.formation === 'rout') u.formationStats.routs++;
+        u.battleHistory.push({ day: world.day, won: (attackerWins && prefix === 'a') || (!attackerWins && prefix === 'd'), vs: bf.locationName, name: bf.title, large: true });
+      }
+    };
+    apply(attackerUnits, 'a');
+    apply(defenderUnits, 'd');
+    return { dead: totalDead, fled: totalFled };
+  },
+
+  buildThaiSummary(bf, attackerWins, turningPoints) {
+    const loc = bf.locationName || 'สนามรบ';
+    const terr = { plain: 'ที่ราบ', hill: 'เนินเขา', forest: 'ป่า', marsh: 'หนองน้ำ', road: 'ถนน' }[bf.terrainType] || bf.terrainType;
+    const atkCmd = bf.commanders?.attackers?.[0];
+    const defCmd = bf.commanders?.defenders?.[0];
+    let s = `ศึก${loc}เริ่มขึ้นบน${terr} `;
+    const atkForm = Object.values(bf.unitStates).find(u => u.side === 'attacker')?.formation || 'advance';
+    const defForm = Object.values(bf.unitStates).find(u => u.side === 'defender')?.formation || 'defensive';
+    s += `ฝ่ายบุกตั้งแนว${atkForm} ฝ่ายรับ${defForm} `;
+    if (turningPoints.includes('cavalry')) s += 'ทหารม้าชาร์จปะทะแนวหอก ';
+    if (turningPoints.includes('reserve')) s += 'กองหนุนเข้าปิดจังหวะ ';
+    if (turningPoints.includes('rout')) s += 'ขวัญกำลังใจแตกเป็นการถอยอย่างไร้ระเบียบ ';
+    s += attackerWins ? 'ฝ่ายบุกได้ชัย' : 'ฝ่ายรับยึดสนามได้';
+    if (atkCmd && bf.commanderFates?.[atkCmd]) s += ` แม่ทัพ${getAgent(atkCmd)?.name?.split(' ')[0] || ''} ${bf.commanderFates[atkCmd]}`;
+    return s;
+  },
+
+  createLargeBattleReport(bf, context, result) {
+    const loc = context.settlementId ? getSettlement(context.settlementId) : null;
+    const turningPoints = [];
+    if (bf.battleLog.some(l => l.includes('ชาร์จ'))) turningPoints.push('cavalry');
+    if (bf.battleLog.some(l => l.includes('หนุน'))) turningPoints.push('reserve');
+    if (bf.battleLog.some(l => l.includes('แตกพ่าย'))) turningPoints.push('rout');
+
+    const summaryText = this.buildThaiSummary(bf, result.attackerWins, turningPoints);
+    const report = {
+      id: uid(), title: bf.title, day: world.day,
+      location: loc?.name || context.label || 'สนามรบ',
+      locationId: context.settlementId || null,
+      armies: { attackers: bf.attackerArmyIds, defenders: bf.defenderArmyIds },
+      commanders: bf.commanders,
+      terrain: bf.terrainType,
+      deployment: bf.deployment,
+      phaseSummaries: bf.phaseSummaries,
+      casualties: result.totalDead,
+      wounded: result.totalWounded,
+      routed: result.totalRouted,
+      captured: result.totalCaptured,
+      notableUnits: result.notableUnits,
+      notableAgents: result.notableAgents,
+      commanderFates: bf.commanderFates,
+      turningPoints,
+      moraleCollapseReason: result.moraleCollapseReason,
+      pursuitResult: result.pursuitResult,
+      strategicOutcome: result.attackerWins ? 'attacker_victory' : 'defender_victory',
+      summaryText,
+      chronicleText: summaryText,
+      large: true,
+      gridSnapshot: this.gridSnapshot(bf),
+      winner: result.attackerWins ? 'attacker' : 'defender'
+    };
+
+    if (!world.battleReports) world.battleReports = [];
+    world.battleReports.push(report);
+    while (world.battleReports.length > MAX_LARGE_BATTLE_REPORTS) world.battleReports.shift();
+
+    if (!world.largeBattleRecords) world.largeBattleRecords = [];
+    world.largeBattleRecords.push({ id: report.id, day: world.day, title: report.title, casualties: report.casualties });
+    while (world.largeBattleRecords.length > MAX_LARGE_BATTLE_REPORTS) world.largeBattleRecords.shift();
+
+    if (result.totalDead >= 8 || result.totalMen >= 80) {
+      Chronicle.add({
+        category: 'war', importance: result.totalDead >= 20 ? 5 : 4,
+        title: `⚔ ${report.title}`,
+        description: summaryText,
+        agents: [...(bf.commanders?.attackers || []), ...(bf.commanders?.defenders || [])],
+        settlements: context.settlementId ? [context.settlementId] : []
+      });
+    }
+    bf.battleReport = report;
+    return report;
+  },
+
+  gridSnapshot(bf) {
+    const rows = [];
+    for (let y = 0; y < BATTLEFIELD_H; y++) {
+      const row = [];
+      for (let x = 0; x < BATTLEFIELD_W; x++) {
+        const s = this.sectorAt(bf, x, y);
+        const units = (s?.unitIds || []).map(id => this.getBU(bf, id)).filter(Boolean);
+        if (!units.length) row.push(s?.terrain === 'hill' ? 'HILL' : '—');
+        else {
+          const u = units[0];
+          const tag = u.composition.archers > u.composition.spearmen ? 'ARCH' : u.composition.cavalry > 2 ? 'CAV' : u.composition.spearmen > 2 ? 'SPEAR' : u.formation === 'reserve' ? 'RES' : u.formation === 'rout' ? 'ROUT' : 'CLASH';
+          row.push(tag);
+        }
+      }
+      rows.push(row);
+    }
+    return rows;
+  },
+
+  runLargeBattle(attackerUnits, defenderUnits, context) {
+    context = context || {};
+    const terrainType = context.terrainType || 'plain';
+    const loc = context.settlementId ? getSettlement(context.settlementId) : null;
+    const isSiege = loc && (loc.type === 'castle' || loc.type === 'fort' || loc.siege);
+    const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
+
+    const bf = {
+      id: uid(), day: world.day, locationId: context.settlementId || null,
+      locationName: context.label || loc?.name || 'สนามรบ',
+      title: `ศึก${context.label || loc?.name || 'ใหญ่'}`,
+      terrainType, weather: context.weather || 'clear',
+      visibility: context.scoutIntel ? 0.9 : 0.75,
+      width: BATTLEFIELD_W, height: BATTLEFIELD_H,
+      sectors: this.createSectors(terrainType, isSiege),
+      attackerArmyIds: [...new Set(attackerUnits.map(u => u.armyId).filter(Boolean))],
+      defenderArmyIds: [...new Set(defenderUnits.map(u => u.armyId).filter(Boolean))],
+      unitStates: {},
+      battleTime: 0, phase: 'deployment', battleLog: [], phaseSummaries: [],
+      commanders: {
+        attackers: attackerUnits.map(u => u.leaderId).filter(Boolean),
+        defenders: defenderUnits.map(u => u.leaderId).filter(Boolean)
+      },
+      commanderFates: {},
+      deployment: {}, resolved: false, isSiege
+    };
+
+    for (const u of attackerUnits) bf.unitStates['a' + u.id] = this.createBattleUnit(u, 'attacker', context);
+    for (const u of defenderUnits) bf.unitStates['d' + u.id] = this.createBattleUnit(u, 'defender', context);
+
+    if (context.supplyCut) {
+      for (const k of Object.keys(bf.unitStates)) {
+        if (bf.unitStates[k].side === 'attacker') bf.unitStates[k].morale -= 8;
+      }
+    }
+    if (isSiege && context.siegeEquipment) {
+      const wallPenalty = typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.siegeDefenseBonus(loc, { siegeEquipment: context.siegeEquipment }) : 0;
+      context._siegeWallPenalty = wallPenalty;
+    }
+
+    this.deployUnits(bf, attackerUnits, defenderUnits, context);
+    bf.deployment = this.gridSnapshot(bf);
+    bf.phaseSummaries.push({ phase: 'deployment', text: 'วางขบวนทัพเสร็จสิ้น' });
+
+    const phases = ['scout', 'ranged', 'advance', 'main_clash', 'breakthrough', 'morale', 'pursuit', 'aftermath'];
+    const ticks = Math.min(LARGE_BATTLE_TICKS, phases.length);
+    for (let t = 0; t < ticks; t++) {
+      const phase = phases[t];
+      bf.phase = phase;
+      bf.battleTime++;
+      if (phase === 'scout') {
+        bf.phaseSummaries.push({ phase, text: context.scoutIntel ? 'หน่วยลาดตระเวนเปิดเผยขบวนศัตรู' : 'สำรวจสนามรบ' });
+        if (bf.visibility < 0.8) bf.visibility += 0.05;
+      } else {
+        const tickLog = this.runBattleTick(bf, phase, context);
+        bf.battleLog = bf.battleLog.concat(tickLog);
+        if (tickLog.length) bf.phaseSummaries.push({ phase, text: tickLog.slice(0, 2).join(' · ') });
+      }
+    }
+
+    const samples = this.runSampledEvents(bf, this.sampleNamedAgents(bf, totalMen), context);
+    bf.sampledEvents = samples;
+
+    let atkAlive = 0, defAlive = 0, totalWounded = 0, totalRouted = 0;
+    for (const bu of Object.values(bf.unitStates)) {
+      if (bu.side === 'attacker') atkAlive += bu.aliveCount;
+      else defAlive += bu.aliveCount;
+      totalWounded += bu.woundedCount;
+      totalRouted += bu.routedCount;
+      if (bu.formation === 'rout') totalRouted += Math.floor(bu.aliveCount * 0.3);
+    }
+
+    const atkPower = atkAlive + sum(attackerUnits, u => MilitarySystem.unitPower(u, context.terrain) * 0.1);
+    const defPower = defAlive + (context.defenseBonus || 0) + sum(defenderUnits, u => MilitarySystem.unitPower(u, context.terrain) * 0.1);
+    const attackerWins = atkAlive > defAlive * 0.85 && atkPower >= defPower * rand(0.92, 1.05);
+
+    const sync = this.syncCasualtiesToWorld(bf, attackerUnits, defenderUnits, attackerWins);
+    let pursuitLosses = 0;
+    if (typeof CampaignWarfareSystem !== 'undefined') {
+      if (!attackerWins) {
+        const pr = CampaignWarfareSystem.handleBattleRetreat(attackerUnits, defenderUnits, true, context);
+        pursuitLosses = pr.pursuitLosses || 0;
+      } else if (context.kind !== 'raid') {
+        const pr = CampaignWarfareSystem.handleBattleRetreat(defenderUnits, attackerUnits, false, context);
+        pursuitLosses = pr.pursuitLosses || 0;
+      }
+    }
+    const totalDead = sync.dead + pursuitLosses;
+
+    for (const cid of bf.commanders.attackers.concat(bf.commanders.defenders)) {
+      const c = getAgent(cid);
+      if (c && !c.alive) bf.commanderFates[cid] = 'เสียชีวิต';
+      else if (c && c.injuries?.some(i => !i.healed)) bf.commanderFates[cid] = 'บาดเจ็บ';
+    }
+
+    bf.resolved = true;
+    const report = this.createLargeBattleReport(bf, context, {
+      attackerWins, totalDead, totalWounded, totalRouted, totalCaptured: 0,
+      totalMen, notableUnits: Object.values(bf.unitStates).filter(u => u.notableEvents.length).map(u => u.name),
+      notableAgents: samples.map(s => s.agent?.id).filter(Boolean),
+      moraleCollapseReason: bf.battleLog.find(l => l.includes('แตกพ่าย')) || null,
+      pursuitResult: pursuitLosses > 0 ? `ไล่ตามสูญเสีย ${pursuitLosses}` : 'ไม่มีการไล่ตาม'
+    });
+
+    world.activeBattlefields = (world.activeBattlefields || []).filter(b => b.id !== bf.id);
+
+    return {
+      attackerWins,
+      atkPower, defPower,
+      atkResult: { dead: sync.dead, fled: sync.fled },
+      defResult: { dead: 0, fled: 0 },
+      totalDead, pursuitLosses,
+      battleReport: report,
+      battlefield: bf,
+      phases: bf.phaseSummaries,
+      large: true
+    };
+  },
+
+  createTestArmy(settlementId, factionId, size, side) {
+    const s = getSettlement(settlementId) || pick(world.settlements);
+    const profs = ['spearman', 'archer', 'swordsman', 'cavalry', 'guard'];
+    const ids = [];
+    for (let i = 0; i < size; i++) {
+      const prof = profs[i % profs.length];
+      const ag = createAgent({ locationId: s.id, factionId, profession: prof });
+      seedSkillForProfession(ag, prof);
+      ids.push(ag.id);
+    }
+    const lead = getAgent(ids[0]);
+    const u = createUnit({
+      name: `${side === 'atk' ? 'บุก' : 'รับ'} ${size}`, kind: 'field', leaderId: lead.id,
+      memberIds: ids, factionId, locationId: s.id, food: size * 2
+    });
+    return u;
+  },
+
+  forceLargeBattle(atkSize, defSize) {
+    const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+    if (ks.length < 2) return null;
+    const s = world.settlements.find(x => x.type === 'town' || x.type === 'plain') || world.settlements[0];
+    const atk = this.createTestArmy(s.id, ks[0].id, atkSize || 120, 'atk');
+    const def = this.createTestArmy(s.id, ks[1].id, defSize || 100, 'def');
+    def.formation = 'spear_line';
+    atk.formation = 'charge';
+    const ctx = { settlementId: s.id, label: s.name, terrainType: s.terrain || 'plain', kind: 'battle' };
+    const result = this.runLargeBattle([atk], [def], ctx);
+    EventSystem.add('war', `⚔ [Sandbox] ศึกใหญ่ ${s.name}: ${result.totalDead} ตาย — ${result.battleReport?.summaryText?.slice(0, 80) || ''}`);
+    return result;
+  },
+
+  rankings() {
+    const reports = (world.battleReports || []).filter(r => r.large);
+    const routed = world.units.filter(u => u.formation === 'rout' || (u.morale || 100) < 25);
+    const famous = world.units.filter(u => (u.formationStats?.wins || 0) >= 2 || (u.recentVictories || 0) >= 2);
+    const heavy = reports.slice().sort((a, b) => (b.casualties || 0) - (a.casualties || 0)).slice(0, 8);
+    const charges = reports.filter(r => r.turningPoints?.includes('cavalry'));
+    const heroic = reports.filter(r => r.notableAgents?.length > 2);
+    return {
+      largeBattles: reports.slice(-10).reverse(),
+      formations: Object.entries(
+        world.units.reduce((acc, u) => { const f = u.formation || 'loose'; acc[f] = (acc[f] || 0) + 1; return acc; }, {})
+      ).map(([f, n]) => ({ formation: f, count: n })).sort((a, b) => b.count - a.count).slice(0, 8),
+      battleReports: reports.slice(-8).reverse(),
+      famousUnits: famous.slice(0, 10),
+      routedUnits: routed.filter(u => unitMembers(u).length).slice(0, 10),
+      heavyCasualty: heavy,
+      cavalryCharges: charges.slice(-5).reverse(),
+      heroicStands: heroic.slice(-5).reverse()
+    };
   }
 };
 
@@ -5016,6 +5919,32 @@ const MilitarySystem = {
     const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
     const bName = battleName(context.kind || 'field', context.label || '?', totalMen);
 
+    if (totalMen >= 6 && !context.skipPhased && typeof LargeBattlefieldSystem !== 'undefined' && LargeBattlefieldSystem.isLargeBattle(attackerUnits, defenderUnits)) {
+      const ar = attackerUnits[0]?.armyId ? getArmy(attackerUnits[0].armyId) : null;
+      context.strategy = ar?.strategyProfile?.preferredStrategy;
+      if (ar?.supplyLineId && typeof CampaignWarfareSystem !== 'undefined') {
+        const sl = CampaignWarfareSystem.getSupplyLine(ar.supplyLineId);
+        context.supplyCut = sl?.status === 'cut';
+      }
+      if (ar?.siegeEquipment) context.siegeEquipment = ar.siegeEquipment;
+      context.scoutIntel = (world.scoutReports || []).some(r => r.armyId === ar?.id);
+      const large = LargeBattlefieldSystem.runLargeBattle(attackerUnits, defenderUnits, context);
+      const attackerWins = large.attackerWins;
+      CombatSystem.applyBattleWear(attackerUnits, attackerWins);
+      CombatSystem.applyBattleWear(defenderUnits, !attackerWins);
+      for (const u of attackerUnits) {
+        if (attackerWins) u.recentVictories = (u.recentVictories || 0) + 1;
+        const leader = getAgent(u.leaderId);
+        if (leader && attackerWins) { leader.fame = (leader.fame || 0) + 2; this.checkPromotion(leader); }
+      }
+      recordWarBattle(context.atkFactionId, context.defFactionId, bName, large.totalDead, attackerWins);
+      if (typeof AgentMemorySystem !== 'undefined') {
+        AgentMemorySystem.onBattleEnd(attackerUnits, attackerWins, bName, context.settlementId);
+        AgentMemorySystem.onBattleEnd(defenderUnits, !attackerWins, bName, context.settlementId);
+      }
+      return { attackerWins, atkPower: large.atkPower, defPower: large.defPower, atkResult: large.atkResult, defResult: large.defResult, name: bName, totalDead: large.totalDead, pursuitLosses: large.pursuitLosses, battleReport: large.battleReport, large: true };
+    }
+
     if (totalMen >= 6 && !context.skipPhased && typeof TextCombatCore !== 'undefined') {
       const ar = attackerUnits[0]?.armyId ? getArmy(attackerUnits[0].armyId) : null;
       context.strategy = ar?.strategyProfile?.preferredStrategy;
@@ -7525,6 +8454,33 @@ const ObserverSystem = {
       html += '<div class="obs-section-head">Scout Reports</div>';
       html += cr.scoutReports.map(rep => row(`${rep.targetType} @ ${(getSettlement(rep.locationId) || {}).name || '?'}`, `conf ${fmt((rep.confidence || 0) * 100, 0)}% · ${rep.threat}`, 'army', rep.armyId || 0)).join('')
         || '<p class="hint">ยังไม่มีรายงานลาดตระเวน</p>';
+    } else if (tab === 'largebattles' && typeof LargeBattlefieldSystem !== 'undefined') {
+      const lr = LargeBattlefieldSystem.rankings();
+      html = '<div class="obs-section-head">Large Battles</div>';
+      html += lr.largeBattles.length ? lr.largeBattles.map(br =>
+        `<div class="obs-war battle-report-row" data-report-id="${br.id}">Day ${br.day} · ${br.title || br.location}<br><span class="obs-sub">${(br.summaryText || br.chronicleText || '').slice(0, 140)}</span></div>`).join('')
+        : '<p class="hint">ยังไม่มีศึกใหญ่</p>';
+      html += '<div class="obs-section-head">Formations in Field</div>';
+      html += lr.formations.map(f => `<div class="obs-row"><span>${f.formation}</span><span class="obs-sub">${f.count} หน่วย</span></div>`).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Heavy Casualty Battles</div>';
+      html += lr.heavyCasualty.map(br =>
+        `<div class="obs-war">Day ${br.day} · ${br.casualties || 0} ตาย<br><span class="obs-sub">${(br.summaryText || '').slice(0, 100)}</span></div>`).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Famous Units</div>';
+      html += lr.famousUnits.map(u => row(u.name, `W ${u.formationStats?.wins || 0} · ${u.formation}`, 'unit', u.id)).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Routed Units</div>';
+      html += lr.routedUnits.map(u => row(u.name, `morale ${fmt(u.morale)}`, 'unit', u.id)).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Cavalry Charges</div>';
+      html += lr.cavalryCharges.map(br =>
+        `<div class="obs-war">Day ${br.day}<br><span class="obs-sub">${(br.summaryText || '').slice(0, 90)}</span></div>`).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Heroic Stands</div>';
+      html += lr.heroicStands.map(br =>
+        `<div class="obs-war">Day ${br.day}<br><span class="obs-sub">${(br.summaryText || '').slice(0, 90)}</span></div>`).join('') || '<p class="hint">—</p>';
+      const lastLarge = lr.largeBattles[0];
+      if (lastLarge?.gridSnapshot) {
+        html += '<div class="obs-section-head">Battlefield Grid (ล่าสุด)</div><pre class="battle-grid">';
+        for (const row of lastLarge.gridSnapshot) html += row.join(' | ') + '\n';
+        html += '</pre>';
+      }
     } else if (tab === 'combat' && typeof TextCombatCore !== 'undefined') {
       const cr = TextCombatCore.rankings();
       html = '<div class="obs-section-head">Best Duelists</div>';
@@ -8958,6 +9914,26 @@ const UI = {
     html += this.kv('Formation', u.formation || 'loose');
     const shockRisk = typeof TextCombatCore !== 'undefined' ? TextCombatCore.computeMoraleShock(u, []) : 0;
     html += this.kv('Morale shock risk', fmt(shockRisk, 0), shockRisk > 40 ? 'bad' : '');
+    if (typeof LargeBattlefieldSystem !== 'undefined') {
+      const abf = (world.activeBattlefields || []).find(bf => Object.values(bf.unitStates || {}).some(bu => bu.originalUnitId === u.id));
+      const bu = abf ? Object.values(abf.unitStates).find(x => x.originalUnitId === u.id) : null;
+      if (bu) {
+        html += `<div class="insp-section"><h4>Battlefield (Phase 18.2)</h4>`;
+        html += this.kv('sector', `(${bu.position.x}, ${bu.position.y})`);
+        html += this.kv('order', bu.order || '—');
+        html += this.kv('engaged', bu.engagedWith?.length || 0);
+        html += this.kv('flank threat', `L${fmt(bu.flankThreat?.left || 0, 2)} R${fmt(bu.flankThreat?.right || 0, 2)}`);
+        html += this.kv('battle casualties', `${bu.size - bu.aliveCount} / ${bu.size}`);
+        html += `</div>`;
+      }
+      if (u.formationStats) {
+        html += `<div class="insp-section"><h4>Formation Stats</h4>`;
+        html += this.kv('battles', u.formationStats.battles || 0);
+        html += this.kv('wins', u.formationStats.wins || 0);
+        html += this.kv('routs', u.formationStats.routs || 0);
+        html += `</div>`;
+      }
+    }
     html += `</div>`;
     html += `<div class="insp-section"><h4>Composition (Phase 18.1)</h4>`;
     for (const [k, n] of Object.entries(roleComp)) if (n > 0) html += this.kv(k, n);
@@ -9095,13 +10071,25 @@ const UI = {
     html += `<div class="insp-section"><h4>หน่วยในสังกัด</h4>`;
     for (const u of units) html += this.kv(this.link('unit', u.id, u.name), unitMembers(u).length + ' นาย');
     html += `</div>`;
+    if (typeof LargeBattlefieldSystem !== 'undefined') {
+      const abf = (world.activeBattlefields || []).find(bf => bf.attackerArmyIds?.includes(ar.id) || bf.defenderArmyIds?.includes(ar.id));
+      const lastBr = (world.battleReports || []).filter(r => r.large).slice(-1)[0];
+      if (abf || lastBr) {
+        html += `<div class="insp-section"><h4>Large Battle (18.2)</h4>`;
+        if (abf) html += this.kv('phase', abf.phase);
+        if (lastBr) html += this.kv('last report', `Day ${lastBr.day}: ${(lastBr.summaryText || '').slice(0, 70)}...`);
+        const reserves = units.filter(u => u.formation === 'reserve').length;
+        if (reserves) html += this.kv('reserves', reserves);
+        html += `</div>`;
+      }
+    }
     return html;
   }
 };
 
 /* ── Sandbox Tools ── */
 const SandboxTools = {
-  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal']),
+  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal', 'setFormation']),
 
   activate(tool, btn) {
     // เครื่องมือกดแล้วทำทันที
@@ -9240,6 +10228,61 @@ const SandboxTools = {
           CampaignWarfareSystem.giveSiegeEquipment(ar);
           EventSystem.add('war', `🏗 [Sandbox] มอบเครื่องมือล้อมเมืองให้${ar.name}`);
         }
+      },
+      forceLargeBattle: () => {
+        if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.forceLargeBattle(150, 120);
+        else EventSystem.add('system', '✨ Large battle system unavailable');
+      },
+      createTestArmy: () => {
+        const ks = world.factions.filter(f => !f.isBandit);
+        const s = pick(world.settlements.filter(x => x.type !== 'camp'));
+        if (ks.length && typeof LargeBattlefieldSystem !== 'undefined') {
+          LargeBattlefieldSystem.createTestArmy(s.id, ks[0].id, 80, 'atk');
+          EventSystem.add('war', `⚔ [Sandbox] สร้างกองทดสอบ 80 คนที่${s.name}`);
+        }
+      },
+      spawnReinforcements: () => {
+        const u = world.units.find(x => unitMembers(x).length > 0);
+        if (!u) return;
+        const s = getSettlement(u.locationId);
+        for (let i = 0; i < 15; i++) {
+          const ag = createAgent({ locationId: s.id, factionId: u.factionId, profession: 'guard' });
+          seedSkillForProfession(ag, ag.profession);
+          u.memberIds.push(ag.id);
+          ag.unitId = u.id;
+        }
+        if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(u);
+        EventSystem.add('war', `➕ [Sandbox] เสริมกำลัง 15 คนให้${u.name}`);
+      },
+      triggerCavalryCharge: () => {
+        const u = world.units.find(x => unitMembers(x).some(m => m.profession === 'cavalry' || m.equipment?.mount));
+        if (u) { u.formation = 'charge'; EventSystem.add('war', `🐎 [Sandbox] ${u.name} สั่งชาร์จทหารม้า`); }
+      },
+      triggerRout: () => {
+        const u = world.units.find(x => unitMembers(x).length > 5);
+        if (u) { u.formation = 'rout'; u.morale = 15; EventSystem.add('war', `💥 [Sandbox] ${u.name} จำลองการแตกพ่าย`); }
+      },
+      spawnDefensiveHillBattle: () => {
+        const s = world.settlements.find(x => x.terrain === 'hill') || pick(world.settlements);
+        s.terrain = 'hill';
+        if (typeof LargeBattlefieldSystem !== 'undefined') {
+          const ks = world.factions.filter(f => !f.isBandit);
+          const atk = LargeBattlefieldSystem.createTestArmy(s.id, ks[0]?.id, 100, 'atk');
+          const def = LargeBattlefieldSystem.createTestArmy(s.id, ks[1]?.id || ks[0]?.id, 90, 'def');
+          def.formation = 'spear_line';
+          LargeBattlefieldSystem.runLargeBattle([atk], [def], { settlementId: s.id, label: s.name, terrainType: 'hill' });
+          EventSystem.add('war', `⛰ [Sandbox] ศึกป้องกันเนินที่${s.name}`);
+        }
+      },
+      startSiegeAssault: () => {
+        const s = world.settlements.find(x => x.type === 'castle' || x.type === 'fort');
+        if (!s || typeof LargeBattlefieldSystem === 'undefined') return;
+        const ks = world.factions.filter(f => !f.isBandit);
+        const atk = LargeBattlefieldSystem.createTestArmy(s.id, ks[0]?.id, 120, 'atk');
+        const def = LargeBattlefieldSystem.createTestArmy(s.id, s.factionId, 80, 'def');
+        def.formation = 'defensive';
+        LargeBattlefieldSystem.runLargeBattle([atk], [def], { settlementId: s.id, label: s.name, terrainType: 'plain', isSiege: true, siegeEquipment: { ladders: 2, ram: 1, tower: 0, ready: true } });
+        EventSystem.add('war', `🏰 [Sandbox] เริ่มการโจมตีป้อม${s.name}`);
       }
     };
 
@@ -9436,6 +10479,15 @@ const SandboxTools = {
         this.disarm();
         break;
       }
+      case 'setFormation': {
+        const u = picked?.kind === 'unit' ? getUnit(picked.id) : null;
+        if (u) {
+          u.formation = pick(LARGE_FORMATIONS);
+          EventSystem.add('war', `📐 [Sandbox] ${u.name} ตั้ง formation เป็น ${u.formation}`);
+        }
+        this.disarm();
+        break;
+      }
     }
   },
 
@@ -9449,7 +10501,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.1';
+const SAVE_SCHEMA_VERSION = '18.2';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -9633,6 +10685,8 @@ const SaveSystem = {
     w.scoutReports = w.scoutReports || [];
     w.battleReports = w.battleReports || [];
     w.legendaryWeapons = w.legendaryWeapons || [];
+    w.largeBattleRecords = w.largeBattleRecords || [];
+    w.activeBattlefields = w.activeBattlefields || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -9780,6 +10834,7 @@ const SaveSystem = {
     if (u.retreating == null) u.retreating = false;
     if (!u.composition) u.composition = defaultUnitComposition();
     if (!u.formation) u.formation = 'loose';
+    if (!u.formationStats) u.formationStats = defaultFormationStats();
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(u);
   },
 
@@ -9856,6 +10911,7 @@ const SaveSystem = {
     if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
     if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
+    if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
   },
 
   applyUiPrefs(prefs) {

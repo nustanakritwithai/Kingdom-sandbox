@@ -750,3 +750,18 @@ body { display: flex; flex-direction: column; }
 ::-webkit-scrollbar-track { background: var(--panel); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #45566b; }
+
+/* Phase 18.2: Battlefield grid viewer */
+.battle-grid {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  background: rgba(0,0,0,.25);
+  padding: 8px;
+  border-radius: 6px;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+.battle-report-row { cursor: pointer; }
+.battle-report-row:hover { background: rgba(255,255,255,.04); }
