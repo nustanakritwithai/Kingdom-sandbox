@@ -193,7 +193,7 @@ if (faction) {
 
 // Save / load roundtrip
 const payload = run(`SaveSystem.buildSavePayload('test')`);
-if (payload.schemaVersion !== '18.0') fail('schema should be 18.0');
+if (payload.schemaVersion !== '18.1') fail('schema should be 18.1');
 else ok('save schema 15.1');
 if (!payload.world.guilds) fail('guilds missing in save');
 else ok('guilds in save');
