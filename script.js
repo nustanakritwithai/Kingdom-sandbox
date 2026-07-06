@@ -72,6 +72,234 @@ function getGuild(id) { return (world.guilds || []).find(g => g.id === id); }
 function getWarehouse(id) { return (world.warehouses || []).find(w => w.id === id); }
 function getContract(id) { return (world.tradeContracts || []).find(c => c.id === id); }
 
+/* ── Phase 18.3: Organizations / Warbands ── */
+const ORG_TYPES = ['adventurer_party', 'mercenary_company', 'militia_company', 'royal_army', 'merchant_guild', 'caravan_company', 'bandit_gang', 'rebel_cell', 'noble_retinue', 'town_guard', 'bounty_hunter_lodge'];
+const WARBAND_TYPES = ['adventurer_party', 'mercenary_company', 'militia', 'royal_army', 'bandit_gang', 'caravan_guard', 'rebel_warband', 'noble_retinue', 'scout_party'];
+const OFFER_TYPES = ['open_join', 'paid_contract', 'militia_call', 'royal_conscription', 'mercenary_hire', 'caravan_guard_job', 'bounty_party', 'rebel_recruitment', 'bandit_invitation', 'noble_call_to_arms'];
+const MAX_AGENT_MEMBERSHIPS = 3;
+const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = 4;
+const ORG_HISTORY_CAP = 24;
+const WARBAND_HISTORY_CAP = 20;
+
+function getOrganization(id) { return (world.organizations || []).find(o => o.id === id); }
+function getWarband(id) { return (world.warbands || []).find(w => w.id === id); }
+function getMusterPoint(id) { return (world.musterPoints || []).find(m => m.id === id); }
+function getHeadquarters(id) { return (world.headquarters || []).find(h => h.id === id); }
+function getRecruitmentOffer(id) { return (world.recruitmentOffers || []).find(o => o.id === id); }
+
+function defaultOrgRanks() {
+  return { leader: 100, officer: 70, veteran: 50, member: 30, recruit: 10 };
+}
+
+function defaultOrgMembership(organizationId, role, rank, day, opt) {
+  opt = opt || {};
+  return {
+    organizationId, role: role || 'member', rank: rank || 'recruit',
+    joinedDay: day || (world ? world.day : 0),
+    status: opt.status || 'active',
+    loyalty: opt.loyalty != null ? opt.loyalty : 55,
+    trust: opt.trust != null ? opt.trust : 50,
+    contribution: opt.contribution || 0,
+    payShare: opt.payShare || 0,
+    foodShare: opt.foodShare || 0,
+    reputationInGroup: opt.reputationInGroup || 0,
+    reasonJoined: opt.reasonJoined || 'opportunity',
+    contractUntilDay: opt.contractUntilDay || null,
+    lastPaidDay: opt.lastPaidDay || null,
+    lastFedDay: opt.lastFedDay || null
+  };
+}
+
+function defaultOrganization(opt) {
+  opt = opt || {};
+  return {
+    id: opt.id || uid(),
+    name: opt.name || 'กลุ่มไม่มีชื่อ',
+    type: opt.type || 'adventurer_party',
+    founderId: opt.founderId || null,
+    leaderId: opt.leaderId || null,
+    factionId: opt.factionId || null,
+    homeSettlementId: opt.homeSettlementId || null,
+    headquartersId: opt.headquartersId || null,
+    createdDay: opt.createdDay != null ? opt.createdDay : (world ? world.day : 0),
+    status: opt.status || 'active',
+    reputation: opt.reputation != null ? opt.reputation : 40,
+    wealth: opt.wealth != null ? opt.wealth : 0,
+    foodReserve: opt.foodReserve != null ? opt.foodReserve : 0,
+    equipmentReserve: opt.equipmentReserve != null ? opt.equipmentReserve : 0,
+    influence: opt.influence != null ? opt.influence : 0,
+    purpose: opt.purpose || 'survive',
+    recruitmentPolicy: opt.recruitmentPolicy || { open: true, minSkill: 0, payRate: 1, riskTolerance: 0.5 },
+    memberIds: (opt.memberIds || []).slice(),
+    ranks: opt.ranks || defaultOrgRanks(),
+    roles: opt.roles || {},
+    activeWarbandIds: (opt.activeWarbandIds || []).slice(),
+    activeContractIds: (opt.activeContractIds || []).slice(),
+    history: (opt.history || []).slice(0, ORG_HISTORY_CAP),
+    relations: opt.relations || {},
+    requirements: opt.requirements || {},
+    benefits: opt.benefits || {},
+    rules: opt.rules || {},
+    _legacyGuildId: opt._legacyGuildId || null
+  };
+}
+
+function createOrganization(opt) {
+  if (!world.organizations) world.organizations = [];
+  const o = defaultOrganization(opt);
+  world.organizations.push(o);
+  return o;
+}
+
+function defaultWarband(opt) {
+  opt = opt || {};
+  return {
+    id: opt.id || uid(),
+    organizationId: opt.organizationId || null,
+    factionId: opt.factionId || null,
+    leaderId: opt.leaderId || null,
+    memberIds: (opt.memberIds || []).slice(),
+    unitIds: (opt.unitIds || []).slice(),
+    name: opt.name || 'กองเล็ก',
+    type: opt.type || 'adventurer_party',
+    size: 0,
+    composition: opt.composition || defaultUnitComposition(),
+    locationId: opt.locationId || null,
+    currentRouteId: opt.currentRouteId != null ? opt.currentRouteId : null,
+    routePath: (opt.routePath || []).slice(),
+    progress: opt.progress != null ? opt.progress : 0,
+    destinationId: opt.destinationId || null,
+    objective: opt.objective || { type: 'idle' },
+    speed: opt.speed != null ? opt.speed : 1,
+    visibility: opt.visibility != null ? opt.visibility : 0.6,
+    stealth: opt.stealth != null ? opt.stealth : 0.2,
+    morale: opt.morale != null ? opt.morale : 65,
+    cohesion: opt.cohesion != null ? opt.cohesion : 70,
+    fatigue: opt.fatigue != null ? opt.fatigue : 0,
+    food: opt.food != null ? opt.food : 10,
+    gold: opt.gold != null ? opt.gold : 0,
+    supplyDays: opt.supplyDays != null ? opt.supplyDays : 0,
+    woundedCount: opt.woundedCount || 0,
+    prisonerCount: opt.prisonerCount || 0,
+    threat: opt.threat != null ? opt.threat : 0.3,
+    status: opt.status || 'mustering',
+    lastKnownLocation: opt.lastKnownLocation || opt.locationId || null,
+    lastSeenDay: opt.lastSeenDay != null ? opt.lastSeenDay : (world ? world.day : 0),
+    intelConfidence: opt.intelConfidence != null ? opt.intelConfidence : 1,
+    history: (opt.history || []).slice(0, WARBAND_HISTORY_CAP),
+    travel: null,
+    pursueTargetId: opt.pursueTargetId || null,
+    _campDays: opt._campDays || 0
+  };
+}
+
+function createWarband(opt) {
+  if (!world.warbands) world.warbands = [];
+  const wb = defaultWarband(opt);
+  wb.size = warbandMembers(wb).length;
+  world.warbands.push(wb);
+  const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+  if (org && !org.activeWarbandIds.includes(wb.id)) org.activeWarbandIds.push(wb.id);
+  return wb;
+}
+
+function warbandMembers(wb) {
+  if (!wb || !wb.memberIds) return [];
+  return wb.memberIds.map(getAgent).filter(a => a && a.alive);
+}
+
+function agentActiveMemberships(a) {
+  if (!a || !a.memberships) return [];
+  return a.memberships.filter(m => ['active', 'probation', 'traveling_to_muster', 'wounded'].includes(m.status));
+}
+
+function agentMilitaryMembership(a) {
+  const militaryTypes = new Set(['mercenary_company', 'militia_company', 'royal_army', 'bandit_gang', 'rebel_cell', 'town_guard', 'noble_retinue', 'bounty_hunter_lodge']);
+  return agentActiveMemberships(a).find(m => {
+    const org = getOrganization(m.organizationId);
+    return org && militaryTypes.has(org.type);
+  });
+}
+
+function defaultHeadquarters(opt) {
+  opt = opt || {};
+  return {
+    id: opt.id || uid(),
+    organizationId: opt.organizationId,
+    settlementId: opt.settlementId,
+    type: opt.type || 'camp',
+    storage: Object.assign({ food: 0, gold: 0, weapons: 0 }, opt.storage || {}),
+    beds: opt.beds != null ? opt.beds : 10,
+    trainingLevel: opt.trainingLevel != null ? opt.trainingLevel : 0,
+    recruitmentBonus: opt.recruitmentBonus != null ? opt.recruitmentBonus : 0,
+    security: opt.security != null ? opt.security : 40,
+    upkeepCost: opt.upkeepCost != null ? opt.upkeepCost : 2
+  };
+}
+
+function createHeadquarters(opt) {
+  if (!world.headquarters) world.headquarters = [];
+  const hq = defaultHeadquarters(opt);
+  world.headquarters.push(hq);
+  const org = getOrganization(hq.organizationId);
+  if (org) org.headquartersId = hq.id;
+  return hq;
+}
+
+function defaultRecruitmentOffer(opt) {
+  opt = opt || {};
+  return {
+    id: opt.id || uid(),
+    organizationId: opt.organizationId,
+    issuerId: opt.issuerId || null,
+    settlementId: opt.settlementId,
+    musterPointId: opt.musterPointId || null,
+    type: opt.type || 'open_join',
+    roleNeeded: opt.roleNeeded || 'soldier',
+    quantityNeeded: opt.quantityNeeded != null ? opt.quantityNeeded : 5,
+    requirements: opt.requirements || {},
+    rewards: opt.rewards || { pay: 10, food: 5 },
+    riskLevel: opt.riskLevel != null ? opt.riskLevel : 0.4,
+    duration: opt.duration != null ? opt.duration : 14,
+    postedDay: opt.postedDay != null ? opt.postedDay : (world ? world.day : 0),
+    expiresDay: opt.expiresDay != null ? opt.expiresDay : ((world ? world.day : 0) + (opt.duration || 14)),
+    status: opt.status || 'open',
+    applicants: (opt.applicants || []).slice(),
+    acceptedAgentIds: (opt.acceptedAgentIds || []).slice()
+  };
+}
+
+function createRecruitmentOffer(opt) {
+  if (!world.recruitmentOffers) world.recruitmentOffers = [];
+  const offer = defaultRecruitmentOffer(opt);
+  world.recruitmentOffers.push(offer);
+  return offer;
+}
+
+function defaultMusterPoint(opt) {
+  opt = opt || {};
+  return {
+    id: opt.id || uid(),
+    organizationId: opt.organizationId,
+    settlementId: opt.settlementId,
+    locationId: opt.locationId || opt.settlementId,
+    targetDay: opt.targetDay != null ? opt.targetDay : ((world ? world.day : 0) + 7),
+    expectedAgentIds: (opt.expectedAgentIds || []).slice(),
+    arrivedAgentIds: (opt.arrivedAgentIds || []).slice(),
+    missingAgentIds: (opt.missingAgentIds || []).slice(),
+    foodRequired: opt.foodRequired != null ? opt.foodRequired : 20,
+    equipmentRequired: opt.equipmentRequired != null ? opt.equipmentRequired : 5,
+    status: opt.status || 'pending'
+  };
+}
+
+function createMusterPoint(opt) {
+  if (!world.musterPoints) world.musterPoints = [];
+  const mp = defaultMusterPoint(opt);
+  world.musterPoints.push(mp);
+  return mp;
+}
+
 /* ── Phase 17: Agent memory / relationships / motives ── */
 const MAX_AGENT_RELATIONS = 20;
 const MAX_MAJOR_EVENTS = 40;
@@ -80,9 +308,9 @@ const MAX_SCOUT_REPORTS = 80;
 const WAR_GOAL_TYPES = ['capture_settlement', 'defend_border', 'cut_trade_route', 'break_vassal', 'punish_rebels', 'secure_market_hub', 'destroy_bandit_camp', 'force_tribute'];
 const TERRAIN_TYPES = ['plain', 'forest', 'hill', 'river', 'road', 'marsh'];
 
-function defaultPersonalMemory(birthplaceId) {
+function defaultPersonalMemory(birthplaceId, bornDay) {
   return {
-    bornDay: world.day,
+    bornDay: bornDay != null ? bornDay : (world ? world.day : 0),
     birthplaceId: birthplaceId || null,
     majorEvents: [],
     trauma: [],
@@ -877,7 +1105,8 @@ function createAgent(opt) {
     body: opt.body || null,
     derivedCombat: null,
     injuries: opt.injuries || [],
-    duelRecord: opt.duelRecord || { wins: 0, losses: 0, kills: 0 }
+    duelRecord: opt.duelRecord || { wins: 0, losses: 0, kills: 0 },
+    memberships: opt.memberships ? opt.memberships.slice() : []
   };
   world.agents.push(a);
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.ensureAgent(a);
@@ -972,6 +1201,7 @@ function generateWorld() {
     chronicle: [], wars: [], eras: [],
     treaties: [], vassalContracts: [],
     guilds: [], warehouses: [], tradeContracts: [],
+    organizations: [], recruitmentOffers: [], musterPoints: [], warbands: [], headquarters: [],
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
@@ -1144,6 +1374,7 @@ function generateWorld() {
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
   if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
+  if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -2852,6 +3083,870 @@ const LargeBattlefieldSystem = {
       cavalryCharges: charges.slice(-5).reverse(),
       heroicStands: heroic.slice(-5).reverse()
     };
+  }
+};
+
+/* ═══════════ Phase 18.3: Real Bot Organizations + Warband Movement ═══════════ */
+
+const OrganizationSystem = {
+  initWorld() {
+    if (!world.organizations) world.organizations = [];
+    if (!world.recruitmentOffers) world.recruitmentOffers = [];
+    if (!world.musterPoints) world.musterPoints = [];
+    if (!world.warbands) world.warbands = [];
+    if (!world.headquarters) world.headquarters = [];
+    this.migrateLegacyGuilds();
+    this.pruneAll();
+    for (const a of world.agents) {
+      if (!a.memberships) a.memberships = [];
+    }
+    WarbandSystem.initWorld();
+  },
+
+  migrateLegacyGuilds() {
+    for (const g of (world.guilds || [])) {
+      if (world.organizations.some(o => o._legacyGuildId === g.id)) continue;
+      const org = createOrganization({
+        name: g.name,
+        type: 'merchant_guild',
+        founderId: g.members[0] || null,
+        leaderId: g.members[0] || null,
+        factionId: g.factionId,
+        homeSettlementId: g.homeSettlementId,
+        createdDay: g.foundedDay || world.day,
+        reputation: g.reputation || 50,
+        wealth: g.wealth || 0,
+        influence: g.influence || 10,
+        purpose: 'trade',
+        memberIds: g.members.filter(id => { const a = getAgent(id); return a && a.alive; }).slice(),
+        _legacyGuildId: g.id
+      });
+      createHeadquarters({
+        organizationId: org.id,
+        settlementId: g.homeSettlementId,
+        type: 'guild_hall',
+        storage: { food: 20, gold: g.wealth * 0.2, weapons: 0 },
+        beds: 8,
+        recruitmentBonus: 0.15,
+        security: 50,
+        upkeepCost: 3
+      });
+      for (const mid of org.memberIds) {
+        const a = getAgent(mid);
+        if (!a) continue;
+        if (!a.memberships) a.memberships = [];
+        if (!a.memberships.some(m => m.organizationId === org.id)) {
+          a.memberships.push(defaultOrgMembership(org.id, 'merchant', 'member', org.createdDay, { status: 'active', loyalty: 60 }));
+        }
+      }
+    }
+  },
+
+  pruneAll() {
+    for (const org of world.organizations) {
+      org.memberIds = org.memberIds.filter(id => {
+        const a = getAgent(id);
+        if (!a || !a.alive) return false;
+        const mem = (a.memberships || []).find(m => m.organizationId === org.id && ['active', 'probation', 'wounded'].includes(m.status));
+        return !!mem;
+      });
+      org.activeWarbandIds = org.activeWarbandIds.filter(wid => {
+        const wb = getWarband(wid);
+        return wb && wb.status !== 'disbanding' && warbandMembers(wb).length > 0;
+      });
+      if (org.history.length > ORG_HISTORY_CAP) org.history = org.history.slice(-ORG_HISTORY_CAP);
+    }
+    for (const wb of world.warbands) WarbandSystem.syncWarbandSize(wb);
+    world.warbands = world.warbands.filter(wb => wb.status !== 'disbanding' || warbandMembers(wb).length > 0);
+    world.recruitmentOffers = world.recruitmentOffers.filter(o => o.status !== 'expired' && o.status !== 'cancelled');
+  },
+
+  orgLog(org, text) {
+    org.history.push({ day: world.day, text });
+    if (org.history.length > ORG_HISTORY_CAP) org.history.shift();
+  },
+
+  activeMembers(org) {
+    return org.memberIds.map(getAgent).filter(a => a && a.alive);
+  },
+
+  evaluateJoinOffer(agent, offer) {
+    if (!agent || !agent.alive || !offer || offer.status !== 'open') return -999;
+    const org = getOrganization(offer.organizationId);
+    if (!org) return -999;
+    if (agentActiveMemberships(agent).length >= MAX_AGENT_MEMBERSHIPS) return -999;
+    const mil = agentMilitaryMembership(agent);
+    if (mil && ['royal_army', 'mercenary_company', 'militia_company', 'bandit_gang'].includes(org.type)) return -999;
+    const leader = getAgent(org.leaderId);
+    const s = getSettlement(offer.settlementId);
+    const rewards = offer.rewards || {};
+    let needForIncome = agent.stats.hunger < 45 || agent.money < 20 ? 25 : agent.money < 60 ? 12 : 0;
+    let safetyNeed = agent.stats.morale < 40 || (s && s.unrest > 50) ? 15 : 0;
+    let careerFit = 0;
+    if (offer.roleNeeded === 'soldier' && MILITARY_PROFS.has(agent.profession)) careerFit += 20;
+    if (offer.roleNeeded === 'trader' && agent.profession === 'trader') careerFit += 25;
+    if (offer.type === 'caravan_guard_job' && agent.profession === 'guard') careerFit += 18;
+    let relationshipToLeader = 0;
+    if (leader && typeof AgentMemorySystem !== 'undefined') {
+      const rel = getAgentRelation(agent, leader.id);
+      if (rel) relationshipToLeader += rel.loyalty * 0.2 + rel.trust * 0.1 - rel.grudge * 0.15;
+    }
+    let motiveAlignment = 0;
+    if (agent.motives) {
+      if (org.type === 'bandit_gang') motiveAlignment += agent.motives.wealth * 0.2 + agent.motives.revenge * 0.1;
+      if (org.type === 'merchant_guild') motiveAlignment += agent.motives.trade * 0.25;
+      if (org.type === 'militia_company' || org.type === 'town_guard') motiveAlignment += agent.motives.safety * 0.2 + agent.motives.duty * 0.15;
+    }
+    const rewardValue = (rewards.pay || 0) * 0.4 + (rewards.food || 0) * 0.3;
+    let prestige = org.reputation * 0.1;
+    let friendsAlreadyJoined = 0;
+    for (const mid of offer.acceptedAgentIds) {
+      const rel = getAgentRelation(agent, mid);
+      if (rel && rel.trust > 40) friendsAlreadyJoined += 8;
+    }
+    let sharedEnemy = 0;
+    if (org.factionId && agent.factionId && org.factionId !== agent.factionId) sharedEnemy -= 20;
+    const riskFear = (offer.riskLevel || 0.3) * (1 - (agent.traits?.riskTolerance || 0.5)) * 40;
+    let distanceCost = 0;
+    if (offer.musterPointId) {
+      const mp = getMusterPoint(offer.musterPointId);
+      if (mp && agent.locationId !== mp.locationId) {
+        const path = findPath(agent.locationId, mp.locationId, true, agent);
+        distanceCost = path ? Math.min(30, path.length * 4) : 50;
+      }
+    }
+    let currentJobValue = agent.unitId ? 25 : agent.guildId ? 15 : agent.profession === 'king' ? 80 : 0;
+    let loyaltyConflict = 0;
+    if (mil && mil.organizationId !== org.id) loyaltyConflict = 30;
+    let traumaPenalty = 0;
+    if (agent.memory?.personal?.trauma?.length && offer.type === 'bounty_party') traumaPenalty = 10;
+    if (agent.memory?.personal?.grudges?.some(g => g.targetId === org.leaderId)) traumaPenalty += 15;
+  if (offer.type === 'bandit_invitation' && agent.profession === 'guard') traumaPenalty += 20;
+    const joinScore = needForIncome + safetyNeed + careerFit + relationshipToLeader + motiveAlignment +
+      rewardValue + prestige + friendsAlreadyJoined + sharedEnemy - riskFear - distanceCost - currentJobValue - loyaltyConflict - traumaPenalty;
+    return joinScore;
+  },
+
+  postRecruitmentOffer(org, opt) {
+    const sid = opt.settlementId || org.homeSettlementId;
+    if (!sid) return null;
+    const activeHere = world.recruitmentOffers.filter(o => o.settlementId === sid && o.status === 'open').length;
+    if (activeHere >= MAX_ACTIVE_OFFERS_PER_SETTLEMENT) return null;
+    const mp = createMusterPoint({
+      organizationId: org.id,
+      settlementId: sid,
+      locationId: sid,
+      targetDay: world.day + (opt.musterDays || 7),
+      foodRequired: (opt.quantityNeeded || 5) * 4,
+      equipmentRequired: Math.ceil((opt.quantityNeeded || 5) * 0.3)
+    });
+    const offer = createRecruitmentOffer({
+      organizationId: org.id,
+      issuerId: org.leaderId,
+      settlementId: sid,
+      musterPointId: mp.id,
+      type: opt.type || 'open_join',
+      roleNeeded: opt.roleNeeded || 'soldier',
+      quantityNeeded: opt.quantityNeeded || 5,
+      requirements: opt.requirements || {},
+      rewards: opt.rewards || { pay: 12, food: 6 },
+      riskLevel: opt.riskLevel != null ? opt.riskLevel : 0.35,
+      duration: opt.duration || 14,
+      expiresDay: world.day + (opt.duration || 14)
+    });
+    this.orgLog(org, `📢 ประกาศรับสมัคร ${offer.roleNeeded} ที่${getSettlement(sid)?.name || sid}`);
+    return offer;
+  },
+
+  acceptApplicant(offer, agentId) {
+    const agent = getAgent(agentId);
+    if (!agent || !agent.alive || !offer || offer.status !== 'open') return false;
+    if (offer.acceptedAgentIds.includes(agentId)) return true;
+    if (offer.acceptedAgentIds.length >= offer.quantityNeeded) return false;
+    const org = getOrganization(offer.organizationId);
+    if (!org) return false;
+    offer.acceptedAgentIds.push(agentId);
+    if (!agent.memberships) agent.memberships = [];
+    agent.memberships.push(defaultOrgMembership(org.id, offer.roleNeeded, 'recruit', world.day, {
+      status: 'traveling_to_muster',
+      reasonJoined: offer.type,
+      loyalty: 45 + randInt(0, 15)
+    }));
+    const mp = getMusterPoint(offer.musterPointId);
+    if (mp && !mp.expectedAgentIds.includes(agentId)) mp.expectedAgentIds.push(agentId);
+    if (agent.locationId !== mp.locationId) {
+      startTravel(agent, mp.locationId, 'muster');
+    } else {
+      this.arriveAtMuster(agent, mp, org, offer);
+    }
+    return true;
+  },
+
+  arriveAtMuster(agent, mp, org, offer) {
+    if (!mp.arrivedAgentIds.includes(agent.id)) mp.arrivedAgentIds.push(agent.id);
+    mp.missingAgentIds = mp.missingAgentIds.filter(id => id !== agent.id);
+    const mem = (agent.memberships || []).find(m => m.organizationId === org.id);
+    if (mem) mem.status = 'active';
+    if (!org.memberIds.includes(agent.id)) org.memberIds.push(agent.id);
+    agent.unitId = null;
+    if (offer && mp.arrivedAgentIds.length >= Math.max(2, Math.floor(offer.quantityNeeded * 0.5))) {
+      this.completeMuster(mp, org, offer);
+    }
+  },
+
+  completeMuster(mp, org, offer) {
+    mp.status = 'complete';
+    if (offer) offer.status = 'filled';
+    const members = mp.arrivedAgentIds.map(getAgent).filter(a => a && a.alive);
+    if (!members.length) return null;
+    const leader = members.reduce((best, a) => (a.skills.leadership + a.skills.tactics) > (best.skills.leadership + best.skills.tactics) ? a : best, members[0]);
+    org.leaderId = org.leaderId || leader.id;
+    const wbType = WarbandSystem.orgTypeToWarband(org.type);
+    const wb = WarbandSystem.createFromMembers(org, members.map(a => a.id), {
+      name: `${org.name} — กอง ${mp.id % 100}`,
+      type: wbType,
+      locationId: mp.locationId,
+      status: 'mustering',
+      objective: offer?.type === 'royal_conscription' ? { type: 'join_campaign' } : { type: 'patrol_route', settlementId: mp.settlementId }
+    });
+    this.orgLog(org, `⚔ รวมพล ${members.length} นาย ที่${getSettlement(mp.settlementId)?.name || ''}`);
+    Chronicle.add({ category: 'military', title: `กอง ${wb.name} รวมพลสำเร็จ`, description: `${org.name} รวม ${members.length} นาย`, importance: 3 });
+    EventSystem.add('military', `👥 ${org.name} รวมพล ${members.length} นาย → ${wb.name}`);
+    if (members.length >= 8) ObserverSystem?.onMajorEvent?.('army_mustered', `${org.name} รวมพล ${members.length} นาย`);
+    return wb;
+  },
+
+  tickRecruitment() {
+    if (world.day % 5 !== 0) return;
+    for (const offer of world.recruitmentOffers) {
+      if (offer.status !== 'open') continue;
+      if (world.day > offer.expiresDay) { offer.status = 'expired'; continue; }
+      const agents = agentsAt(offer.settlementId).filter(a => a.alive && !a.unitId && !a.travel);
+      const candidates = agents.sort((a, b) => this.evaluateJoinOffer(b, offer) - this.evaluateJoinOffer(a, offer)).slice(0, 8);
+      for (const a of candidates) {
+        const score = this.evaluateJoinOffer(a, offer);
+        if (score < 12) continue;
+        if (chance(clamp(score / 80, 0.05, 0.65))) this.acceptApplicant(offer, a.id);
+        if (offer.acceptedAgentIds.length >= offer.quantityNeeded) break;
+      }
+    }
+  },
+
+  tickTravelingMembers() {
+    for (const offer of world.recruitmentOffers) {
+      if (!offer.musterPointId) continue;
+      const mp = getMusterPoint(offer.musterPointId);
+      if (!mp || mp.status === 'complete') continue;
+      for (const aid of offer.acceptedAgentIds) {
+        const a = getAgent(aid);
+        if (!a || !a.alive) continue;
+        const mem = (a.memberships || []).find(m => m.organizationId === offer.organizationId);
+        if (!mem || mem.status !== 'traveling_to_muster') continue;
+        if (a.travel) {
+          const arrived = advanceTravel(a, agentSpeed(a));
+          if (arrived && a.locationId === mp.locationId) {
+            this.arriveAtMuster(a, mp, getOrganization(offer.organizationId), offer);
+          }
+        } else if (a.locationId === mp.locationId) {
+          this.arriveAtMuster(a, mp, getOrganization(offer.organizationId), offer);
+        } else if (!startTravel(a, mp.locationId, 'muster')) {
+          mem.status = 'expelled';
+          mp.missingAgentIds.push(a.id);
+        }
+      }
+      if (world.day >= mp.targetDay && mp.status === 'pending') {
+        const org = getOrganization(mp.organizationId);
+        const offer2 = world.recruitmentOffers.find(o => o.musterPointId === mp.id);
+        if (mp.arrivedAgentIds.length >= 2) this.completeMuster(mp, org, offer2);
+        else if (mp.arrivedAgentIds.length === 0) {
+          mp.status = 'failed';
+          if (offer2) offer2.status = 'failed';
+          if (org) {
+            this.orgLog(org, '❌ รวมพลล้มเหลว — ไม่มีคนมา');
+            EventSystem.add('military', `📭 ${org.name} รวมพลล้มเหลว — ไม่มีคนมา`);
+            Chronicle.add({ category: 'war', title: 'การรวมพลล้มเหลว', description: `${org.name} ไม่มีคนมาตามนัด`, importance: 3 });
+          }
+        } else {
+          mp.targetDay = world.day + 5;
+        }
+      }
+    }
+  },
+
+  tickLoyalty() {
+    if (world.day % 7 !== 0) return;
+    for (const org of world.organizations) {
+      for (const aid of org.memberIds) {
+        const a = getAgent(aid);
+        if (!a || !a.alive) continue;
+        const mem = (a.memberships || []).find(m => m.organizationId === org.id && m.status === 'active');
+        if (!mem) continue;
+        const leader = getAgent(org.leaderId);
+        let loyalty = mem.loyalty || 50;
+        const paidRecently = mem.lastPaidDay != null && world.day - mem.lastPaidDay < 14;
+        const fedRecently = mem.lastFedDay != null && world.day - mem.lastFedDay < 3;
+        loyalty += paidRecently ? 3 : -4;
+        loyalty += fedRecently ? 2 : -6;
+        loyalty += leader ? (getAgentRelation(a, leader.id)?.trust || 0) * 0.05 : -5;
+        loyalty -= a.stats.hunger < 35 ? 8 : 0;
+        loyalty -= a.stats.morale < 30 ? 5 : 0;
+        mem.loyalty = clamp(loyalty, 0, 100);
+        if (mem.loyalty < 15 && chance(0.25)) this.desertMember(a, org, mem);
+        else if (mem.loyalty < 8 && chance(0.15)) this.mutinyCheck(org, a, mem);
+      }
+    }
+  },
+
+  desertMember(agent, org, mem) {
+    if (!mem) {
+      const m = (agent.memberships || []).find(x => x.organizationId === org.id);
+      if (!m) return;
+      mem = m;
+    }
+    mem.status = 'deserted';
+    org.memberIds = org.memberIds.filter(id => id !== agent.id);
+    this.orgLog(org, `🏃 ${agent.name} หนีจากกลุ่ม`);
+    EventSystem.add('military', `🏃 ${agent.name} หนีจาก ${org.name}`);
+    for (const wb of world.warbands.filter(w => w.organizationId === org.id)) {
+      wb.memberIds = wb.memberIds.filter(id => id !== agent.id);
+      WarbandSystem.syncWarbandSize(wb);
+    }
+  },
+
+  mutinyCheck(org, agent, mem) {
+    const supporters = org.memberIds.map(getAgent).filter(a => a && a.alive && a.id !== agent.id)
+      .filter(a => {
+        const m = (a.memberships || []).find(x => x.organizationId === org.id);
+        return m && m.loyalty < 25;
+      });
+    if (supporters.length < 2) return;
+    this.orgLog(org, `💥 กบฏ! ${agent.name} นำผู้ติดตามปลุกปั่น`);
+    Chronicle.add({ category: 'military', title: `กบฏใน ${org.name}`, description: `${agent.name} และผู้ติดตามไม่พอใจผู้นำ`, importance: 3 });
+    EventSystem.add('war', `💥 กบฏใน ${org.name}!`);
+    if (chance(0.4)) this.splitGroup(org, agent.id);
+  },
+
+  splitGroup(parentOrg, newLeaderId) {
+    const newLeader = getAgent(newLeaderId);
+    if (!newLeader || !newLeader.alive) return null;
+    const followers = parentOrg.memberIds.map(getAgent).filter(a => {
+      if (!a || !a.alive || a.id === newLeaderId) return false;
+      const rel = getAgentRelation(a, newLeaderId);
+      return rel && (rel.loyalty + rel.trust) > 50;
+    }).slice(0, Math.max(2, Math.floor(parentOrg.memberIds.length * 0.35)));
+    const fids = [newLeaderId, ...followers.map(a => a.id)];
+    const child = createOrganization({
+      name: `${parentOrg.name} (แตกกลุ่ม)`,
+      type: parentOrg.type === 'royal_army' ? 'mercenary_company' : parentOrg.type,
+      founderId: newLeaderId,
+      leaderId: newLeaderId,
+      factionId: parentOrg.factionId,
+      homeSettlementId: parentOrg.homeSettlementId,
+      memberIds: [],
+      purpose: 'split'
+    });
+    for (const id of fids) {
+      parentOrg.memberIds = parentOrg.memberIds.filter(x => x !== id);
+      if (!child.memberIds.includes(id)) child.memberIds.push(id);
+      const a = getAgent(id);
+      if (a) {
+        const old = (a.memberships || []).find(m => m.organizationId === parentOrg.id);
+        if (old) old.status = 'expelled';
+        a.memberships.push(defaultOrgMembership(child.id, 'member', id === newLeaderId ? 'leader' : 'member', world.day, { status: 'active', loyalty: 40 }));
+      }
+    }
+    WarbandSystem.createFromMembers(child, fids, { locationId: newLeader.locationId, status: 'mustering' });
+    this.orgLog(parentOrg, `⚡ แตกกลุ่ม — ${newLeader.name} แยก ${fids.length} คน`);
+    this.orgLog(child, `🆕 ก่อตั้งจากการแตกกลุ่มของ ${parentOrg.name}`);
+    Chronicle.add({ category: 'military', title: `กลุ่มแตก: ${child.name}`, description: `แยกจาก ${parentOrg.name}`, importance: 3 });
+    return child;
+  },
+
+  raiseCallToArms(f, ruler, target) {
+    let org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
+    if (!org) {
+      org = createOrganization({
+        name: `กองทัพหลวง${f.name}`,
+        type: 'royal_army',
+        founderId: ruler.id,
+        leaderId: ruler.id,
+        factionId: f.id,
+        homeSettlementId: world.settlements.find(s => s.factionId === f.id && (s.type === 'castle' || s.type === 'town'))?.id,
+        purpose: 'war',
+        reputation: 60,
+        wealth: Math.min(f.treasury * 0.2, 300)
+      });
+      this.orgLog(org, `📯 จัดตั้งกองทัพหลวง`);
+      Chronicle.add({ category: 'military', title: `จัดตั้งกองทัพหลวง ${f.name}`, description: `ประกาศระดมพล`, importance: 3 });
+    }
+    const capital = world.settlements.find(s => s.factionId === f.id && (s.type === 'castle' || s.type === 'town'));
+    if (!capital) return null;
+    const existing = world.recruitmentOffers.find(o => o.organizationId === org.id && o.status === 'open' && o.type === 'royal_conscription');
+    if (existing) return existing;
+    return this.postRecruitmentOffer(org, {
+      settlementId: capital.id,
+      type: 'royal_conscription',
+      roleNeeded: 'soldier',
+      quantityNeeded: randInt(8, 18),
+      rewards: { pay: 15, food: 8 },
+      riskLevel: 0.55,
+      duration: 12,
+      musterDays: 8
+    });
+  },
+
+  tryAutoFound() {
+    if (world.day % 15 !== 0) return;
+    if (world.organizations.length > 40) return;
+    for (const s of marketSettlements()) {
+      if (chance(0.04) && s.unrest > 55) {
+        const rebels = agentsAt(s.id).filter(a => a.alive && !a.unitId && a.stats.morale < 45 && !agentMilitaryMembership(a));
+        if (rebels.length >= 3) {
+          const leader = rebels.reduce((m, a) => a.skills.leadership > m.skills.leadership ? a : m, rebels[0]);
+          const org = createOrganization({ name: `กบฏ${s.name}`, type: 'rebel_cell', leaderId: leader.id, founderId: leader.id, homeSettlementId: s.id, memberIds: [], purpose: 'rebellion' });
+          this.postRecruitmentOffer(org, { settlementId: s.id, type: 'rebel_recruitment', quantityNeeded: 6, riskLevel: 0.6 });
+        }
+      }
+      if (chance(0.03)) {
+        const bandits = agentsAt(s.id).filter(a => a.alive && (a.profession === 'bandit' || a.wantedLevel > 2) && !agentMilitaryMembership(a));
+        if (bandits.length >= 2) {
+          const leader = bandits[0];
+          const org = createOrganization({ name: `โจรแถว${s.name}`, type: 'bandit_gang', leaderId: leader.id, founderId: leader.id, homeSettlementId: s.id, factionId: world.factions.find(f => f.isBandit)?.id, memberIds: [], purpose: 'raid' });
+          this.postRecruitmentOffer(org, { settlementId: s.id, type: 'bandit_invitation', quantityNeeded: 5, riskLevel: 0.7, rewards: { pay: 5, food: 10 } });
+        }
+      }
+      const unemployed = agentsAt(s.id).filter(a => a.alive && a.profession === 'unemployed' && a.money < 30 && !agentMilitaryMembership(a));
+      if (chance(0.025) && unemployed.length >= 4) {
+        const leader = unemployed.reduce((m, a) => a.skills.leadership > m.skills.leadership ? a : m, unemployed[0]);
+        const org = createOrganization({ name: `ทหารรับจ้าง${s.name}`, type: 'mercenary_company', leaderId: leader.id, founderId: leader.id, homeSettlementId: s.id, memberIds: [], purpose: 'contract' });
+        this.postRecruitmentOffer(org, { settlementId: s.id, type: 'mercenary_hire', quantityNeeded: 6, rewards: { pay: 20, food: 6 } });
+      }
+    }
+  },
+
+  tickDaily() {
+    this.tickTravelingMembers();
+    this.tickRecruitment();
+    this.tickLoyalty();
+    this.tryAutoFound();
+    this.pruneAll();
+    if (world.day % 20 === 0) this.capOrganizations();
+  },
+
+  capOrganizations() {
+    if (world.organizations.length <= 50) return;
+    const weak = world.organizations.filter(o => this.activeMembers(o).length < 2).sort((a, b) => a.reputation - b.reputation);
+    for (const o of weak.slice(0, 5)) { o.status = 'disbanded'; this.orgLog(o, 'ยุบกลุ่ม — สมาชิกไม่พอ'); }
+  },
+
+  rankings() {
+    return {
+      organizations: world.organizations.filter(o => o.status === 'active').sort((a, b) => b.reputation - a.reputation).slice(0, 15),
+      offers: world.recruitmentOffers.filter(o => o.status === 'open').slice(0, 12),
+      warbands: world.warbands.filter(w => warbandMembers(w).length > 0).sort((a, b) => warbandMembers(b).length - warbandMembers(a).length).slice(0, 15),
+      mercenaries: world.organizations.filter(o => o.type === 'mercenary_company' && o.status === 'active').slice(0, 8),
+      bandits: world.organizations.filter(o => o.type === 'bandit_gang' && o.status === 'active').slice(0, 8)
+    };
+  }
+};
+
+const WarbandSystem = {
+  initWorld() {
+    for (const wb of world.warbands) this.syncWarbandSize(wb);
+    this.cleanupOrphans();
+  },
+
+  cleanupOrphans() {
+    for (const wb of world.warbands) {
+      const members = warbandMembers(wb);
+      if (!members.length) { wb.status = 'disbanding'; continue; }
+      const leader = getAgent(wb.leaderId);
+      if (!leader || !leader.alive || !wb.memberIds.includes(leader.id)) {
+        const best = members.reduce((m, a) => (a.skills.leadership + a.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? a : m, members[0]);
+        wb.leaderId = best.id;
+      }
+    }
+    world.warbands = world.warbands.filter(wb => wb.status !== 'disbanding' || warbandMembers(wb).length > 0);
+  },
+
+  orgTypeToWarband(type) {
+    const map = {
+      adventurer_party: 'adventurer_party', mercenary_company: 'mercenary_company', militia_company: 'militia',
+      royal_army: 'royal_army', merchant_guild: 'caravan_guard', caravan_company: 'caravan_guard',
+      bandit_gang: 'bandit_gang', rebel_cell: 'rebel_warband', noble_retinue: 'noble_retinue',
+      town_guard: 'militia', bounty_hunter_lodge: 'scout_party'
+    };
+    return map[type] || 'adventurer_party';
+  },
+
+  syncWarbandSize(wb) {
+    wb.memberIds = wb.memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
+    wb.size = wb.memberIds.length;
+    for (const m of warbandMembers(wb)) {
+      m.locationId = wb.locationId;
+      if (wb.travel) m.travel = null;
+    }
+    wb.composition = this.computeComposition(wb);
+    return wb.size;
+  },
+
+  computeComposition(wb) {
+    const members = warbandMembers(wb);
+    const comp = defaultUnitComposition();
+    for (const m of members) {
+      if (m.profession === 'archer' || m.equipment?.ranged) comp.archers++;
+      else if (m.profession === 'cavalry' || m.equipment?.mount) comp.cavalry++;
+      else if (m.profession === 'spearman') comp.spearmen++;
+      else comp.militia++;
+    }
+    return comp;
+  },
+
+  createFromMembers(org, memberIds, opt) {
+    opt = opt || {};
+    const ids = memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
+    if (!ids.length) return null;
+    const leader = getAgent(opt.leaderId) || getAgent(org?.leaderId) || getAgent(ids[0]);
+    const wb = createWarband({
+      organizationId: org?.id || null,
+      factionId: opt.factionId || org?.factionId || leader?.factionId,
+      leaderId: leader?.id || ids[0],
+      memberIds: ids,
+      name: opt.name || `${org?.name || 'กอง'} หมายเลข ${uid() % 900 + 100}`,
+      type: opt.type || this.orgTypeToWarband(org?.type),
+      locationId: opt.locationId || leader?.locationId,
+      status: opt.status || 'marching',
+      objective: opt.objective || { type: 'patrol_route' },
+      food: opt.food || ids.length * 3,
+      gold: opt.gold || 0,
+      morale: opt.morale || 65
+    });
+    this.syncWarbandSize(wb);
+    wb.history.push({ day: world.day, text: `ก่อตั้งกอง ${wb.size} นาย` });
+    return wb;
+  },
+
+  computeSpeed(wb) {
+    const members = warbandMembers(wb);
+    if (!members.length) return 0;
+    let baseSpeed = 1.2;
+    const horses = members.filter(m => m.equipment?.mount || m.profession === 'cavalry').length;
+    const mountMod = 1 + horses / Math.max(members.length, 1) * 0.35;
+    let roadMod = 1;
+    if (wb.travel) {
+      const t = wb.travel;
+      const r = getRoute(t.path[t.seg], t.path[t.seg + 1]);
+      if (r) roadMod = 0.7 + r.roadQuality * 0.5;
+      const terrain = r?.terrain || 'plain';
+      const terrMod = { plain: 1, road: 1.1, forest: 0.82, hill: 0.78, marsh: 0.65, river: 0.7 }[terrain] || 1;
+      roadMod *= terrMod;
+    }
+    const moraleMod = 0.75 + (wb.morale / 200);
+    const fatiguePenalty = 1 - clamp(wb.fatigue / 120, 0, 0.35);
+    const woundedPenalty = 1 - clamp((wb.woundedCount || 0) / Math.max(members.length, 1) * 0.4, 0, 0.4);
+    const supplyLoad = 1 - clamp(members.length / 120, 0, 0.25);
+    const leader = getAgent(wb.leaderId);
+    const logMod = leader ? 1 + (leader.skills.logistics || 0) * 0.03 : 1;
+    return baseSpeed * mountMod * roadMod * moraleMod * fatiguePenalty * woundedPenalty * supplyLoad * logMod;
+  },
+
+  startMarch(wb, destId, purpose) {
+    if (!destId || wb.locationId === destId) return false;
+    const ok = startTravel(wb, destId, purpose || 'march');
+    if (ok) {
+      wb.destinationId = destId;
+      wb.routePath = wb.travel.path.slice();
+      wb.status = purpose === 'flee' ? 'fleeing' : purpose === 'pursue' ? 'pursuing' : 'marching';
+      wb.objective = { type: purpose || 'travel', targetId: destId };
+    }
+    return ok;
+  },
+
+  tickMovement() {
+    for (const wb of world.warbands) {
+      const members = warbandMembers(wb);
+      if (!members.length) { wb.status = 'disbanding'; continue; }
+      wb.lastSeenDay = world.day;
+      wb.lastKnownLocation = wb.locationId;
+      if (wb.status === 'camping' || wb.status === 'foraging') {
+        wb._campDays = (wb._campDays || 0) + 1;
+        wb.fatigue = clamp(wb.fatigue - 8, 0, 100);
+        continue;
+      }
+      if (!wb.travel && wb.destinationId && wb.locationId !== wb.destinationId) {
+        this.startMarch(wb, wb.destinationId, wb.status === 'fleeing' ? 'flee' : wb.status === 'pursuing' ? 'pursue' : 'march');
+      }
+      if (wb.travel) {
+        const speed = this.computeSpeed(wb);
+        const arrived = advanceTravel(wb, speed);
+        if (wb.travel) {
+          const t = wb.travel;
+          wb.currentRouteId = t.seg;
+          const r = getRoute(t.path[t.seg], t.path[t.seg + 1]);
+          wb.progress = r ? clamp(t.progress / r.distance, 0, 1) : 0;
+        } else {
+          wb.progress = 0;
+          wb.currentRouteId = null;
+          wb.destinationId = null;
+          for (const m of members) m.locationId = wb.locationId;
+          if (wb.status === 'marching') wb.status = 'camping';
+        }
+        if (arrived) this.onArrive(wb);
+      } else {
+        this.tickObjective(wb);
+      }
+    }
+  },
+
+  onArrive(wb) {
+    const obj = wb.objective || {};
+    if (obj.type === 'travel_to_muster' || obj.type === 'join_campaign') wb.status = 'camping';
+    else if (obj.type === 'raid_settlement' && obj.targetId) this.tryRaid(wb, getSettlement(obj.targetId));
+    else if (obj.type === 'patrol_route') wb.status = 'patrolling';
+    else wb.status = 'camping';
+  },
+
+  tickObjective(wb) {
+    const obj = wb.objective || { type: 'idle' };
+    if (wb.status === 'pursuing' && wb.pursueTargetId) {
+      const target = getWarband(wb.pursueTargetId);
+      if (!target || !warbandMembers(target).length) { wb.status = 'camping'; wb.pursueTargetId = null; return; }
+      if (target.locationId === wb.locationId) { this.resolveEncounter(wb, target); return; }
+      this.startMarch(wb, target.locationId, 'pursue');
+      return;
+    }
+    if (obj.type === 'patrol_route' && chance(0.08)) {
+      const routes = world.routes.filter(r => !r.destroyed && (r.a === wb.locationId || r.b === wb.locationId));
+      if (routes.length) {
+        const other = routes[0].a === wb.locationId ? routes[0].b : routes[0].a;
+        this.startMarch(wb, other, 'patrol');
+        wb.status = 'patrolling';
+      }
+    } else if (obj.type === 'raid_settlement' && obj.targetId) {
+      const s = getSettlement(obj.targetId);
+      if (s && s.id !== wb.locationId) this.startMarch(wb, s.id, 'raid');
+      else if (s) this.tryRaid(wb, s);
+    } else if (obj.type === 'flee_to_safety' && obj.targetId) {
+      this.startMarch(wb, obj.targetId, 'flee');
+    } else if (obj.type === 'escort_caravan' && obj.routeId) {
+      wb.status = 'escorting';
+    } else if (chance(0.03) && wb.food < warbandMembers(wb).length * 2) {
+      wb.status = 'foraging';
+      wb.objective = { type: 'forage' };
+      const found = randInt(2, 8);
+      wb.food += found;
+      const s = getSettlement(wb.locationId);
+      if (s && s.type !== 'camp') { s.stock.food = Math.max(0, s.stock.food - found); s.prosperity = clamp(s.prosperity - 1, 0, 100); }
+    }
+  },
+
+  tickSupply() {
+    for (const wb of world.warbands) {
+      const members = warbandMembers(wb);
+      const n = members.length;
+      if (!n) continue;
+      const horses = members.filter(m => m.equipment?.mount).length;
+      const foodNeeded = n * 1.2 + horses * 0.5;
+      if (wb.food >= foodNeeded) {
+        wb.food -= foodNeeded;
+        wb.supplyDays = wb.food / Math.max(foodNeeded, 0.1);
+        for (const m of members) {
+          const mem = wb.organizationId ? (m.memberships || []).find(x => x.organizationId === wb.organizationId) : null;
+          if (mem) mem.lastFedDay = world.day;
+        }
+      } else {
+        wb.food = 0;
+        wb.supplyDays = 0;
+        wb.morale = clamp(wb.morale - 6, 5, 100);
+        wb.cohesion = clamp(wb.cohesion - 4, 5, 100);
+        for (const m of members) {
+          m.stats.hunger = clamp(m.stats.hunger - 8, 0, 100);
+          m.stats.morale = clamp(m.stats.morale - 5, 0, 100);
+        }
+        if (chance(0.12)) this.desertFromWarband(wb);
+        if (wb.morale < 20 && chance(0.08)) {
+          wb.status = 'disbanding';
+          EventSystem.add('military', `💀 ${wb.name} แตกกองจากอดอาหาร`);
+          Chronicle.add({ category: 'war', title: `${wb.name} แตกกอง`, description: 'อดอาหารและทหารหนี', importance: 3 });
+        }
+      }
+      const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+      if (org && org.type === 'mercenary_company' && wb.gold < n * 2) {
+        wb.morale = clamp(wb.morale - 3, 5, 100);
+        if (chance(0.06)) this.desertFromWarband(wb);
+      }
+      wb.fatigue = clamp(wb.fatigue + (wb.travel ? 3 : 1), 0, 100);
+    }
+  },
+
+  desertFromWarband(wb) {
+    const members = warbandMembers(wb);
+    if (members.length <= 1) return;
+    const deserter = pick(members.filter(m => m.id !== wb.leaderId) || members);
+    if (!deserter) return;
+    wb.memberIds = wb.memberIds.filter(id => id !== deserter.id);
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    if (org) {
+      const mem = (deserter.memberships || []).find(m => m.organizationId === org.id);
+      if (mem) OrganizationSystem.desertMember(deserter, org, mem);
+    }
+    this.syncWarbandSize(wb);
+  },
+
+  tickEncounters() {
+    const buckets = new Map();
+    for (const wb of world.warbands) {
+      const members = warbandMembers(wb);
+      if (!members.length) continue;
+      const key = wb.travel ? `r:${wb.travel.path[wb.travel.seg]}-${wb.travel.path[wb.travel.seg + 1]}` : `s:${wb.locationId}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(wb);
+    }
+    for (const [, group] of buckets) {
+      if (group.length < 2) continue;
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          if (chance(0.15)) this.resolveEncounter(group[i], group[j]);
+        }
+      }
+    }
+  },
+
+  resolveEncounter(a, b) {
+    if (!a || !b || a.id === b.id) return;
+    const aF = getFaction(a.factionId), bF = getFaction(b.factionId);
+    const hostile = (aF && bF && (aF.enemies.includes(bF.id) || bF.enemies.includes(aF.id))) ||
+      a.type === 'bandit_gang' || b.type === 'bandit_gang';
+    const allied = a.factionId && a.factionId === b.factionId;
+    const sizeA = warbandMembers(a).length, sizeB = warbandMembers(b).length;
+    const ratio = sizeA / Math.max(sizeB, 1);
+    if (allied && chance(0.35)) { this.mergeWarbands(a, b); return; }
+    if (!hostile && chance(0.7)) return;
+    if (ratio > 1.8 && chance(0.4)) {
+      b.status = 'fleeing';
+      b.pursueTargetId = null;
+      b.objective = { type: 'flee_to_safety', targetId: b.locationId };
+      a.status = 'pursuing';
+      a.pursueTargetId = b.id;
+      return;
+    }
+    if (sizeA + sizeB < 8) {
+      this.resolveSkirmish(a, b);
+    } else if (sizeA + sizeB >= 80 || sizeA >= 40 || sizeB >= 40) {
+      this.resolveLargeBattle(a, b);
+    } else {
+      this.resolvePhasedBattle(a, b);
+    }
+  },
+
+  warbandAsUnits(wb) {
+    let u = world.units.find(x => x._warbandId === wb.id);
+    if (!u) {
+      u = createUnit({
+        name: wb.name, kind: wb.type === 'bandit_gang' ? 'warband' : 'field',
+        leaderId: wb.leaderId, memberIds: wb.memberIds.slice(),
+        factionId: wb.factionId, locationId: wb.locationId, food: wb.food
+      });
+      u._warbandId = wb.id;
+      wb.unitIds = [u.id];
+    } else {
+      u.memberIds = wb.memberIds.slice();
+      u.locationId = wb.locationId;
+      u.leaderId = wb.leaderId;
+    }
+    return [u];
+  },
+
+  resolveSkirmish(a, b) {
+    const au = this.warbandAsUnits(a), bu = this.warbandAsUnits(b);
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.resolveSkirmish(au[0], bu[0], { settlementId: a.locationId, terrain: 'plain' });
+    else MilitarySystem.battle(au, bu, { settlementId: a.locationId, terrain: 'plain', title: `${a.name} vs ${b.name}` });
+    this.syncWarbandSize(a); this.syncWarbandSize(b);
+    a.history.push({ day: world.day, text: `ปะทะ ${b.name}` });
+  },
+
+  resolvePhasedBattle(a, b) {
+    const au = this.warbandAsUnits(a), bu = this.warbandAsUnits(b);
+    MilitarySystem.battle(au, bu, { settlementId: a.locationId, terrain: 'plain', title: `${a.name} vs ${b.name}` });
+    this.syncWarbandSize(a); this.syncWarbandSize(b);
+  },
+
+  resolveLargeBattle(a, b) {
+    const au = this.warbandAsUnits(a), bu = this.warbandAsUnits(b);
+    if (typeof LargeBattlefieldSystem !== 'undefined') {
+      LargeBattlefieldSystem.runLargeBattle(au, bu, { settlementId: a.locationId, terrainType: 'plain', title: `${a.name} vs ${b.name}` });
+    } else MilitarySystem.battle(au, bu, { settlementId: a.locationId, terrain: 'plain', title: `${a.name} vs ${b.name}` });
+    this.syncWarbandSize(a); this.syncWarbandSize(b);
+  },
+
+  tryRaid(wb, s) {
+    if (!s || s.type === 'camp') return;
+    const u = this.warbandAsUnits(wb)[0];
+    if (u) MilitarySystem.resolveRaid(u, s);
+    this.syncWarbandSize(wb);
+    wb.history.push({ day: world.day, text: `ปล้น ${s.name}` });
+  },
+
+  mergeWarbands(a, b) {
+    if (warbandMembers(a).length + warbandMembers(b).length > 150) return false;
+    const cap = MilitarySystem.commandCapacity(getAgent(a.leaderId));
+    if (warbandMembers(a).length + warbandMembers(b).length > cap * 3) {
+      a.cohesion = clamp(a.cohesion - 10, 10, 100);
+    }
+    for (const id of b.memberIds) {
+      if (!a.memberIds.includes(id)) a.memberIds.push(id);
+    }
+    const org = a.organizationId ? getOrganization(a.organizationId) : null;
+    if (org) {
+      for (const id of b.memberIds) if (!org.memberIds.includes(id)) org.memberIds.push(id);
+    }
+    b.status = 'disbanding';
+    b.memberIds = [];
+    this.syncWarbandSize(a);
+    a.history.push({ day: world.day, text: `รวมกับ ${b.name}` });
+    EventSystem.add('military', `🔗 ${a.name} รวมกับ ${b.name}`);
+    return true;
+  },
+
+  splitWarband(wb, memberIds, opt) {
+    opt = opt || {};
+    const ids = memberIds.filter(id => wb.memberIds.includes(id) && getAgent(id)?.alive);
+    if (!ids.length) return null;
+    wb.memberIds = wb.memberIds.filter(id => !ids.includes(id));
+    this.syncWarbandSize(wb);
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    const child = this.createFromMembers(org, ids, {
+      name: opt.name || `${wb.name} (แยก)`,
+      type: wb.type,
+      locationId: wb.locationId,
+      leaderId: opt.leaderId || ids[0],
+      status: opt.status || 'marching',
+      objective: opt.objective || { type: 'patrol_route' }
+    });
+    wb.history.push({ day: world.day, text: `แยกกอง ${ids.length} นาย` });
+    return child;
+  },
+
+  markerStyle(wb) {
+    const n = warbandMembers(wb).length;
+    const size = n <= 5 ? 3 : n <= 12 ? 4.5 : n <= 30 ? 6 : n <= 80 ? 8 : n <= 150 ? 10 : 12;
+    const colors = {
+      royal_army: getFaction(wb.factionId)?.color || '#42a5f5',
+      mercenary_company: '#ffd54f', bandit_gang: '#b71c1c', caravan_guard: '#8d6e63',
+      militia: '#66bb6a', rebel_warband: '#ff5722', scout_party: '#90caf9', adventurer_party: '#ab47bc',
+      noble_retinue: '#7e57c2'
+    };
+    const color = colors[wb.type] || '#bdbdbd';
+    const icon = wb.type === 'mercenary_company' ? '⚔' : wb.type === 'bandit_gang' ? '☠' :
+      wb.type === 'caravan_guard' ? '🐪' : wb.type === 'royal_army' ? '🚩' : wb.type === 'scout_party' ? '•' : '⚔';
+    return { size, color, icon };
+  },
+
+  tickDaily() {
+    this.tickMovement();
+    this.tickSupply();
+    if (world.day % 2 === 0) this.tickEncounters();
+    this.cleanupOrphans();
   }
 };
 
@@ -5285,11 +6380,17 @@ const CampaignWarfareSystem = {
     if (!route || route.destroyed) return false;
     const risk = this.ambushRisk(route, entity);
     if (!chance(risk * 0.12)) return false;
-    const isArmy = !!entity.unitIds;
-    const units = isArmy ? entity.unitIds.map(getUnit).filter(u => u && unitMembers(u).length) : [entity];
+    const isArmy = !!entity.unitIds && !entity.memberIds;
+    const isWarband = !!(entity.memberIds && getWarband(entity.id));
+    const units = isArmy ? entity.unitIds.map(getUnit).filter(u => u && unitMembers(u).length)
+      : isWarband ? (typeof WarbandSystem !== 'undefined' ? WarbandSystem.warbandAsUnits(entity) : [{ memberIds: entity.memberIds, leaderId: entity.leaderId, locationId: entity.locationId }])
+      : [entity];
     if (!units.length) return false;
-    const bandits = world.units.filter(u => u.kind === 'warband' && !u.travel && (u.locationId === fromId || u.locationId === toId) && unitMembers(u).length > 0);
-    const attackers = bandits.length ? [pick(bandits)] : [];
+    const banditUnits = world.units.filter(u => u.kind === 'warband' && !u.travel && (u.locationId === fromId || u.locationId === toId) && unitMembers(u).length > 0);
+    const banditWbs = (world.warbands || []).filter(w => w.type === 'bandit_gang' && !w.travel && w.status !== 'disbanding' && (w.locationId === fromId || w.locationId === toId) && warbandMembers(w).length > 0);
+    const attackers = banditUnits.length ? [pick(banditUnits)]
+      : banditWbs.length ? (typeof WarbandSystem !== 'undefined' ? WarbandSystem.warbandAsUnits(pick(banditWbs)) : [])
+      : [];
     if (!attackers.length && chance(0.5)) {
       const loose = agentsAt(fromId).filter(a => a.profession === 'bandit' && !a.unitId);
       if (loose.length >= 2) {
@@ -5306,12 +6407,17 @@ const CampaignWarfareSystem = {
     });
     route.ambushRisk = clamp((route.ambushRisk || 0.1) + 0.05, 0.02, 0.9);
     route.recentRaids = (route.recentRaids || 0) + 1;
-    if (isArmy) {
-      entity.supply.food = Math.max(0, entity.supply.food - randInt(5, 20));
+    const foodLoss = randInt(isArmy ? 5 : 3, isArmy ? 20 : 12);
+    if (isArmy && entity.supply) {
+      entity.supply.food = Math.max(0, entity.supply.food - foodLoss);
       const sl = entity.supplyLineId ? this.getSupplyLine(entity.supplyLineId) : null;
       if (sl && chance(0.35)) this.cutSupplyLine(sl, 'ถูกซุ่มโจมตีบนเส้นทางเสบียง');
-    } else {
-      entity.supply.food = Math.max(0, (entity.supply.food || 0) - randInt(3, 12));
+    } else if (isWarband) {
+      entity.food = Math.max(0, (entity.food || 0) - foodLoss);
+    } else if (entity.supply) {
+      entity.supply.food = Math.max(0, (entity.supply.food || 0) - foodLoss);
+    } else if (entity.inventory) {
+      entity.inventory.food = Math.max(0, (entity.inventory.food || 0) - foodLoss);
     }
     for (const u of units) {
       for (const m of unitMembers(u)) {
@@ -6989,59 +8095,66 @@ const GovernanceSystem = {
       if (!f.enemies.length) f.warState = false;
       return;
     }
-    // รวมหน่วย guard จากถิ่นฐานของตัวเอง (เหลือขั้นต่ำไว้เฝ้า)
-    const myUnits = [];
     const capital = world.settlements.find(s => s.factionId === f.id && (s.type === 'castle' || s.type === 'town'));
     if (!capital) return;
-    for (const s of world.settlements.filter(s => s.factionId === f.id)) {
-      const g = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
-      if (g && unitMembers(g).length >= 4) {
-        // แยกครึ่งหนึ่งไปรบ
-        const members = unitMembers(g);
-        const taking = members.slice(0, Math.floor(members.length * 0.6));
-        for (const m of taking) g.memberIds = g.memberIds.filter(id => id !== m.id);
-        const fieldLeader = taking.reduce((m, x) => x.skills.leadership > m.skills.leadership ? x : m, taking[0]);
-        const nu = createUnit({
-          name: `กองรบจาก${s.name}`, kind: 'field',
-          leaderId: fieldLeader.id, memberIds: taking.map(m => m.id),
-          factionId: f.id, locationId: s.id, food: 30
-        });
-        myUnits.push(nu);
-      }
-    }
-    if (!myUnits.length) return;
-    // commander = คนที่ leadership สูงสุดใน faction
-    const commander = world.agents.filter(a => a.alive && a.factionId === f.id && (MILITARY_PROFS.has(a.profession) || RULER_PROFS.has(a.profession)))
-      .reduce((m, x) => (x.skills.leadership + x.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? x : m, ruler);
     const target = typeof CampaignWarfareSystem !== 'undefined'
-      ? CampaignWarfareSystem.pickCampaignTarget(f, enemyF, activeWarBetween(f.id, enemyF.id)?.goal || 'capture_settlement')
+      ? (CampaignWarfareSystem.pickCampaignTarget(f, enemyF, activeWarBetween(f.id, enemyF.id)?.goal || 'capture_settlement') || enemySettlements[0])
       : enemySettlements.reduce((m, x) => {
-      const gm = m.garrisonUnitId ? MilitarySystem.unitPower(getUnit(m.garrisonUnitId)) : 0;
-      const gx = x.garrisonUnitId ? MilitarySystem.unitPower(getUnit(x.garrisonUnitId)) : 0;
-      return gx < gm ? x : m;
-    }, enemySettlements[0]);
+        const gm = m.garrisonUnitId ? MilitarySystem.unitPower(getUnit(m.garrisonUnitId)) : 0;
+        const gx = x.garrisonUnitId ? MilitarySystem.unitPower(getUnit(x.garrisonUnitId)) : 0;
+        return gx < gm ? x : m;
+      }, enemySettlements[0]);
     if (!target) return;
-    const foodBought = Math.min(capital.stock.food * 0.4, 250);
-    capital.stock.food -= foodBought;
-    const ar = createArmy({
-      name: `กองทัพ${f.name}`, commanderId: commander.id, factionId: f.id,
-      unitIds: myUnits.map(u => u.id), locationId: myUnits[0].locationId,
-      objective: { type: 'attack', targetId: target.id }, food: foodBought,
-      baseSettlementId: capital.id,
-      warGoal: typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.pickWarGoal(f, enemyF, target) : 'capture_settlement'
-    });
-    if (typeof CampaignWarfareSystem !== 'undefined') {
-      CampaignWarfareSystem.ensureArmy(ar);
-      CampaignWarfareSystem.computeStrategyProfile(commander, ar);
-      CampaignWarfareSystem.createSupplyLine(ar, capital.id, target.id);
+
+    // Phase 18.3: ระดมพลจาก agent จริง — ไม่เสกทหาร
+    if (typeof OrganizationSystem !== 'undefined') {
+      const org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
+      const readyWbs = world.warbands.filter(wb =>
+        wb.factionId === f.id && wb.type === 'royal_army' && warbandMembers(wb).length >= 6 &&
+        wb.status !== 'disbanding' && !wb.travel
+      );
+      if (!readyWbs.length) {
+        OrganizationSystem.raiseCallToArms(f, ruler, target);
+        EventSystem.add('war', `📯 ${f.name} ประกาศระดมพล — รออาสาสมัครเดินทางมารวมพล`);
+        if (capital) capital.warDemand = Math.min(10, capital.warDemand + 2);
+        return;
+      }
+      const myUnits = [];
+      for (const wb of readyWbs) {
+        const u = WarbandSystem.warbandAsUnits(wb)[0];
+        if (u && unitMembers(u).length >= 4) myUnits.push(u);
+      }
+      if (!myUnits.length) return;
+      const commander = world.agents.filter(a => a.alive && a.factionId === f.id && (MILITARY_PROFS.has(a.profession) || RULER_PROFS.has(a.profession)))
+        .reduce((m, x) => (x.skills.leadership + x.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? x : m, ruler);
+      const foodBought = Math.min(capital.stock.food * 0.3, 200);
+      capital.stock.food -= foodBought;
+      const ar = createArmy({
+        name: `กองทัพ${f.name}`, commanderId: commander.id, factionId: f.id,
+        unitIds: myUnits.map(u => u.id), locationId: myUnits[0].locationId,
+        objective: { type: 'attack', targetId: target.id }, food: foodBought,
+        baseSettlementId: capital.id,
+        warGoal: typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.pickWarGoal(f, enemyF, target) : 'capture_settlement'
+      });
+      if (typeof CampaignWarfareSystem !== 'undefined') {
+        CampaignWarfareSystem.ensureArmy(ar);
+        CampaignWarfareSystem.computeStrategyProfile(commander, ar);
+        CampaignWarfareSystem.createSupplyLine(ar, capital.id, target.id);
+      }
+      for (const u of myUnits) {
+        u.armyId = ar.id;
+        u.locationId = ar.locationId;
+        for (const m of unitMembers(u)) m.locationId = ar.locationId;
+        const wb = world.warbands.find(w => w.unitIds?.includes(u.id));
+        if (wb) { wb.objective = { type: 'join_campaign', targetId: target.id }; WarbandSystem.startMarch(wb, target.id, 'war'); }
+      }
+      startTravel(ar, target.id, 'war');
+      const totalMen = sum(myUnits, u => unitMembers(u).length);
+      EventSystem.add('war', `⚔🔥 ${f.name} ยกทัพ ${totalMen} นาย (จาก warband จริง) นำโดย ${commander.name} มุ่งโจมตี${target.name}!`);
+      if (org) OrganizationSystem.orgLog(org, `ยกทัพ ${totalMen} นายจาก warband`);
+      if (capital) capital.warDemand = Math.min(10, capital.warDemand + 4);
+      return;
     }
-    // รวมพลที่จุดเดียวแล้วเดิน
-    for (const u of myUnits) { u.locationId = ar.locationId; for (const m of unitMembers(u)) m.locationId = ar.locationId; }
-    startTravel(ar, target.id, 'war');
-    const totalMen = sum(myUnits, u => unitMembers(u).length);
-    EventSystem.add('war', `⚔🔥 ${f.name} ยกทัพ ${totalMen} นาย นำโดย ${commander.name} มุ่งโจมตี${target.name}!`);
-    // ปราสาทเตรียมสงคราม → demand อาวุธพุ่ง
-    if (capital) capital.warDemand = Math.min(10, capital.warDemand + 4);
   }
 };
 
@@ -7717,6 +8830,8 @@ function simulateDay() {
   MarketTradeSystem.tickDaily();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
+  if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.tickDaily();
+  if (typeof WarbandSystem !== 'undefined') WarbandSystem.tickDaily();
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.tickInjuries();
 
   // เติม garrison จากทหารว่าง
@@ -7909,6 +9024,13 @@ const ObserverSystem = {
     const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
     bind('btnObserver', () => this.togglePanel());
     bind('observerClose', () => this.closePanel());
+    bind('btnOrganizations', () => {
+      this.observerOpen = true;
+      this.rankingTab = 'organizations';
+      document.getElementById('observerPanel')?.classList.remove('hidden');
+      document.querySelectorAll('.obs-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'organizations'));
+      this.renderPanel();
+    });
     for (const btn of document.querySelectorAll('.obs-tab')) {
       btn.addEventListener('click', () => {
         this.rankingTab = btn.dataset.tab;
@@ -8050,6 +9172,35 @@ const ObserverSystem = {
         push('settlement', g.homeSettlementId, g.name, 'guild');
       }
     }
+    for (const org of (world.organizations || [])) {
+      if (org.name.toLowerCase().includes(q) || org.type.includes(q)) push('organization', org.id, org.name, org.type);
+    }
+    for (const wb of (world.warbands || [])) {
+      if (wb.name.toLowerCase().includes(q) || wb.type.includes(q) || wb.status.includes(q)) {
+        push('warband', wb.id, wb.name, `${warbandMembers(wb).length} คน · ${wb.status}`);
+      }
+    }
+    if (q.includes('marching') || q.includes('เดินทัพ')) {
+      for (const wb of (world.warbands || []).filter(w => w.status === 'marching' || w.travel)) {
+        push('warband', wb.id, wb.name, 'marching');
+      }
+    }
+    if (q.includes('bandit') || q.includes('โจร')) {
+      for (const wb of (world.warbands || []).filter(w => w.type === 'bandit_gang')) push('warband', wb.id, wb.name, 'bandit');
+      for (const org of (world.organizations || []).filter(o => o.type === 'bandit_gang')) push('organization', org.id, org.name, 'bandit gang');
+    }
+    if (q.includes('mercenary') || q.includes('รับจ้าง')) {
+      for (const org of (world.organizations || []).filter(o => o.type === 'mercenary_company')) push('organization', org.id, org.name, 'mercenary');
+    }
+    if (q.includes('militia') || q.includes('อาสา')) {
+      for (const org of (world.organizations || []).filter(o => o.type === 'militia_company')) push('organization', org.id, org.name, 'militia');
+    }
+    if (q.includes('recruit') || q.includes('สมัคร')) {
+      for (const ro of (world.recruitmentOffers || []).filter(o => o.status === 'open')) {
+        const org = getOrganization(ro.organizationId);
+        push('settlement', ro.settlementId, org?.name || 'รับสมัคร', ro.type);
+      }
+    }
     if (typeof AgentMemorySystem !== 'undefined') {
       for (const a of world.agents) {
         if (!a.alive) continue;
@@ -8117,6 +9268,8 @@ const ObserverSystem = {
     if (kind === 'faction') return getFaction(id)?.name || '?';
     if (kind === 'unit') return getUnit(id)?.name || '?';
     if (kind === 'army') return getArmy(id)?.name || '?';
+    if (kind === 'warband') return getWarband(id)?.name || '?';
+    if (kind === 'organization') return getOrganization(id)?.name || '?';
     if (kind === 'route') {
       const r = world.routes.find(x => x.id === id);
       if (!r) return '?';
@@ -8166,6 +9319,18 @@ const ObserverSystem = {
       const s = world.settlements.find(x => x.factionId === id);
       return s ? { x: s.x, y: s.y } : null;
     }
+    if (kind === 'warband') {
+      const wb = getWarband(id);
+      if (!wb) return null;
+      if (wb.travel) { const p = travelPos(wb); return { x: p.x, y: p.y }; }
+      const s = getSettlement(wb.locationId);
+      return s ? { x: s.x + 12, y: s.y - 8 } : null;
+    }
+    if (kind === 'organization') {
+      const org = getOrganization(id);
+      const s = org?.homeSettlementId ? getSettlement(org.homeSettlementId) : null;
+      return s ? { x: s.x, y: s.y } : null;
+    }
     return null;
   },
 
@@ -8210,6 +9375,8 @@ const ObserverSystem = {
     if (kind === 'unit') { const u = getUnit(id); return !!(u && unitMembers(u).length); }
     if (kind === 'army') { const ar = getArmy(id); return !!(ar && ar.unitIds.some(uid => { const u = getUnit(uid); return u && unitMembers(u).length; })); }
     if (kind === 'faction') return world.settlements.some(s => s.factionId === id);
+    if (kind === 'warband') { const wb = getWarband(id); return !!(wb && warbandMembers(wb).length); }
+    if (kind === 'organization') { const o = getOrganization(id); return !!(o && o.status === 'active'); }
     return false;
   },
 
@@ -8481,6 +9648,33 @@ const ObserverSystem = {
         for (const row of lastLarge.gridSnapshot) html += row.join(' | ') + '\n';
         html += '</pre>';
       }
+    } else if (tab === 'organizations' && typeof OrganizationSystem !== 'undefined') {
+      const or = OrganizationSystem.rankings();
+      html = '<div class="obs-section-head">All Organizations</div>';
+      html += or.organizations.length ? or.organizations.map(o => row(o.name, `${o.type} · ${o.memberIds.length} สมาชิก`, 'organization', o.id)).join('')
+        : '<p class="hint">ยังไม่มีองค์กร</p>';
+      html += '<div class="obs-section-head">Mercenary Companies</div>';
+      html += or.mercenaries.map(o => row(o.name, `rep ${fmt(o.reputation)}`, 'organization', o.id)).join('') || '<p class="hint">—</p>';
+      html += '<div class="obs-section-head">Bandit Gangs</div>';
+      html += or.bandits.map(o => row(o.name, `${o.memberIds.length} คน`, 'organization', o.id)).join('') || '<p class="hint">—</p>';
+    } else if (tab === 'warbands' && typeof WarbandSystem !== 'undefined') {
+      const or = OrganizationSystem.rankings();
+      html = '<div class="obs-section-head">Warbands on Map</div>';
+      html += or.warbands.length ? or.warbands.map(wb => {
+        const n = warbandMembers(wb).length;
+        return row(wb.name, `${wb.type} · ${n} · ${wb.status}`, 'warband', wb.id);
+      }).join('') : '<p class="hint">ยังไม่มี warband</p>';
+      html += '<div class="obs-section-head">Marching / Pursuing</div>';
+      html += world.warbands.filter(w => w.travel || w.status === 'pursuing' || w.status === 'fleeing').map(wb =>
+        row(wb.name, wb.status, 'warband', wb.id)).join('') || '<p class="hint">—</p>';
+    } else if (tab === 'recruitment' && typeof OrganizationSystem !== 'undefined') {
+      const or = OrganizationSystem.rankings();
+      html = '<div class="obs-section-head">Recruitment Offers</div>';
+      html += or.offers.length ? or.offers.map(ro => {
+        const org = getOrganization(ro.organizationId);
+        const s = getSettlement(ro.settlementId);
+        return row(`${org?.name || '?'} — ${ro.roleNeeded}`, `${s?.name || '?'} · ${ro.acceptedAgentIds.length}/${ro.quantityNeeded}`, 'settlement', ro.settlementId);
+      }).join('') : '<p class="hint">ไม่มีประกาศรับสมัคร</p>';
     } else if (tab === 'combat' && typeof TextCombatCore !== 'undefined') {
       const cr = TextCombatCore.rankings();
       html = '<div class="obs-section-head">Best Duelists</div>';
@@ -8729,6 +9923,7 @@ const Renderer = {
 
     // units/armies เดินทาง (จุดใหญ่)
     this.drawMilitaryDots(ctx);
+    if (typeof WarbandSystem !== 'undefined') this.drawWarbandMarkers(ctx);
 
     // selection ring
     if (UI.selected) this.drawSelection(ctx);
@@ -8848,6 +10043,7 @@ const Renderer = {
   drawMilitaryDots(ctx) {
     const rMin = Math.min(this.scaleX, this.scaleY);
     for (const u of world.units) {
+      if (u._warbandId) continue;
       const members = unitMembers(u);
       if (!members.length) continue;
       let px, py;
@@ -8871,6 +10067,51 @@ const Renderer = {
       ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(members.length, px, py + 2.5);
       u._px = px; u._py = py;
+    }
+  },
+
+  drawWarbandMarkers(ctx) {
+    if (!world.warbands) return;
+    const rMin = Math.min(this.scaleX, this.scaleY);
+    for (const wb of world.warbands) {
+      const members = warbandMembers(wb);
+      if (!members.length || wb.status === 'disbanding') continue;
+      let px, py;
+      if (wb.travel) { const p = travelPos(wb); px = this.sx(p.x); py = this.sy(p.y); }
+      else {
+        const s = getSettlement(wb.locationId);
+        if (!s) continue;
+        px = this.sx(s.x) + 14 * rMin; py = this.sy(s.y) - 10 * rMin;
+      }
+      const st = WarbandSystem.markerStyle(wb);
+      const size = st.size * rMin;
+      ctx.fillStyle = st.color;
+      ctx.strokeStyle = wb.status === 'pursuing' ? '#ffeb3b' : wb.status === 'fleeing' ? '#90a4ae' : 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = wb.status === 'marching' ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, size, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `${Math.max(8, size * 1.2)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(st.icon, px, py + size * 0.35);
+      ctx.font = '7px sans-serif';
+      ctx.fillText(members.length, px, py + size + 6);
+      wb._px = px; wb._py = py;
+      if (wb.travel && wb.routePath?.length > 1) {
+        ctx.strokeStyle = 'rgba(255,213,79,0.45)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        for (let i = 0; i < wb.routePath.length; i++) {
+          const st = getSettlement(wb.routePath[i]);
+          if (!st) continue;
+          const x = this.sx(st.x), y = this.sy(st.y);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
   },
 
@@ -8978,7 +10219,14 @@ const Renderer = {
   pickAt(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
     const px = clientX - rect.left, py = clientY - rect.top;
-    // 1) units (จุดใหญ่ ชัดสุด) — ข้าม garrison ที่ซ้อนกับถิ่นฐาน (ดูผ่าน settlement inspector แทน)
+    if (world.warbands) {
+      for (const wb of world.warbands) {
+        if (wb._px == null || !warbandMembers(wb).length) continue;
+        const d = Math.hypot(px - wb._px, py - wb._py);
+        if (d < 16) return { kind: 'warband', id: wb.id };
+      }
+    }
+    // 1) units (จุดใหญ่ ชัดสุด)
     for (const u of world.units) {
       if (u._px == null || !unitMembers(u).length || u.kind === 'guard') continue;
       const d = Math.hypot(px - u._px, py - u._py);
@@ -9409,6 +10657,16 @@ const UI = {
       if (!fc) { this.selected = null; return; }
       title.textContent = `🚩 ${fc.name}`;
       body.innerHTML = this.factionHTML(fc);
+    } else if (sel.kind === 'warband') {
+      const wb = getWarband(sel.id);
+      if (!wb) { this.selected = null; return; }
+      title.textContent = `⚔ ${wb.name}`;
+      body.innerHTML = this.warbandHTML(wb);
+    } else if (sel.kind === 'organization') {
+      const org = getOrganization(sel.id);
+      if (!org) { this.selected = null; return; }
+      title.textContent = `👥 ${org.name}`;
+      body.innerHTML = this.organizationHTML(org);
     }
     this.wireInspectorLinks(body);
     this.wireFollowButtons(body);
@@ -9660,6 +10918,15 @@ const UI = {
       const names = a.memory.citiesVisited.map(id => (getSettlement(id) || {}).name).filter(x => x);
       if (names.length) html += `<div class="insp-section"><h4>ถิ่นฐานที่เคยผ่าน</h4><div class="ce-desc">${names.join(' · ')}</div></div>`;
     }
+    if (a.memberships?.length) {
+      html += `<div class="insp-section"><h4>Memberships (Phase 18.3)</h4>`;
+      for (const mem of a.memberships) {
+        const org = getOrganization(mem.organizationId);
+        html += this.kv(org ? this.link('organization', org.id, org.name) : '?', `${mem.role} · ${mem.status} · loyalty ${fmt(mem.loyalty)}`);
+        if (mem.reasonJoined) html += `<div class="ce-desc">เหตุผล: ${mem.reasonJoined}</div>`;
+      }
+      html += `</div>`;
+    }
     return html;
   },
 
@@ -9795,6 +11062,17 @@ const UI = {
     if (s.history.length) {
       html += `<div class="insp-section"><h4>เหตุการณ์สำคัญของเมือง (Timeline)</h4>`;
       html += s.history.slice(-10).map(h => `<div class="timeline-entry"><span class="tl-text">${h}</span></div>`).join('');
+      html += `</div>`;
+    }
+    const localOffers = (world.recruitmentOffers || []).filter(o => o.settlementId === s.id && o.status === 'open');
+    const localOrgs = (world.organizations || []).filter(o => o.homeSettlementId === s.id && o.status === 'active');
+    if (localOffers.length || localOrgs.length) {
+      html += `<div class="insp-section"><h4>Organizations (Phase 18.3)</h4>`;
+      for (const o of localOrgs) html += this.kv(this.link('organization', o.id, o.name), `${o.type} · ${o.memberIds.length} คน`);
+      for (const ro of localOffers) {
+        const org = getOrganization(ro.organizationId);
+        html += this.kv('รับสมัคร', `${org?.name || '?'}: ${ro.acceptedAgentIds.length}/${ro.quantityNeeded} (${ro.type})`);
+      }
       html += `</div>`;
     }
     return html;
@@ -10084,10 +11362,85 @@ const UI = {
       }
     }
     return html;
+  },
+
+  organizationHTML(org) {
+    const leader = getAgent(org.leaderId);
+    const home = org.homeSettlementId ? getSettlement(org.homeSettlementId) : null;
+    const members = org.memberIds.map(getAgent).filter(a => a && a.alive);
+    const avgLoyalty = members.length ? sum(members, a => {
+      const mem = (a.memberships || []).find(x => x.organizationId === org.id);
+      return mem?.loyalty || 50;
+    }) / members.length : 0;
+    let html = `<div class="insp-actions">${this.followBtn('organization', org.id)}</div>`;
+    html += `<div class="insp-section"><h4>Organization</h4>`;
+    html += this.kv('Type', org.type);
+    html += this.kv('Purpose', org.purpose);
+    html += this.kv('Leader', leader ? this.link('agent', leader.id, leader.name) : '—');
+    html += this.kv('Home', home ? this.link('settlement', home.id, home.name) : '—');
+    html += this.kv('Members', members.length);
+    html += this.kv('Reputation', fmt(org.reputation));
+    html += this.kv('Wealth', fmt(org.wealth));
+    html += this.kv('Food reserve', fmt(org.foodReserve));
+    html += this.kv('Avg loyalty', fmt(avgLoyalty, 1), avgLoyalty < 30 ? 'bad' : 'good');
+    html += this.kv('Warbands', org.activeWarbandIds.length);
+    html += `</div>`;
+    const offers = world.recruitmentOffers.filter(o => o.organizationId === org.id && o.status === 'open');
+    if (offers.length) {
+      html += `<div class="insp-section"><h4>Recruitment</h4>`;
+      for (const o of offers) html += this.kv(o.roleNeeded, `${o.acceptedAgentIds.length}/${o.quantityNeeded} · ${o.type}`);
+      html += `</div>`;
+    }
+    if (org.history?.length) {
+      html += `<div class="insp-section"><h4>History</h4>`;
+      html += org.history.slice(-6).reverse().map(h => `<div class="timeline-entry"><span class="tl-day">Day ${h.day}</span><span class="tl-text">${h.text}</span></div>`).join('');
+      html += `</div>`;
+    }
+    return html;
+  },
+
+  warbandHTML(wb) {
+    const members = warbandMembers(wb);
+    const leader = getAgent(wb.leaderId);
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    const loc = getSettlement(wb.locationId);
+    const dest = wb.destinationId ? getSettlement(wb.destinationId) : null;
+    let html = `<div class="insp-actions">${this.followBtn('warband', wb.id)}</div>`;
+    html += `<div class="insp-section"><h4>Warband</h4>`;
+    html += this.kv('Type', wb.type);
+    html += this.kv('Status', wb.status);
+    html += this.kv('Real size', members.length);
+    html += this.kv('Leader', leader ? this.link('agent', leader.id, leader.name) : '—');
+    if (org) html += this.kv('Organization', this.link('organization', org.id, org.name));
+    html += this.kv('Location', loc ? this.link('settlement', loc.id, loc.name) : 'ระหว่างทาง');
+    if (dest) html += this.kv('Destination', this.link('settlement', dest.id, dest.name));
+    html += this.kv('Objective', wb.objective?.type || 'idle');
+    html += this.kv('Speed', fmt(WarbandSystem.computeSpeed(wb), 2));
+    html += this.kv('Food', fmt(wb.food) + ` (${fmt(wb.supplyDays, 1)} days)`);
+    html += this.kv('Morale', fmt(wb.morale)) + this.bar(wb.morale, '#ab47bc');
+    html += this.kv('Cohesion', fmt(wb.cohesion)) + this.bar(wb.cohesion, '#66bb6a');
+    html += this.kv('Fatigue', fmt(wb.fatigue)) + this.bar(wb.fatigue, '#ff7043');
+    html += this.kv('Wounded', wb.woundedCount || 0);
+    html += `</div>`;
+    if (wb.routePath?.length > 1) {
+      html += `<div class="insp-section"><h4>Route</h4><div class="ce-desc">`;
+      html += wb.routePath.map(id => (getSettlement(id) || {}).name || '?').join(' → ');
+      html += `</div></div>`;
+    }
+    const top = members.sort((a, b) => (b.skills.leadership + b.fame) - (a.skills.leadership + a.fame)).slice(0, 5);
+    if (top.length) {
+      html += `<div class="insp-section"><h4>Top Members</h4>`;
+      for (const m of top) html += this.kv(this.link('agent', m.id, m.name), m.profession);
+      html += `</div>`;
+    }
+    if (wb.history?.length) {
+      html += `<div class="insp-section"><h4>Recent</h4>`;
+      html += wb.history.slice(-5).reverse().map(h => `<div class="timeline-entry"><span class="tl-day">Day ${h.day}</span><span class="tl-text">${h.text}</span></div>`).join('');
+      html += `</div>`;
+    }
+    return html;
   }
 };
-
-/* ── Sandbox Tools ── */
 const SandboxTools = {
   needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal', 'setFormation']),
 
@@ -10283,6 +11636,88 @@ const SandboxTools = {
         def.formation = 'defensive';
         LargeBattlefieldSystem.runLargeBattle([atk], [def], { settlementId: s.id, label: s.name, terrainType: 'plain', isSiege: true, siegeEquipment: { ladders: 2, ram: 1, tower: 0, ready: true } });
         EventSystem.add('war', `🏰 [Sandbox] เริ่มการโจมตีป้อม${s.name}`);
+      },
+      createRecruitmentOffer: () => {
+        const s = pick(marketSettlements());
+        const leader = agentsAt(s.id).find(a => a.alive && a.skills.leadership > 3) || agentsAt(s.id)[0];
+        if (!leader) { EventSystem.add('system', '✨ [Sandbox] ไม่มี agent สำหรับสร้าง offer'); return; }
+        let org = world.organizations.find(o => o.homeSettlementId === s.id && o.status === 'active');
+        if (!org) org = createOrganization({ name: `กลุ่ม${s.name}`, type: 'militia_company', leaderId: leader.id, founderId: leader.id, homeSettlementId: s.id, memberIds: [] });
+        const offer = OrganizationSystem.postRecruitmentOffer(org, { settlementId: s.id, type: 'militia_call', quantityNeeded: 5 });
+        EventSystem.add('system', offer ? `📢 [Sandbox] สร้างประกาศรับสมัครที่${s.name} (ไม่ spawn คน)` : '✨ สร้าง offer ไม่สำเร็จ');
+      },
+      encourageMilitia: () => {
+        const s = pick(marketSettlements());
+        const org = createOrganization({ name: `อาสาสมัคร${s.name}`, type: 'militia_company', homeSettlementId: s.id, leaderId: (s.governorId || s.ownerId), memberIds: [] });
+        OrganizationSystem.postRecruitmentOffer(org, { settlementId: s.id, type: 'militia_call', quantityNeeded: 6, riskLevel: 0.3 });
+        EventSystem.add('system', `🛡 [Sandbox] ส่งเสริมอาสาสมัครที่${s.name}`);
+      },
+      fundMercenaryCompany: () => {
+        const s = pick(marketSettlements());
+        const org = world.organizations.find(o => o.type === 'mercenary_company') || createOrganization({ name: `ทหารรับจ้าง${s.name}`, type: 'mercenary_company', homeSettlementId: s.id, wealth: 100, memberIds: [] });
+        org.wealth += 150;
+        OrganizationSystem.postRecruitmentOffer(org, { settlementId: s.id, type: 'mercenary_hire', quantityNeeded: 5, rewards: { pay: 25, food: 8 } });
+        EventSystem.add('system', `💰 [Sandbox] อุดหนุน${org.name}`);
+      },
+      spawnWarbandFromAgents: () => {
+        const s = pick(marketSettlements());
+        const pool = agentsAt(s.id).filter(a => a.alive && !a.unitId && !agentMilitaryMembership(a) && MILITARY_PROFS.has(a.profession));
+        if (pool.length < 3) { EventSystem.add('system', '✨ [Sandbox] agent ไม่พอ (ต้อง ≥3 ทหารว่าง)'); return; }
+        const ids = pool.slice(0, Math.min(8, pool.length)).map(a => a.id);
+        const org = createOrganization({ name: `กองทดสอบ${s.name}`, type: 'adventurer_party', leaderId: ids[0], homeSettlementId: s.id, memberIds: [] });
+        const wb = WarbandSystem.createFromMembers(org, ids, { locationId: s.id, status: 'marching' });
+        EventSystem.add('system', `⚔ [Sandbox] สร้าง warband ${wb.name} จาก agent จริง ${ids.length} คน`);
+      },
+      forceWarbandMarch: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 0);
+        if (!wb) { EventSystem.add('system', '✨ ไม่มี warband'); return; }
+        const dest = pick(world.settlements.filter(s => s.id !== wb.locationId));
+        WarbandSystem.startMarch(wb, dest.id, 'march');
+        EventSystem.add('system', `🚶 [Sandbox] ${wb.name} เดินไป${dest.name}`);
+      },
+      forcePursuit: () => {
+        const pursuer = world.warbands.find(w => warbandMembers(w).length > 2);
+        const target = world.warbands.find(w => w.id !== pursuer?.id && warbandMembers(w).length > 0);
+        if (!pursuer || !target) { EventSystem.add('system', '✨ ต้องมี warband อย่างน้อย 2 กลุ่ม'); return; }
+        pursuer.status = 'pursuing'; pursuer.pursueTargetId = target.id;
+        WarbandSystem.startMarch(pursuer, target.locationId, 'pursue');
+        EventSystem.add('system', `🏃 [Sandbox] ${pursuer.name} ไล่ล่า ${target.name}`);
+      },
+      splitWarband: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 4);
+        if (!wb) { EventSystem.add('system', '✨ warband ต้องมี >4 คน'); return; }
+        const ids = wb.memberIds.slice(0, Math.floor(wb.memberIds.length / 2));
+        const child = WarbandSystem.splitWarband(wb, ids, { name: `${wb.name} (แยก)` });
+        EventSystem.add('system', child ? `✂️ [Sandbox] แยก ${child.name} (${ids.length} คน)` : '✨ แยกไม่สำเร็จ');
+      },
+      mergeNearbyWarbands: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 0);
+        const other = world.warbands.find(w => w.id !== wb?.id && w.locationId === wb?.locationId && warbandMembers(w).length > 0);
+        if (!wb || !other) { EventSystem.add('system', '✨ ต้องมี 2 warband ที่ตำแหน่งเดียวกัน'); return; }
+        WarbandSystem.mergeWarbands(wb, other);
+        EventSystem.add('system', `🔗 [Sandbox] รวม ${other.name} เข้า ${wb.name}`);
+      },
+      starveWarband: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 0);
+        if (!wb) return;
+        wb.food = 0; wb.supplyDays = 0;
+        EventSystem.add('system', `🍞 [Sandbox] ${wb.name} หมดเสบียง`);
+      },
+      triggerMutinyCheck: () => {
+        const org = world.organizations.find(o => o.memberIds.length > 3);
+        if (!org) return;
+        const rebel = org.memberIds.map(getAgent).find(a => a && a.alive && a.id !== org.leaderId);
+        if (rebel) OrganizationSystem.mutinyCheck(org, rebel, (rebel.memberships || []).find(m => m.organizationId === org.id));
+        EventSystem.add('system', `💥 [Sandbox] ตรวจ mutiny ใน ${org.name}`);
+      },
+      createBanditWarbandFromDeserters: () => {
+        const deserters = world.agents.filter(a => a.alive && !a.unitId && (a.profession === 'bandit' || a.wantedLevel > 1)).slice(0, 6);
+        if (deserters.length < 2) { EventSystem.add('system', '✨ ไม่มี deserter/bandit พอ'); return; }
+        const camp = world.settlements.find(s => s.type === 'camp') || pick(world.settlements);
+        for (const a of deserters) a.locationId = camp.id;
+        const org = createOrganization({ name: 'โจรหนีทหาร', type: 'bandit_gang', leaderId: deserters[0].id, homeSettlementId: camp.id, factionId: world.factions.find(f => f.isBandit)?.id, memberIds: [] });
+        WarbandSystem.createFromMembers(org, deserters.map(a => a.id), { type: 'bandit_gang', locationId: camp.id, status: 'raiding', objective: { type: 'patrol_route' } });
+        EventSystem.add('system', `☠ [Sandbox] กลุ่มโจร ${deserters.length} คนจาก agent จริง`);
       }
     };
 
@@ -10501,7 +11936,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.2';
+const SAVE_SCHEMA_VERSION = '18.3';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -10687,6 +12122,11 @@ const SaveSystem = {
     w.legendaryWeapons = w.legendaryWeapons || [];
     w.largeBattleRecords = w.largeBattleRecords || [];
     w.activeBattlefields = w.activeBattlefields || [];
+    w.organizations = w.organizations || [];
+    w.recruitmentOffers = w.recruitmentOffers || [];
+    w.musterPoints = w.musterPoints || [];
+    w.warbands = w.warbands || [];
+    w.headquarters = w.headquarters || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -10697,19 +12137,31 @@ const SaveSystem = {
     if (!w.worldName) w.worldName = data.worldName || 'Living Kingdom';
     if (w.seed == null) w.seed = data.seed || 0;
     if (!w._createdAt) w._createdAt = data.createdAt || new Date().toISOString();
-    for (const s of w.settlements) this.migrateSettlement(s);
-    for (const r of w.routes) this.migrateRoute(r);
-    for (const a of w.agents) this.migrateAgent(a);
-    for (const u of w.units) this.migrateUnit(u);
-    for (const ar of w.armies) this.migrateArmy(ar);
-    for (const f of w.factions) this.migrateFaction(f);
-    for (const wwar of w.wars) this.migrateWar(wwar);
-    for (const wh of w.warehouses) this.migrateWarehouse(wh);
-    for (const g of w.guilds) this.migrateGuild(g);
-    for (const c of w.tradeContracts) this.migrateContract(c);
-    data.schemaVersion = SAVE_SCHEMA_VERSION;
-    data.world = w;
-    return data;
+    const prevWorld = world;
+    world = w;
+    try {
+      for (const s of w.settlements) this.migrateSettlement(s);
+      for (const r of w.routes) this.migrateRoute(r);
+      for (const a of w.agents) this.migrateAgent(a, w.day);
+      for (const u of w.units) this.migrateUnit(u);
+      for (const ar of w.armies) this.migrateArmy(ar);
+      for (const f of w.factions) this.migrateFaction(f);
+      for (const wwar of w.wars) this.migrateWar(wwar);
+      for (const wh of w.warehouses) this.migrateWarehouse(wh);
+      for (const g of w.guilds) this.migrateGuild(g);
+      for (const c of w.tradeContracts) this.migrateContract(c, w.day);
+      for (const org of w.organizations) this.migrateOrganization(org);
+      for (const wb of w.warbands) this.migrateWarband(wb);
+      for (const ro of w.recruitmentOffers) this.migrateRecruitmentOffer(ro);
+      for (const mp of w.musterPoints) this.migrateMusterPoint(mp);
+      for (const hq of w.headquarters) this.migrateHeadquarters(hq);
+      data.schemaVersion = SAVE_SCHEMA_VERSION;
+      data.world = w;
+      return data;
+    } catch (e) {
+      world = prevWorld;
+      throw e;
+    }
   },
 
   migrateSettlement(s) {
@@ -10765,7 +12217,7 @@ const SaveSystem = {
     if (w.goalAchieved == null) w.goalAchieved = false;
   },
 
-  migrateAgent(a) {
+  migrateAgent(a, day) {
     a.stats = Object.assign({ hunger: 70, energy: 80, health: 100, morale: 60, wealth: 0 }, a.stats || {});
     a.inventory = Object.assign({ food: 0, wood: 0, ore: 0, tools: 0, weapon: 0, bow: 0, horse: 0, cart: 0 }, a.inventory || {});
     a.durability = a.durability || { tools: 0, weapon: 0, cart: 0 };
@@ -10777,8 +12229,9 @@ const SaveSystem = {
     a.skills = Object.assign(DEFAULT_SKILLS(), a.skills || {});
     a.traits = Object.assign({ bravery: 0.5, greed: 0.5, loyalty: 0.5, ambition: 0.5, riskTolerance: 0.5, discipline: 0.5 }, a.traits || {});
     a.memory = Object.assign({ battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 }, a.memory || {});
-    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(a.birthplaceId || a.locationId);
-    else a.memory.personal = Object.assign(defaultPersonalMemory(a.birthplaceId || a.locationId), a.memory.personal);
+    const bp = a.birthplaceId || a.locationId;
+    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(bp, day);
+    else a.memory.personal = Object.assign(defaultPersonalMemory(bp, day), a.memory.personal);
     if (!a.relationships) a.relationships = {};
     if (!a.motives) a.motives = defaultMotives();
     a.deeds = a.deeds || [];
@@ -10807,6 +12260,7 @@ const SaveSystem = {
     if (!a.derivedCombat) a.derivedCombat = defaultDerivedCombat();
     if (!a.injuries) a.injuries = [];
     if (!a.duelRecord) a.duelRecord = { wins: 0, losses: 0, kills: 0 };
+    if (!a.memberships) a.memberships = [];
     for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount', 'tool']) {
       const item = a.equipment?.[slot];
       if (!item) continue;
@@ -10882,11 +12336,62 @@ const SaveSystem = {
     g._bountyDay = g._bountyDay != null ? g._bountyDay : -99;
   },
 
-  migrateContract(c) {
+  migrateContract(c, day) {
     c.status = c.status || 'open';
     if (c.acceptedByAgentId == null) c.acceptedByAgentId = null;
     if (c.escortUnitId == null) c.escortUnitId = null;
-    c.createdDay = c.createdDay != null ? c.createdDay : world.day;
+    c.createdDay = c.createdDay != null ? c.createdDay : (day || 0);
+  },
+
+  migrateOrganization(org) {
+    org.memberIds = org.memberIds || [];
+    org.activeWarbandIds = org.activeWarbandIds || [];
+    org.activeContractIds = org.activeContractIds || [];
+    org.history = org.history || [];
+    org.relations = org.relations || {};
+    org.ranks = org.ranks || defaultOrgRanks();
+    org.roles = org.roles || {};
+    org.recruitmentPolicy = org.recruitmentPolicy || { open: true, minSkill: 0, payRate: 1, riskTolerance: 0.5 };
+    org.requirements = org.requirements || {};
+    org.benefits = org.benefits || {};
+    org.rules = org.rules || {};
+    if (!org.status) org.status = 'active';
+    org.memberIds = org.memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
+  },
+
+  migrateWarband(wb) {
+    wb.memberIds = (wb.memberIds || []).filter(id => { const a = getAgent(id); return a && a.alive; });
+    wb.unitIds = wb.unitIds || [];
+    wb.routePath = wb.routePath || [];
+    wb.history = wb.history || [];
+    wb.objective = wb.objective || { type: 'idle' };
+    if (!wb.composition) wb.composition = defaultUnitComposition();
+    wb.size = wb.memberIds.length;
+    if (!wb.leaderId || !getAgent(wb.leaderId)?.alive) {
+      const m = wb.memberIds.map(getAgent).filter(a => a && a.alive);
+      if (m.length) wb.leaderId = m.reduce((b, a) => (a.skills.leadership > b.skills.leadership ? a : b), m[0]).id;
+    }
+  },
+
+  migrateRecruitmentOffer(ro) {
+    ro.applicants = ro.applicants || [];
+    ro.acceptedAgentIds = ro.acceptedAgentIds || [];
+    ro.requirements = ro.requirements || {};
+    ro.rewards = ro.rewards || { pay: 10, food: 5 };
+    if (!ro.status) ro.status = 'open';
+  },
+
+  migrateMusterPoint(mp) {
+    mp.expectedAgentIds = mp.expectedAgentIds || [];
+    mp.arrivedAgentIds = mp.arrivedAgentIds || [];
+    mp.missingAgentIds = mp.missingAgentIds || [];
+    if (!mp.status) mp.status = 'pending';
+  },
+
+  migrateHeadquarters(hq) {
+    hq.storage = Object.assign({ food: 0, gold: 0, weapons: 0 }, hq.storage || {});
+    if (hq.beds == null) hq.beds = 10;
+    if (hq.security == null) hq.security = 40;
   },
 
   applyPostLoad() {
@@ -10912,6 +12417,7 @@ const SaveSystem = {
     if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
+    if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
   },
 
   applyUiPrefs(prefs) {
