@@ -294,17 +294,38 @@ const SETTLEMENT_RADIUS = { village: 9, town: 16, fort: 12, castle: 20, camp: 10
 
 /* ── Phase 10.5: Equipment & combat definitions ── */
 const WEAPON_DEFS = {
-  sword:  { price: 60,  attack: 12, defense: 4,  accuracy: 0.75, durability: 80,  prof: 'swordsman' },
-  spear:  { price: 45,  attack: 10, defense: 6,  accuracy: 0.7,  durability: 70,  prof: 'spearman', antiCavalry: 1.35 },
-  axe:    { price: 50,  attack: 14, defense: 2,  accuracy: 0.65, durability: 65,  prof: 'swordsman' },
-  bow:    { price: 45,  attack: 11, defense: 0,  accuracy: 0.8,  durability: 55,  prof: 'archer', ranged: true },
-  shield: { price: 35,  attack: 2,  defense: 10, accuracy: 0,   durability: 90,  prof: null, antiRanged: 0.65 }
+  sword:  { price: 60,  attack: 12, defense: 4,  accuracy: 0.75, durability: 80,  prof: 'swordsman',
+    reach: 1.0, baseDamage: 12, damageType: 'slash', speed: 1.0, weight: 3, armorPierce: 0.1,
+    shieldDamage: 0.8, staminaCost: 8, idealRange: 'melee', closePenalty: 0, horsebackUsable: true, formationBonus: 0, duelBonus: 0.15 },
+  spear:  { price: 45,  attack: 10, defense: 6,  accuracy: 0.7,  durability: 70,  prof: 'spearman', antiCavalry: 1.35,
+    reach: 1.8, baseDamage: 10, damageType: 'pierce', speed: 0.9, weight: 2.5, armorPierce: 0.2,
+    shieldDamage: 0.5, staminaCost: 7, idealRange: 'reach', closePenalty: 0.35, horsebackUsable: false, formationBonus: 0.2, duelBonus: -0.05 },
+  axe:    { price: 50,  attack: 14, defense: 2,  accuracy: 0.65, durability: 65,  prof: 'swordsman',
+    reach: 0.9, baseDamage: 15, damageType: 'blunt', speed: 0.7, weight: 4.5, armorPierce: 0.25,
+    shieldDamage: 1.4, staminaCost: 14, idealRange: 'melee', closePenalty: 0.05, horsebackUsable: false, formationBonus: 0.05, duelBonus: 0.05 },
+  bow:    { price: 45,  attack: 11, defense: 0,  accuracy: 0.8,  durability: 55,  prof: 'archer', ranged: true,
+    reach: 3.0, baseDamage: 9, damageType: 'pierce', speed: 0.85, weight: 1.5, armorPierce: 0.15,
+    shieldDamage: 0, staminaCost: 6, idealRange: 'missile', closePenalty: 0.5, horsebackUsable: true, formationBonus: 0.1, duelBonus: -0.2 },
+  dagger: { price: 25,  attack: 7,  defense: 1,  accuracy: 0.82, durability: 50,  prof: null,
+    reach: 0.5, baseDamage: 7, damageType: 'pierce', speed: 1.2, weight: 1, armorPierce: 0.05,
+    shieldDamage: 0.3, staminaCost: 5, idealRange: 'close', closePenalty: 0, horsebackUsable: false, formationBonus: 0, duelBonus: 0.1 },
+  shield: { price: 35,  attack: 2,  defense: 10, accuracy: 0,   durability: 90,  prof: null, antiRanged: 0.65,
+    reach: 0.6, baseDamage: 2, damageType: 'blunt', speed: 0.8, weight: 4, armorPierce: 0,
+    shieldDamage: 0, staminaCost: 5, idealRange: 'melee', closePenalty: 0, horsebackUsable: false, formationBonus: 0.25, duelBonus: 0 }
 };
 const ARMOR_DEFS = {
-  cloth:     { price: 25,  armor: 4,  dodge: 0.05, fatigue: 1.0,  durability: 40 },
-  leather:   { price: 55,  armor: 10, dodge: 0.08, fatigue: 1.1,  durability: 60 },
-  chainmail: { price: 120, armor: 18, dodge: 0.03, fatigue: 1.25, durability: 90 },
-  plate:     { price: 200, armor: 28, dodge: 0.01, fatigue: 1.45, durability: 120 }
+  cloth:     { price: 25,  armor: 4,  dodge: 0.05, fatigue: 1.0,  durability: 40,
+    armorValue: 4, coverage: 0.5, weight: 2, fatiguePenalty: 0, dodgePenalty: 0,
+    arrowResistance: 0.05, bluntResistance: 0.05, slashResistance: 0.08, pierceResistance: 0.05 },
+  leather:   { price: 55,  armor: 10, dodge: 0.08, fatigue: 1.1,  durability: 60,
+    armorValue: 10, coverage: 0.65, weight: 4, fatiguePenalty: 0.05, dodgePenalty: 0.02,
+    arrowResistance: 0.1, bluntResistance: 0.1, slashResistance: 0.15, pierceResistance: 0.08 },
+  chainmail: { price: 120, armor: 18, dodge: 0.03, fatigue: 1.25, durability: 90,
+    armorValue: 18, coverage: 0.8, weight: 12, fatiguePenalty: 0.12, dodgePenalty: 0.08,
+    arrowResistance: 0.15, bluntResistance: 0.2, slashResistance: 0.35, pierceResistance: 0.12 },
+  plate:     { price: 200, armor: 28, dodge: 0.01, fatigue: 1.45, durability: 120,
+    armorValue: 28, coverage: 0.92, weight: 22, fatiguePenalty: 0.22, dodgePenalty: 0.15,
+    arrowResistance: 0.25, bluntResistance: 0.35, slashResistance: 0.3, pierceResistance: 0.28 }
 };
 const MOUNT_DEFS = {
   horse: { price: 120, attack: 4, speed: 50, charge: 1.3, durability: 70, prof: 'cavalry' }
@@ -328,12 +349,75 @@ function emptyEquipment() {
   return { mainHand: null, offHand: null, ranged: null, armor: null, mount: null, tool: null };
 }
 
-function equipSlot(type, slot) {
+function equipSlot(type, slot, quality) {
   if (!type) return null;
   const d = WEAPON_DEFS[type] || ARMOR_DEFS[type] || MOUNT_DEFS[type] || (type === 'tool' ? TOOL_DEF : null);
   if (!d) return null;
-  return { type, slot, durability: d.durability || 50, maxDurability: d.durability || 50 };
+  const q = quality || 'common';
+  const qMod = { common: 1, fine: 1.12, masterwork: 1.25 }[q] || 1;
+  const maxD = Math.floor((d.durability || 50) * qMod);
+  const item = {
+    id: uid(), type, slot, quality: q,
+    durability: maxD, maxDurability: maxD,
+    kills: 0, fame: 0, ownerHistory: []
+  };
+  if (WEAPON_DEFS[type]) {
+    Object.assign(item, {
+      reach: d.reach, baseDamage: Math.floor((d.baseDamage || d.attack) * qMod),
+      damageType: d.damageType || 'slash', speed: d.speed || 1, weight: d.weight || 2,
+      armorPierce: d.armorPierce || 0, staminaCost: d.staminaCost || 8,
+      idealRange: d.idealRange || 'melee', closePenalty: d.closePenalty || 0
+    });
+  }
+  if (ARMOR_DEFS[type]) {
+    Object.assign(item, {
+      armorValue: Math.floor((d.armorValue || d.armor) * qMod), coverage: d.coverage || 0.6,
+      weight: d.weight || 5, fatiguePenalty: d.fatiguePenalty || 0, dodgePenalty: d.dodgePenalty || 0,
+      arrowResistance: d.arrowResistance || 0.1, bluntResistance: d.bluntResistance || 0.1,
+      slashResistance: d.slashResistance || 0.1, pierceResistance: d.pierceResistance || 0.1
+    });
+  }
+  return item;
 }
+
+function seededRand(seed) {
+  let s = ((seed || 1) * 1103515245 + 12345) >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0xffffffff; };
+}
+
+function defaultCombatBody(agentId) {
+  const r = seededRand(agentId || 1);
+  const builds = ['light', 'average', 'heavy'];
+  const build = builds[Math.floor(r() * 3)];
+  return {
+    height: 0.85 + r() * 0.3,
+    build,
+    dominantHand: r() > 0.12 ? 'right' : 'left',
+    reachBonus: build === 'light' ? 0.08 : build === 'heavy' ? -0.06 : 0,
+    woundTolerance: 0.4 + r() * 0.4,
+    painTolerance: 0.35 + r() * 0.45,
+    balance: 0.4 + r() * 0.5,
+    reflex: 0.35 + r() * 0.5
+  };
+}
+
+function defaultDerivedCombat() {
+  return {
+    meleeAttack: 0, meleeDefense: 0, rangedAttack: 0, block: 0, parry: 0, dodge: 0,
+    armor: 0, armorPenetration: 0, reach: 1, speed: 1, stamina: 100, staminaMax: 100,
+    staminaRegen: 5, moraleResistance: 0, knockdownResistance: 0, injuryResistance: 0, commandPresence: 0
+  };
+}
+
+function defaultUnitComposition() {
+  return { swordsmen: 0, spearmen: 0, archers: 0, cavalry: 0, shieldmen: 0, scouts: 0, engineers: 0, militia: 0, veterans: 0 };
+}
+
+const RANGE_BANDS = ['far', 'missile', 'reach', 'melee', 'close', 'grapple'];
+const ATTACK_DIRS = ['overhead', 'left', 'right', 'thrust'];
+const DEFENSE_ACTIONS = ['block_high', 'block_left', 'block_right', 'parry', 'shield_block', 'dodge', 'armor_absorb'];
+const FORMATIONS = ['loose', 'shield_wall', 'spear_line', 'skirmish', 'charge', 'defensive', 'ambush', 'retreat'];
+const MAX_BATTLE_REPORTS = 60;
 
 function syncLegacyInventory(a) {
   if (!a.equipment) a.equipment = emptyEquipment();
@@ -788,9 +872,19 @@ function createAgent(opt) {
     tradeReputation: opt.tradeReputation != null ? opt.tradeReputation : 50,
     contractsCompleted: 0,
     contractsFailed: 0,
-    warehouseIds: []
+    warehouseIds: [],
+    // ── Phase 18.1: Mount & Blade text combat ──
+    body: opt.body || null,
+    derivedCombat: null,
+    injuries: opt.injuries || [],
+    duelRecord: opt.duelRecord || { wins: 0, losses: 0, kills: 0 }
   };
   world.agents.push(a);
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.ensureAgent(a);
+  else {
+    if (!a.body) a.body = defaultCombatBody(a.id);
+    if (!a.derivedCombat) a.derivedCombat = defaultDerivedCombat();
+  }
   return a;
 }
 
@@ -814,10 +908,14 @@ function createUnit(opt) {
     equipmentPower: 0,
     combatPower: 0,
     bonds: defaultUnitBonds(),
-    retreating: false
+    retreating: false,
+    // ── Phase 18.1 ──
+    composition: opt.composition || defaultUnitComposition(),
+    formation: opt.formation || 'loose'
   };
   world.units.push(u);
   for (const id of u.memberIds) { const m = getAgent(id); if (m) m.unitId = u.id; }
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(u);
   return u;
 }
 
@@ -857,7 +955,7 @@ function getRoute(aId, bId) {
 }
 function agentsAt(settlementId) { return world.agents.filter(a => a.alive && a.locationId === settlementId && !a.travel); }
 function populationOf(s) { return agentsAt(s.id).length; }
-function unitMembers(u) { return u.memberIds.map(getAgent).filter(a => a && a.alive); }
+function unitMembers(u) { return (u?.memberIds || []).map(getAgent).filter(a => a && a.alive); }
 function marketSettlements() { return world.settlements.filter(s => s.type !== 'camp'); }
 
 /* ── สร้างโลก ── */
@@ -874,6 +972,7 @@ function generateWorld() {
     treaties: [], vassalContracts: [],
     guilds: [], warehouses: [], tradeContracts: [],
     supplyLines: [], armyCamps: [], scoutReports: [],
+    battleReports: [], legendaryWeapons: [],
     marketIndex: defaultMarketIndex(),
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0, contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0 }
   };
@@ -1041,6 +1140,7 @@ function generateWorld() {
   MarketTradeSystem.initWorld();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -1076,6 +1176,7 @@ function seedSkillForProfession(ag, prof) {
   if (['farmer', 'woodcutter', 'miner'].includes(prof) && chance(0.6)) {
     ag.equipment.tool = equipSlot('tool', 'tool');
   }
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.ensureAgent(ag);
   AmbitionSystem.planFor(ag);
 }
 
@@ -1273,6 +1374,584 @@ const SettlementMetrics = {
   }
 };
 
+
+/* ═══════════ Phase 18.1: Mount & Blade Text Combat Core ═══════════ */
+const TextCombatCore = {
+  ensureAgent(a) {
+    if (!a || !a.alive) return;
+    syncLegacyInventory(a);
+    if (!a.body) a.body = defaultCombatBody(a.id);
+    if (!a.derivedCombat) a.derivedCombat = defaultDerivedCombat();
+    if (!a.injuries) a.injuries = [];
+    if (!a.duelRecord) a.duelRecord = { wins: 0, losses: 0, kills: 0 };
+    if (a._stamina == null) a._stamina = 100;
+    this.recalcDerivedCombat(a);
+  },
+
+  getWeaponSkill(a, weaponType) {
+    if (!weaponType) return a.skills.fighting || 0;
+    const map = { sword: 'sword', spear: 'spear', axe: 'sword', bow: 'archery', dagger: 'sword' };
+    return (a.skills[map[weaponType] || 'fighting'] || 0) + a.skills.fighting * 0.3;
+  },
+
+  getArmorPenalty(a) {
+    const arm = a.equipment?.armor;
+    if (!arm || arm.durability <= 0) return { fatigue: 0, dodge: 0, speed: 0 };
+    const d = ARMOR_DEFS[arm.type] || {};
+    const ratio = arm.durability / Math.max(arm.maxDurability, 1);
+    return {
+      fatigue: (d.fatiguePenalty || 0) * ratio,
+      dodge: (d.dodgePenalty || 0) * ratio,
+      speed: (d.weight || 5) * 0.008 * ratio
+    };
+  },
+
+  getInjuryPenalty(a) {
+    let atk = 0, def = 0, spd = 0, per = 0;
+    for (const inj of (a.injuries || []).filter(i => !i.healed)) {
+      const s = (inj.severity || 1) / 10;
+      if (inj.type === 'broken_arm') atk += 0.25 * s;
+      if (inj.type === 'broken_leg' || inj.type === 'limp') spd += 0.3 * s;
+      if (inj.type === 'concussion' || inj.type === 'trauma') per += 0.2 * s;
+      if (inj.type === 'deep_cut') def += 0.1 * s;
+      if (inj.type === 'maimed') atk += 0.4 * s;
+    }
+    return { atk, def, spd, per };
+  },
+
+  recalcDerivedCombat(a) {
+    if (!a || !a.alive) return defaultDerivedCombat();
+    syncLegacyInventory(a);
+    if (!a.body) a.body = defaultCombatBody(a.id);
+    if (!a.derivedCombat) a.derivedCombat = defaultDerivedCombat();
+    const c = a.combatStats, sk = a.skills, b = a.body;
+    const ap = this.getArmorPenalty(a), ip = this.getInjuryPenalty(a);
+    const mh = a.equipment?.mainHand, rg = a.equipment?.ranged, sh = a.equipment?.offHand, arm = a.equipment?.armor;
+    const buildMod = b.build === 'light' ? { dodge: 0.08, spd: 0.1, kd: -0.1 } : b.build === 'heavy' ? { dodge: -0.06, spd: -0.08, kd: 0.15 } : {};
+    const hungerMod = a.stats.hunger < 30 ? 0.85 : 1;
+    const fatMod = a.stats.energy < 40 ? 0.88 : 1;
+    let meleeAtk = c.strength * 1.1 + sk.fighting * 1.8 + this.getWeaponSkill(a, mh?.type);
+    let meleeDef = c.endurance * 0.7 + c.discipline * 0.5 + (sh?.type === 'shield' ? 8 : 0);
+    let rangedAtk = c.perception * 0.8 + sk.archery * 2;
+    let armor = 0, reach = 1 + (b.reachBonus || 0);
+    if (mh?.durability > 0) { meleeAtk += (mh.baseDamage || WEAPON_DEFS[mh.type]?.attack || 0) * 0.5; reach += mh.reach || 0; }
+    if (rg?.durability > 0) rangedAtk += (rg.baseDamage || 8);
+    if (arm?.durability > 0) armor += arm.armorValue || ARMOR_DEFS[arm.type]?.armor || 0;
+    const dc = a.derivedCombat;
+    dc.meleeAttack = Math.max(1, (meleeAtk - ip.atk * 20) * hungerMod * fatMod);
+    dc.meleeDefense = Math.max(1, (meleeDef - ip.def * 15) * hungerMod);
+    dc.rangedAttack = Math.max(0, rangedAtk * hungerMod);
+    dc.block = clamp(0.2 + c.discipline * 0.04 + (sh?.type === 'shield' ? 0.25 : 0), 0, 0.85);
+    dc.parry = clamp(0.1 + b.reflex * 0.25 + sk.sword * 0.03, 0, 0.7);
+    dc.dodge = clamp(0.08 + c.agility * 0.025 + (buildMod.dodge || 0) - ap.dodge, 0, 0.55);
+    dc.armor = armor;
+    dc.armorPenetration = clamp(0.05 + (mh?.armorPierce || 0) + sk.fighting * 0.02, 0, 0.5);
+    dc.reach = reach;
+    dc.speed = clamp(0.7 + c.agility * 0.04 + (buildMod.spd || 0) - ap.speed - ip.spd, 0.4, 1.4);
+    dc.staminaMax = Math.floor(80 + c.endurance * 6 - (arm?.weight || 0) * 1.2);
+    dc.stamina = clamp(a._stamina != null ? a._stamina : dc.staminaMax, 0, dc.staminaMax);
+    dc.staminaRegen = clamp(4 + c.endurance * 0.4 - ap.fatigue * 10, 1, 12);
+    dc.moraleResistance = c.courage * 0.08 + c.discipline * 0.06 + sk.fighting * 0.05;
+    dc.knockdownResistance = clamp(0.2 + b.balance * 0.4 + (buildMod.kd || 0), 0, 0.9);
+    dc.injuryResistance = clamp(0.15 + b.woundTolerance * 0.35 + c.endurance * 0.02, 0.05, 0.85);
+    dc.commandPresence = sk.leadership * 1.5 + sk.tactics * 0.8 + c.charisma * 0.3;
+    for (const k of Object.keys(dc)) {
+      if (typeof dc[k] === 'number' && !Number.isFinite(dc[k])) dc[k] = 0;
+    }
+    a.derivedStats = null;
+    return dc;
+  },
+
+  applyInjury(a, type, severity, sourceAgentId, sourceWeaponId) {
+    this.ensureAgent(a);
+    const inj = {
+      type, severity: severity || randInt(2, 6), day: world.day,
+      sourceAgentId: sourceAgentId || null, sourceWeaponId: sourceWeaponId || null,
+      healed: false, permanent: ['scar', 'limp', 'maimed', 'trauma'].includes(type)
+    };
+    a.injuries.push(inj);
+    if (a.injuries.length > 12) a.injuries.shift();
+    if (type === 'trauma' && typeof AgentMemorySystem !== 'undefined') {
+      AgentMemorySystem.recordPersonalEvent(a, 'trauma', 'บาดแผลทางจิตใจ', 'จากสนามรบ', 3, { agents: sourceAgentId ? [sourceAgentId] : [] });
+    }
+    if (type === 'scar') a.fame = (a.fame || 0) + 1;
+    this.recalcDerivedCombat(a);
+    return inj;
+  },
+
+  tickInjuries() {
+    for (const a of world.agents) {
+      if (!a.alive || !a.injuries?.length) continue;
+      const s = getSettlement(a.locationId);
+      const healBonus = s ? (s.prosperity / 100) * 0.3 + (s.buildings?.includes('Temple') ? 0.2 : 0) : 0;
+      for (const inj of a.injuries) {
+        if (inj.healed || inj.permanent) continue;
+        if (chance(0.08 + healBonus)) {
+          inj.healed = true;
+          if (inj.type === 'minor_cut' || inj.type === 'arrow_wound') inj.healed = true;
+        } else if (inj.type === 'deep_cut' && chance(0.02) && a.stats.health < 25) {
+          NeedSystem.kill(a, 'เสียชีวิตจากบาดแผล');
+        }
+      }
+      this.recalcDerivedCombat(a);
+    }
+    for (const a of world.agents) {
+      if (!a.alive) continue;
+      this.ensureAgent(a);
+      const dc = a.derivedCombat;
+      a._stamina = clamp((a._stamina || dc.staminaMax) + dc.staminaRegen * 0.5, 0, dc.staminaMax);
+      dc.stamina = a._stamina;
+    }
+  },
+
+  rangeBandPenalty(weapon, band) {
+    if (!weapon) return 0.5;
+    const ideal = weapon.idealRange || 'melee';
+    const map = { far: 0, missile: 1, reach: 2, melee: 3, close: 4, grapple: 5 };
+    const diff = Math.abs((map[ideal] || 3) - (map[band] || 3));
+    let pen = diff * 0.18;
+    if (band === 'close' && weapon.closePenalty) pen += weapon.closePenalty;
+    return clamp(1 - pen, 0.25, 1.15);
+  },
+
+  pickDefense(defender, attackDir) {
+    const dc = defender.derivedCombat || this.recalcDerivedCombat(defender);
+    const hasShield = defender.equipment?.offHand?.type === 'shield';
+    if (attackDir === 'overhead' && dc.block > 0.3) return hasShield ? 'shield_block' : 'block_high';
+    if (attackDir === 'thrust' && dc.parry > 0.25 && chance(0.4)) return 'parry';
+    if (attackDir === 'left') return hasShield ? 'shield_block' : 'block_left';
+    if (attackDir === 'right') return hasShield ? 'shield_block' : 'block_right';
+    if (dc.dodge > 0.2 && defender.body?.build === 'light' && chance(0.35)) return 'dodge';
+    if (dc.armor > 15 && chance(0.3)) return 'armor_absorb';
+    return pick(['block_left', 'block_right', 'dodge']);
+  },
+
+  calcMomentum(attacker, defender, weapon, mounted, terrainType) {
+    const dc = attacker.derivedCombat;
+    let m = dc.speed + (weapon?.speed || 1) * 0.3;
+    if (mounted) m += 0.45;
+    if (terrainType === 'plain' || terrainType === 'road') m += 0.1;
+    if (terrainType === 'forest' || terrainType === 'marsh') m -= 0.15;
+    m -= (defender.derivedCombat?.meleeDefense || 0) * 0.008;
+    return clamp(m, 0.3, 1.8);
+  },
+
+  resolveDuel(attacker, defender, context) {
+    context = context || {};
+    this.ensureAgent(attacker); this.ensureAgent(defender);
+    const maxRounds = context.maxRounds || randInt(3, 8);
+    let rangeBand = context.rangeBand || (context.mounted ? 'reach' : 'melee');
+    const log = [];
+    let aDmg = 0, dDmg = 0;
+    const injuries = [];
+    let killed = false, fled = false, weaponBroken = false, shieldBroken = false;
+    attacker._stamina = attacker.derivedCombat.staminaMax;
+    defender._stamina = defender.derivedCombat.staminaMax;
+
+    for (let round = 1; round <= maxRounds; round++) {
+      if (!attacker.alive || !defender.alive) break;
+      const aWpn = attacker.equipment?.mainHand || attacker.equipment?.ranged;
+      const intents = context.mounted ? ['charge', 'attack', 'attack', 'feint'] : ['attack', 'attack', 'feint', 'shoot', 'keep_distance'];
+      let aIntent = pick(intents);
+      if (rangeBand === 'missile' && attacker.equipment?.ranged?.durability > 0) aIntent = 'shoot';
+      if (attacker._stamina < 15) aIntent = chance(0.5) ? 'retreat' : 'defend';
+      if (aIntent === 'retreat') { fled = true; log.push(`R${round}: ${attacker.name.split(' ')[0]} ถอยหนี`); break; }
+      if (aIntent === 'keep_distance' && rangeBand !== 'missile') { rangeBand = RANGE_BANDS[Math.max(0, RANGE_BANDS.indexOf(rangeBand) - 1)]; continue; }
+      if (aIntent === 'close_distance') { rangeBand = RANGE_BANDS[Math.min(RANGE_BANDS.length - 1, RANGE_BANDS.indexOf(rangeBand) + 1)]; continue; }
+
+      const atkDir = aIntent === 'shoot' ? 'thrust' : pick(ATTACK_DIRS);
+      const defAct = this.pickDefense(defender, atkDir);
+      const aDC = attacker.derivedCombat, dDC = defender.derivedCombat;
+      const wpn = aIntent === 'shoot' ? attacker.equipment?.ranged : aWpn;
+      const staminaCost = wpn?.staminaCost || (atkDir === 'overhead' ? 10 : 8);
+      attacker._stamina -= staminaCost;
+
+      const rangeMod = this.rangeBandPenalty(wpn, rangeBand);
+      const skillMod = 1 + this.getWeaponSkill(attacker, wpn?.type) * 0.06;
+      const initA = aDC.speed * 10 + attacker.combatStats.agility * 0.5 + (atkDir === 'overhead' ? -2 : 0);
+      const initD = dDC.speed * 8 + (defender.body?.reflex || 0) * 10;
+      const surprise = context.surprise ? 1.15 : 1;
+      let hitChance = clamp(0.35 + aDC.meleeAttack * 0.015 * rangeMod * skillMod * surprise - dDC.meleeDefense * 0.01, 0.08, 0.92);
+      if (aIntent === 'shoot') hitChance = clamp(0.3 + aDC.rangedAttack * 0.02 * rangeMod - dDC.dodge * 0.5, 0.1, 0.85);
+
+      let damage = 0;
+      if (chance(hitChance)) {
+        const momentum = this.calcMomentum(attacker, defender, wpn, context.mounted, context.terrain);
+        const wRatio = (wpn?.durability || 0) / Math.max(wpn?.maxDurability || wpn?.durability || 1, 1);
+        const base = (wpn?.baseDamage || 8) * clamp(wRatio, 0, 1);
+        const dirMod = atkDir === 'overhead' ? 1.2 : atkDir === 'thrust' ? 1.05 : 1;
+        let armorRed = dDC.armor * 0.35;
+        const dtype = wpn?.damageType || 'slash';
+        const arm = defender.equipment?.armor;
+        if (arm) {
+          const res = arm[`${dtype}Resistance`] || arm.slashResistance || 0.1;
+          armorRed *= (1 - res);
+        }
+        if (defAct === 'shield_block') { armorRed += 12; if (defender.equipment?.offHand) defender.equipment.offHand.durability -= randInt(3, 8); }
+        if (defAct === 'parry' && chance(dDC.parry)) { damage = 0; log.push(`R${round}: ${defender.name.split(' ')[0]} ปัดป้อง`); }
+        else if (defAct === 'dodge' && chance(dDC.dodge)) { damage = 0; }
+        else if (defAct === 'armor_absorb') { armorRed *= 1.3; }
+        damage = Math.max(0, base * dirMod * momentum * skillMod - armorRed);
+        damage *= rand(0.75, 1.15);
+        if (!Number.isFinite(damage)) damage = 0;
+        defender.stats.health -= damage;
+        dDmg += damage;
+        defender._stamina -= Math.min(8, damage * 0.4);
+
+        if (damage > 8 && chance(0.35 - defender.derivedCombat.injuryResistance)) {
+          const itype = aIntent === 'shoot' ? 'arrow_wound' : damage > 14 ? 'deep_cut' : 'minor_cut';
+          injuries.push({ agentId: defender.id, ...this.applyInjury(defender, itype, Math.ceil(damage / 4), attacker.id, wpn?.id) });
+        }
+        if (defender.stats.health <= 0) {
+          killed = true;
+          attacker.duelRecord.kills++;
+          if (wpn) wpn.kills = (wpn.kills || 0) + 1;
+          NeedSystem.kill(defender, 'ตายในการดวล');
+          log.push(`R${round}: ${attacker.name.split(' ')[0]} ${aIntent === 'shoot' ? 'ยิง' : 'โจมตี'}ทำให้${defender.name.split(' ')[0]} ล้ม`);
+          break;
+        }
+        log.push(`R${round}: ${attacker.name.split(' ')[0]}→${defender.name.split(' ')[0]} ${Math.floor(damage)} dmg (${defAct})`);
+      } else {
+        log.push(`R${round}: ${defender.name.split(' ')[0]} หลบ/ป้องกัน`);
+      }
+
+      if (defender._stamina < 10 && chance(0.25)) {
+        defender.stats.morale = clamp(defender.stats.morale - 12, 0, 100);
+        if (chance(0.3)) { fled = true; log.push(`${defender.name.split(' ')[0]} หนีจากการดวล`); break; }
+      }
+
+      if (rangeBand === 'melee' && chance(0.2)) rangeBand = 'close';
+      if (wpn && wpn.durability <= 0) { weaponBroken = true; break; }
+    }
+
+    const winner = killed || fled ? attacker : (dDmg > aDmg ? attacker : defender);
+    const loser = winner.id === attacker.id ? defender : attacker;
+    if (winner.id === attacker.id) { attacker.duelRecord.wins++; defender.duelRecord.losses++; }
+    else { defender.duelRecord.wins++; attacker.duelRecord.losses++; }
+
+    if (typeof AgentMemorySystem !== 'undefined') {
+      if (winner.id === attacker.id) AgentMemorySystem.recordPersonalEvent(attacker, 'won_duel', 'ชนะการดวล', loser.name, 2, { agents: [loser.id] });
+      else AgentMemorySystem.recordPersonalEvent(defender, 'won_duel', 'ชนะการดวล', attacker.name, 2, { agents: [attacker.id] });
+      if (killed) AgentMemorySystem.recordPersonalEvent(attacker, 'killed_enemy', 'สังหารศัตรูในการดวล', loser.name, 3, { agents: [loser.id] });
+    }
+    this.checkLegendaryWeapon(attacker.equipment?.mainHand || attacker.equipment?.ranged, attacker, 'duel_kill');
+
+    return {
+      winnerId: winner.id, loserId: loser.id, rounds: log.length,
+      winnerDamage: winner.id === attacker.id ? aDmg : dDmg,
+      loserDamage: winner.id === attacker.id ? dDmg : aDmg,
+      injuries, killed, fled, weaponBroken, shieldBroken,
+      moraleShock: killed ? 15 : fled ? 10 : 5,
+      notableLog: log.slice(-4).join(' · '),
+      fameDelta: killed ? 3 : (winner.duelRecord.wins % 3 === 0 ? 1 : 0)
+    };
+  },
+
+  sampleFighters(unit, maxN) {
+    const members = unitMembers(unit);
+    if (!members.length) return [];
+    const leader = getAgent(unit.leaderId);
+    const picks = new Set();
+    if (leader?.alive) picks.add(leader.id);
+    const veterans = members.filter(m => (m.memory?.survivedBattles || 0) >= 2 || m.rank === 'veteran');
+    for (const v of veterans.slice(0, 3)) picks.add(v.id);
+    const pool = members.filter(m => !picks.has(m.id));
+    while (picks.size < Math.min(maxN, members.length) && pool.length) picks.add(pick(pool).id);
+    return [...picks].map(getAgent).filter(a => a && a.alive);
+  },
+
+  updateUnitComposition(u) {
+    if (!u.composition) u.composition = defaultUnitComposition();
+    const c = defaultUnitComposition();
+    for (const m of unitMembers(u)) {
+      TextCombatCore.ensureAgent(m);
+      syncLegacyInventory(m);
+      const role = CombatSystem.inferProfession(m);
+      if ((m.memory?.survivedBattles || 0) >= 2) c.veterans++;
+      if (role === 'archer') c.archers++;
+      else if (role === 'cavalry') c.cavalry++;
+      else if (role === 'spearman') c.spearmen++;
+      else if (m.equipment?.offHand?.type === 'shield') c.shieldmen++;
+      else if (role === 'swordsman') c.swordsmen++;
+      else if (m.skills.crafting > 2) c.engineers++;
+      else if (m.skills.perception > 3 || m.combatStats.perception > 7) c.scouts++;
+      else c.militia++;
+    }
+    u.composition = c;
+    return c;
+  },
+
+  pickFormation(unit, enemyComp, terrainType, strategy) {
+    const c = this.updateUnitComposition(unit);
+    if (strategy === 'cut_supply' || strategy === 'raid_economy') return 'skirmish';
+    if (strategy === 'siege' || strategy === 'defensive') return 'defensive';
+    if (c.cavalry > c.spearmen && (terrainType === 'plain' || terrainType === 'road')) return 'charge';
+    if (c.spearmen > c.cavalry && enemyComp?.cavalry > 2) return 'spear_line';
+    if (c.shieldmen > 3 && c.archers > 2) return 'shield_wall';
+    if (c.archers > c.swordsmen) return 'skirmish';
+    return 'loose';
+  },
+
+  formationMod(formation, role) {
+    const m = {
+      shield_wall: { def: 1.2, arrow: 0.65, spd: 0.75 },
+      spear_line: { def: 1.15, cav: 1.35, close: 0.85 },
+      skirmish: { rng: 1.2, cav: 0.85 },
+      charge: { atk: 1.35, fat: 1.4 },
+      defensive: { mor: 1.2, def: 1.1 },
+      ambush: { surp: 1.4 },
+      retreat: { cas: 0.7 },
+      loose: { atk: 1, def: 1 }
+    }[formation] || { atk: 1, def: 1 };
+    if (role === 'archer') return m.rng || 1;
+    if (role === 'cavalry') return m.cav || 1;
+    return m.def || m.atk || 1;
+  },
+
+  computeMoraleShock(unit, triggers) {
+    const members = unitMembers(unit);
+    if (!members.length) return 0;
+    let shock = 0;
+    for (const t of triggers) {
+      if (t === 'commander_died') shock += 25;
+      if (t === 'friend_died') shock += 8;
+      if (t === 'shield_wall_broken') shock += 12;
+      if (t === 'cavalry_charge') shock += 10;
+      if (t === 'ambushed') shock += 18;
+      if (t === 'surrounded') shock += 14;
+      if (t === 'supply_cut') shock += 10;
+    }
+    const leader = getAgent(unit.leaderId);
+    let resist = 0;
+    for (const m of members) {
+      TextCombatCore.ensureAgent(m);
+      resist += m.derivedCombat.moraleResistance + (leader ? (getAgentRelation(m, leader.id)?.loyalty || 0) * 0.1 : 0);
+      resist += (unit.bonds?.leaderLoyaltyAvg || 50) * 0.05;
+      shock += m.injuries?.filter(i => !i.healed).length * 2;
+      if (m.stats.hunger < 25) shock += 5;
+    }
+    resist /= members.length;
+    return clamp(shock - resist, 0, 80);
+  },
+
+  resolveSkirmish(unitA, unitB, context) {
+    context = context || {};
+    const sizeA = unitMembers(unitA).length, sizeB = unitMembers(unitB).length;
+    const total = sizeA + sizeB;
+    let sampleN = total <= 12 ? Math.min(sizeA, sizeB, 4) : total <= 80 ? randInt(4, 8) : randInt(3, 6);
+    const fightersA = this.sampleFighters(unitA, sampleN);
+    const fightersB = this.sampleFighters(unitB, sampleN);
+    const notableDuels = [];
+    let casualtiesA = 0, casualtiesB = 0, injuries = [];
+    const terrainType = context.terrainType || 'plain';
+
+    for (let i = 0; i < Math.min(fightersA.length, fightersB.length); i++) {
+      const duel = this.resolveDuel(fightersA[i], fightersB[i], {
+        terrain: context.terrain, terrainType, rangeBand: context.rangeBand || 'melee',
+        stakes: context.stakes || 'battle', surprise: context.surprise,
+        mounted: fightersA[i].equipment?.mount?.durability > 0, maxRounds: randInt(3, 6)
+      });
+      notableDuels.push(duel);
+      if (duel.killed) {
+        if (duel.winnerId === fightersA[i].id) casualtiesB++;
+        else casualtiesA++;
+      }
+      injuries = injuries.concat(duel.injuries || []);
+    }
+
+    const formA = unitA.formation || this.pickFormation(unitA, unitB.composition, terrainType);
+    const formB = unitB.formation || this.pickFormation(unitB, unitA.composition, terrainType);
+    unitA.formation = formA; unitB.formation = formB;
+    this.updateUnitComposition(unitA); this.updateUnitComposition(unitB);
+
+    let powerA = MilitarySystem.unitPower(unitA, context.terrain) * (this.formationMod(formA, 'melee') || 1);
+    let powerB = MilitarySystem.unitPower(unitB, context.terrain) * (this.formationMod(formB, 'melee') || 1);
+    if (formA === 'spear_line' && unitB.composition?.cavalry > 2) powerA *= 1.2;
+    if (formB === 'spear_line' && unitA.composition?.cavalry > 2) powerB *= 1.2;
+
+    const triggers = [];
+    if (context.surprise) triggers.push('ambushed');
+    if (context.supplyCut) triggers.push('supply_cut');
+    const shockA = this.computeMoraleShock(unitA, triggers);
+    const shockB = this.computeMoraleShock(unitB, triggers);
+    unitA.morale = clamp(unitA.morale - shockB * 0.15, 5, 100);
+    unitB.morale = clamp(unitB.morale - shockA * 0.15, 5, 100);
+
+    const aWins = powerA > powerB * rand(0.9, 1.1);
+    const routChance = aWins ? shockB / 100 : shockA / 100;
+    let routed = chance(routChance * 0.4);
+
+    return {
+      attackerWins: aWins, casualtiesA, casualtiesB, injuries, notableDuels,
+      moraleShock: Math.max(shockA, shockB), routChance, routed,
+      formations: { a: formA, b: formB }, powerA, powerB
+    };
+  },
+
+  runPhasedBattle(attackerUnits, defenderUnits, context) {
+    const terrainType = context.terrainType || 'plain';
+    const phases = [];
+    let totalDead = 0, totalInjuries = [], notableDuels = [], rout = false;
+    const allAtk = attackerUnits.flatMap(u => unitMembers(u));
+    const allDef = defenderUnits.flatMap(u => unitMembers(u));
+
+    phases.push({ name: 'scout', text: context.scoutIntel ? 'หน่วยลาดตระเวนส่งข้อมูลศัตรู' : 'เริ่มสำรวจสนาม' });
+
+    for (const u of attackerUnits) this.updateUnitComposition(u);
+    for (const u of defenderUnits) this.updateUnitComposition(u);
+    const strat = context.strategy || 'direct_assault';
+    for (const u of attackerUnits) u.formation = this.pickFormation(u, defenderUnits[0]?.composition, terrainType, strat);
+    for (const u of defenderUnits) u.formation = this.pickFormation(u, attackerUnits[0]?.composition, terrainType, 'defensive');
+
+    if (attackerUnits[0] && defenderUnits[0]) {
+      const sk = this.resolveSkirmish(attackerUnits[0], defenderUnits[0], {
+        terrain: context.terrain, terrainType, surprise: context.kind === 'ambush',
+        supplyCut: context.supplyCut, stakes: context.kind || 'battle'
+      });
+      phases.push({ name: 'skirmish', text: `ปะทะก่อนหลัก — ${sk.formations.a} vs ${sk.formations.b}`, data: sk });
+      notableDuels = notableDuels.concat(sk.notableDuels || []);
+      totalInjuries = totalInjuries.concat(sk.injuries || []);
+      if (sk.routed) rout = true;
+    }
+
+    let atkPower = 0, defPower = 0;
+    for (const u of attackerUnits) atkPower += MilitarySystem.unitPower(u, context.terrain) * this.formationMod(u.formation, 'melee');
+    for (const u of defenderUnits) defPower += MilitarySystem.unitPower(u, context.terrain) * this.formationMod(u.formation, 'melee');
+    defPower += context.defenseBonus || 0;
+    atkPower *= (context._terrainAtk || 1) * rand(0.88, 1.12);
+    defPower *= (context._terrainDef || 1) * rand(0.88, 1.12);
+
+    const attackerWins = atkPower > defPower;
+    phases.push({ name: 'main_clash', text: `ศึกใหญ่ — พลัง ${fmt(atkPower, 0)} vs ${fmt(defPower, 0)}`, attackerWins });
+
+    const loserRate = attackerWins ? 0.12 : 0.22;
+    const winnerRate = attackerWins ? 0.22 : 0.12;
+    const applyLoss = (units, rate, won) => {
+      let dead = 0, fled = 0;
+      for (const u of units) {
+        const sampled = this.sampleFighters(u, Math.min(6, unitMembers(u).length));
+        for (const m of sampled) {
+          if (chance(rate)) {
+            if (chance(0.55)) {
+              NeedSystem.kill(m, 'ตายในสนามรบ'); dead++;
+            } else if (chance(0.4)) {
+              this.applyInjury(m, pick(['minor_cut', 'deep_cut', 'arrow_wound', 'concussion']), randInt(2, 5));
+            } else {
+              m.unitId = null; u.memberIds = u.memberIds.filter(id => id !== m.id);
+              m.profession = 'refugee'; fled++;
+            }
+          } else if (!won) {
+            m.memory.survivedBattles = (m.memory.survivedBattles || 0) + 1;
+          }
+        }
+        u.morale = clamp(u.morale + (won ? 8 : -15), 5, 100);
+      }
+      return { dead, fled };
+    };
+
+    const atkResult = applyLoss(attackerUnits, attackerWins ? winnerRate : loserRate, attackerWins);
+    const defResult = applyLoss(defenderUnits, attackerWins ? loserRate : winnerRate, !attackerWins);
+    totalDead = atkResult.dead + defResult.dead;
+    phases.push({ name: 'break', text: rout ? 'แนวแตก — ทัพเสียขวัญ' : 'ฝ่ายแพ้เริ่มถอย' });
+
+    let pursuitLosses = 0;
+    if (typeof CampaignWarfareSystem !== 'undefined') {
+      if (!attackerWins) {
+        const pr = CampaignWarfareSystem.handleBattleRetreat(attackerUnits, defenderUnits, true, context);
+        pursuitLosses = pr.pursuitLosses || 0;
+      } else if (context.kind !== 'raid') {
+        const pr = CampaignWarfareSystem.handleBattleRetreat(defenderUnits, attackerUnits, false, context);
+        pursuitLosses = pr.pursuitLosses || 0;
+      }
+    }
+    totalDead += pursuitLosses;
+    phases.push({ name: 'pursuit', text: pursuitLosses ? `ไล่ตาม — สูญเสีย ${pursuitLosses}` : 'ไม่มีการไล่ตาม' });
+    phases.push({ name: 'aftermath', text: `เสียชีวิตรวม ${totalDead}` });
+
+    const report = this.createBattleReport(attackerUnits, defenderUnits, context, {
+      phases, attackerWins, atkPower, defPower, atkResult, defResult, totalDead, pursuitLosses, notableDuels
+    });
+
+    return { attackerWins, atkPower, defPower, atkResult, defResult, totalDead, pursuitLosses, battleReport: report, phases };
+  },
+
+  createBattleReport(attackerUnits, defenderUnits, context, data) {
+    if (!world.battleReports) world.battleReports = [];
+    const atkLead = attackerUnits[0] ? getAgent(attackerUnits[0].leaderId) : null;
+    const defLead = defenderUnits[0] ? getAgent(defenderUnits[0].leaderId) : null;
+    const loc = context.settlementId ? getSettlement(context.settlementId) : null;
+    const terrain = context.terrainType || loc?.terrain || 'plain';
+    let summary = '';
+    const formA = attackerUnits[0]?.formation || 'loose';
+    const formB = defenderUnits[0]?.formation || 'defensive';
+    if (data.attackerWins) {
+      summary = `กอง${atkLead ? atkLead.name.split(' ')[0] : 'บุก'} เปิดศึกบน${terrain === 'plain' ? 'ที่ราบ' : terrain} ด้วยแนว${formA} `;
+      if (formB === 'spear_line') summary += 'ปะทะแนวหอกของศัตรู ';
+      summary += `ฝ่ายบุกได้ชัย เสียชีวิต ${data.totalDead} — ${data.phases.map(p => p.name).join('→')}`;
+    } else {
+      summary = `การป้องกันที่${context.label || loc?.name || 'สนามรบ'} สำเร็จ แนว${formB} ต้าน${formA} ได้ เสียชีวิต ${data.totalDead}`;
+    }
+    const report = {
+      id: uid(), day: world.day, locationId: context.settlementId || null, terrain,
+      attackers: attackerUnits.map(u => u.id), defenders: defenderUnits.map(u => u.id),
+      commanders: [atkLead?.id, defLead?.id].filter(x => x),
+      formations: { attack: formA, defend: formB },
+      phases: data.phases, casualties: data.totalDead,
+      injuries: data.notableDuels?.flatMap(d => d.injuries || []).length || 0,
+      notableDuels: (data.notableDuels || []).slice(-5).map(d => d.notableLog),
+      commanderFates: [], pursuitLosses: data.pursuitLosses || 0,
+      summaryText: summary, winner: data.attackerWins ? 'attacker' : 'defender'
+    };
+    world.battleReports.push(report);
+    if (world.battleReports.length > MAX_BATTLE_REPORTS) world.battleReports.shift();
+    if (data.totalDead >= 6 || ((attackerUnits[0] && defenderUnits[0]) && unitMembers(attackerUnits[0]).length + unitMembers(defenderUnits[0]).length >= 10)) {
+      Chronicle.add({
+        category: 'war', importance: data.totalDead >= 12 ? 4 : 3,
+        title: `⚔ รายงานศึก: ${context.label || loc?.name || 'สนามรบ'}`,
+        description: summary,
+        agents: report.commanders, settlements: context.settlementId ? [context.settlementId] : []
+      });
+    }
+    return report;
+  },
+
+  checkLegendaryWeapon(item, agent, deed) {
+    if (!item || !agent) return;
+    if (!world.legendaryWeapons) world.legendaryWeapons = [];
+    if (item.kills < 5 && item.fame < 8 && item.quality !== 'masterwork') return;
+    if (world.legendaryWeapons.some(lw => lw.itemId === item.id)) return;
+    if (!chance(0.08 + item.kills * 0.01)) return;
+    const names = ['ดาบแห่ง', 'หอกแห่ง', 'ขวานแห่ง', 'ธนูแห่ง'];
+    const leg = {
+      id: uid(), itemId: item.id, name: `${pick(names)}${agent.name.split(' ')[0]}`,
+      originDay: world.day, deed: deed || 'battle', fame: item.fame + item.kills,
+      wielderHistory: [{ agentId: agent.id, day: world.day }]
+    };
+    item.fame = (item.fame || 0) + 10;
+    world.legendaryWeapons.push(leg);
+    Chronicle.add({ category: 'legend', importance: 4, title: `⚔ ${leg.name}`, description: `อาวุธของ${agent.name} กลายเป็นตำนาน`, agents: [agent.id] });
+  },
+
+  rankings() {
+    const alive = world.agents.filter(a => a.alive);
+    return {
+      duelists: alive.filter(a => (a.duelRecord?.wins || 0) > 0).sort((a, b) => (b.duelRecord?.wins || 0) - (a.duelRecord?.wins || 0)).slice(0, 10),
+      deadliest: alive.filter(a => (a.duelRecord?.kills || 0) > 0).sort((a, b) => (b.duelRecord?.kills || 0) - (a.duelRecord?.kills || 0)).slice(0, 10),
+      scarred: alive.filter(a => a.injuries?.some(i => i.permanent || i.type === 'scar')).slice(0, 10),
+      legendaryWeapons: (world.legendaryWeapons || []).slice().sort((a, b) => b.fame - a.fame).slice(0, 8),
+      famousBattles: (world.battleReports || []).slice(-8).reverse(),
+      brokenUnits: world.units.filter(u => unitMembers(u).length && (u.morale < 30 || u.retreating)).slice(0, 10)
+    };
+  },
+
+  initWorld() {
+    if (!world.battleReports) world.battleReports = [];
+    if (!world.legendaryWeapons) world.legendaryWeapons = [];
+    for (const a of world.agents) this.ensureAgent(a);
+    for (const u of world.units) { this.updateUnitComposition(u); if (!u.formation) u.formation = 'loose'; }
+  }
+};
+
 const CombatSystem = {
   deriveStats(a) {
     syncLegacyInventory(a);
@@ -1317,11 +1996,14 @@ const CombatSystem = {
 
   agentPower(a, terrain) {
     if (!a || !a.alive) return 0;
+    TextCombatCore.ensureAgent(a);
+    const dc = a.derivedCombat;
     const ds = this.deriveStats(a);
     const morale = 0.5 + a.stats.morale / 150;
     const health = 0.55 + a.stats.health / 220;
     const fatigue = clamp(1 - (100 - a.stats.energy) / 200, 0.5, 1);
-    let p = (ds.attack + ds.defense * 0.6 + ds.armor * 0.4) * morale * health * fatigue;
+    let p = (dc.meleeAttack + dc.meleeDefense * 0.6 + dc.armor * 0.4 + dc.rangedAttack * 0.3) * morale * health * fatigue;
+    p += ds.attack * 0.15;
     const mh = a.equipment?.mainHand?.type;
     const rg = a.equipment?.ranged?.type;
     const mt = a.equipment?.mount?.type;
@@ -1331,7 +2013,7 @@ const CombatSystem = {
     if (terrain === 'forest' && mt) p *= 0.82;
     if (terrain === 'hill' && rg === 'bow') p *= 1.18;
     if (terrain === 'marsh') p *= 0.9;
-    return p;
+    return Number.isFinite(p) ? p : (ds.attack || 1);
   },
 
   matchupMod(attacker, defender, terrain) {
@@ -1382,6 +2064,15 @@ const CombatSystem = {
     if (MILITARY_PROFS.has(a.profession)) return a.profession;
     return a.profession;
   },
+
+  // Phase 18.1 delegates
+  recalcDerivedCombat(a) { return TextCombatCore.recalcDerivedCombat(a); },
+  getWeaponSkill(a, w) { return TextCombatCore.getWeaponSkill(a, w); },
+  getArmorPenalty(a) { return TextCombatCore.getArmorPenalty(a); },
+  getInjuryPenalty(a) { return TextCombatCore.getInjuryPenalty(a); },
+  resolveDuel(a, d, ctx) { return TextCombatCore.resolveDuel(a, d, ctx); },
+  resolveSkirmish(uA, uB, ctx) { return TextCombatCore.resolveSkirmish(uA, uB, ctx); },
+  runPhasedBattle(atk, def, ctx) { return TextCombatCore.runPhasedBattle(atk, def, ctx); },
 
   // สำหรับทดสอบ matchup cavalry vs archer
   testCavalryVsArcher() {
@@ -3131,7 +3822,7 @@ const AgentMemorySystem = {
     this.ensureAgent(a);
     const m = a.motives;
     const p = a.memory.personal;
-    m.survival = clamp(40 + (100 - a.stats.hunger) * 0.4 + (100 - a.stats.health) * 0.2, 0, 100);
+    m.survival = clamp(40 + (100 - (a.stats.hunger || 0)) * 0.4 + (100 - (a.stats.health || 100)) * 0.2, 0, 100);
     m.wealth = clamp(25 + a.traits.greed * 40 + Math.min(a.money, 200) * 0.15 + (a.memory.tradeProfit || 0) * 0.05, 0, 100);
     m.safety = clamp(35 + (() => { const loc = getSettlement(a.locationId); return loc ? (1 - EconomySystem.localDanger(loc)) * 40 : 20; })() + (p.fears?.length || 0) * 4, 0, 100);
     m.loyalty = clamp(20 + a.traits.loyalty * 35 + (p.loyalties?.length || 0) * 6, 0, 100);
@@ -4285,6 +4976,7 @@ const MilitarySystem = {
     const fatigueMod = 1 - u.fatigue / 250;
     const supplyMod = u.supply.food >= members.length ? 1 : 0.65;
     u.combatPower = power * tacticsMod * moraleMod * fatigueMod * supplyMod;
+    if (!Number.isFinite(u.combatPower)) u.combatPower = power || 0;
     u.equipmentPower = sum(members, m => CombatSystem.deriveStats(m).attack);
     return u.combatPower;
   },
@@ -4320,6 +5012,34 @@ const MilitarySystem = {
       context._terrainAtk = tc.atk;
       context._terrainDef = tc.def;
     }
+    context.terrain = terrain;
+    const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
+    const bName = battleName(context.kind || 'field', context.label || '?', totalMen);
+
+    if (totalMen >= 6 && !context.skipPhased && typeof TextCombatCore !== 'undefined') {
+      const ar = attackerUnits[0]?.armyId ? getArmy(attackerUnits[0].armyId) : null;
+      context.strategy = ar?.strategyProfile?.preferredStrategy;
+      if (ar?.supplyLineId && typeof CampaignWarfareSystem !== 'undefined') {
+        const sl = CampaignWarfareSystem.getSupplyLine(ar.supplyLineId);
+        context.supplyCut = sl?.status === 'cut';
+      }
+      const phased = CombatSystem.runPhasedBattle(attackerUnits, defenderUnits, context);
+      const attackerWins = phased.attackerWins;
+      CombatSystem.applyBattleWear(attackerUnits, attackerWins);
+      CombatSystem.applyBattleWear(defenderUnits, !attackerWins);
+      for (const u of attackerUnits) {
+        if (attackerWins) u.recentVictories = (u.recentVictories || 0) + 1;
+        const leader = getAgent(u.leaderId);
+        if (leader && attackerWins) { leader.fame = (leader.fame || 0) + 1; this.checkPromotion(leader); }
+      }
+      recordWarBattle(context.atkFactionId, context.defFactionId, bName, phased.totalDead, attackerWins);
+      if (typeof AgentMemorySystem !== 'undefined') {
+        AgentMemorySystem.onBattleEnd(attackerUnits, attackerWins, bName, context.settlementId);
+        AgentMemorySystem.onBattleEnd(defenderUnits, !attackerWins, bName, context.settlementId);
+      }
+      return { attackerWins, atkPower: phased.atkPower, defPower: phased.defPower, atkResult: phased.atkResult, defResult: phased.defResult, name: bName, totalDead: phased.totalDead, pursuitLosses: phased.pursuitLosses, battleReport: phased.battleReport };
+    }
+
     let atkPower = 0, defPower = 0;
     for (const u of attackerUnits) atkPower += this.unitPower(u, terrain);
     for (const u of defenderUnits) {
@@ -4337,8 +5057,6 @@ const MilitarySystem = {
     defPower = (defPower + (context.defenseBonus || 0)) * rand(0.82, 1.18) * (context._terrainDef || 1);
     const attackerWins = atkPower > defPower;
     const ratio = clamp(Math.min(atkPower, defPower) / Math.max(atkPower, defPower, 1), 0.1, 1);
-    const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
-    const bName = battleName(context.kind || 'field', context.label || '?', totalMen);
 
     const applyCasualties = (units, lossRate, won) => {
       let dead = 0, fled = 0;
@@ -6070,6 +6788,7 @@ function simulateDay() {
   MarketTradeSystem.tickDaily();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
+  if (typeof TextCombatCore !== 'undefined') TextCombatCore.tickInjuries();
 
   // เติม garrison จากทหารว่าง
   for (const s of world.settlements) {
@@ -6424,6 +7143,37 @@ const ObserverSystem = {
         }
       }
     }
+    if (typeof TextCombatCore !== 'undefined') {
+      for (const a of world.agents) {
+        if (!a.alive) continue;
+        TextCombatCore.ensureAgent(a);
+        const mh = a.equipment?.mainHand?.type, rg = a.equipment?.ranged?.type;
+        if ((q.includes('duelist') || q.includes('ดวล')) && (a.duelRecord?.wins || 0) > 0) {
+          push('agent', a.id, a.name, `ดวลชนะ ${a.duelRecord.wins}`);
+        }
+        if ((q.includes('veteran') || q.includes('ทหารเก่า')) && (a.memory?.survivedBattles || 0) >= 2) {
+          push('agent', a.id, a.name, `รอดศึก ${a.memory.survivedBattles} ครั้ง`);
+        }
+        if ((q.includes('wounded') || q.includes('บาดเจ็บ')) && a.injuries?.some(i => !i.healed)) {
+          push('agent', a.id, a.name, `บาดเจ็บ ${a.injuries.filter(i => !i.healed).length} แห่ง`);
+        }
+        if ((q.includes('scarred') || q.includes('แผลเป็น')) && a.injuries?.some(i => i.type === 'scar' || i.permanent)) {
+          push('agent', a.id, a.name, 'มีแผลเป็น/บาดแผลถาวร');
+        }
+        if (q.includes('sword') && mh === 'sword') push('agent', a.id, a.name, 'นักดาบ');
+        if (q.includes('spear') && mh === 'spear') push('agent', a.id, a.name, 'ทหารหอก');
+        if ((q.includes('archer') || q.includes('ธนู')) && (rg === 'bow' || a.profession === 'archer')) push('agent', a.id, a.name, 'นักธนู');
+        if ((q.includes('cavalry') || q.includes('ทหารม้า')) && (a.equipment?.mount?.type === 'horse' || a.profession === 'cavalry')) {
+          push('agent', a.id, a.name, 'ทหารม้า');
+        }
+      }
+      if (q.includes('legendary') && (q.includes('weapon') || q.includes('อาวุธ'))) {
+        for (const lw of (world.legendaryWeapons || [])) {
+          const wielder = lw.wielderHistory?.length ? getAgent(lw.wielderHistory[lw.wielderHistory.length - 1].agentId) : null;
+          push('agent', wielder?.id || 0, lw.name, `fame ${lw.fame}`);
+        }
+      }
+    }
     return results.slice(0, 25);
   },
 
@@ -6775,6 +7525,29 @@ const ObserverSystem = {
       html += '<div class="obs-section-head">Scout Reports</div>';
       html += cr.scoutReports.map(rep => row(`${rep.targetType} @ ${(getSettlement(rep.locationId) || {}).name || '?'}`, `conf ${fmt((rep.confidence || 0) * 100, 0)}% · ${rep.threat}`, 'army', rep.armyId || 0)).join('')
         || '<p class="hint">ยังไม่มีรายงานลาดตระเวน</p>';
+    } else if (tab === 'combat' && typeof TextCombatCore !== 'undefined') {
+      const cr = TextCombatCore.rankings();
+      html = '<div class="obs-section-head">Best Duelists</div>';
+      html += cr.duelists.length ? cr.duelists.map(a => row(a.name, `W ${a.duelRecord?.wins || 0} · ${a.profession}`, 'agent', a.id)).join('')
+        : '<p class="hint">ยังไม่มีนักดวล</p>';
+      html += '<div class="obs-section-head">Deadliest Fighters</div>';
+      html += cr.deadliest.length ? cr.deadliest.map(a => row(a.name, `kills ${a.duelRecord?.kills || 0}`, 'agent', a.id)).join('')
+        : '<p class="hint">ยังไม่มีการสังหารในการดวล</p>';
+      html += '<div class="obs-section-head">Scarred Veterans</div>';
+      html += cr.scarred.length ? cr.scarred.map(a => row(a.name, `${a.injuries?.length || 0} injuries`, 'agent', a.id)).join('')
+        : '<p class="hint">ยังไม่มีทหารเก่าแผลเป็น</p>';
+      html += '<div class="obs-section-head">Legendary Weapons</div>';
+      html += cr.legendaryWeapons.length ? cr.legendaryWeapons.map(lw => {
+        const w = lw.wielderHistory?.length ? getAgent(lw.wielderHistory[lw.wielderHistory.length - 1].agentId) : null;
+        return row(lw.name, `fame ${lw.fame}${w ? ' · ' + w.name.split(' ')[0] : ''}`, 'agent', w?.id || 0);
+      }).join('') : '<p class="hint">ยังไม่มีอาวุธตำนาน</p>';
+      html += '<div class="obs-section-head">Famous Battles</div>';
+      html += cr.famousBattles.length ? cr.famousBattles.map(br =>
+        `<div class="obs-war">Day ${br.day}<br><span class="obs-sub">${(br.summaryText || '').slice(0, 120)}</span></div>`).join('')
+        : '<p class="hint">ยังไม่มีรายงานศึก</p>';
+      html += '<div class="obs-section-head">Broken Units</div>';
+      html += cr.brokenUnits.length ? cr.brokenUnits.map(u => row(u.name, `morale ${fmt(u.morale)} · ${unitMembers(u).length} คน`, 'unit', u.id)).join('')
+        : '<p class="hint">ไม่มีหน่วยที่ใกล้พัง</p>';
     }
     body.innerHTML = html;
     for (const rowEl of body.querySelectorAll('.obs-row')) {
@@ -7836,8 +8609,40 @@ const UI = {
       }
     }
     // ── Phase 10.5: Combat stats ──
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.ensureAgent(a);
     const ds = CombatSystem.deriveStats(a);
-    html += `<div class="insp-section"><h4>Combat Stats</h4>`;
+    const dc = a.derivedCombat || {};
+    html += `<div class="insp-section"><h4>Combat Body (Phase 18.1)</h4>`;
+    if (a.body) {
+      html += this.kv('build', a.body.build) + this.kv('height', fmt(a.body.height, 2));
+      html += this.kv('reachBonus', fmt(a.body.reachBonus, 2)) + this.kv('reflex', fmt(a.body.reflex, 2));
+      html += this.kv('balance', fmt(a.body.balance, 2)) + this.kv('woundTol', fmt(a.body.woundTolerance, 2));
+    }
+    html += `</div>`;
+    html += `<div class="insp-section"><h4>Derived Combat</h4>`;
+    html += this.kv('meleeAtk', fmt(dc.meleeAttack, 1)) + this.kv('meleeDef', fmt(dc.meleeDefense, 1));
+    html += this.kv('rangedAtk', fmt(dc.rangedAttack, 1)) + this.kv('armor', fmt(dc.armor, 1));
+    html += this.kv('block', fmt((dc.block || 0) * 100, 0) + '%') + this.kv('parry', fmt((dc.parry || 0) * 100, 0) + '%');
+    html += this.kv('dodge', fmt((dc.dodge || 0) * 100, 0) + '%') + this.kv('speed', fmt(dc.speed, 2));
+    html += this.kv('stamina', `${fmt(a._stamina != null ? a._stamina : dc.stamina, 0)}/${fmt(dc.staminaMax, 0)}`);
+    const prefWpn = a.equipment?.mainHand?.type || a.equipment?.ranged?.type || '—';
+    html += this.kv('preferred weapon', prefWpn);
+    html += `</div>`;
+    if (a.injuries?.length) {
+      html += `<div class="insp-section"><h4>Injuries</h4>`;
+      for (const inj of a.injuries.slice(-6).reverse()) {
+        html += this.kv(inj.type, `sev ${inj.severity} · Day ${inj.day}${inj.healed ? ' ✓' : ''}`, inj.healed ? 'good' : 'bad');
+      }
+      html += `</div>`;
+    }
+    if (a.duelRecord && (a.duelRecord.wins || a.duelRecord.losses || a.duelRecord.kills)) {
+      html += `<div class="insp-section"><h4>Duel Record</h4>`;
+      html += this.kv('W/L', `${a.duelRecord.wins}/${a.duelRecord.losses}`);
+      html += this.kv('kills', a.duelRecord.kills);
+      html += this.kv('battles survived', a.memory.survivedBattles || 0);
+      html += `</div>`;
+    }
+    html += `<div class="insp-section"><h4>Combat Stats (legacy)</h4>`;
     for (const [k, v] of Object.entries(a.combatStats || {})) html += this.kv(k, fmt(v, 1));
     html += `<div class="sub-head">Derived</div>`;
     html += this.kv('attack', fmt(ds.attack, 1)) + this.kv('defense', fmt(ds.defense, 1));
@@ -7850,7 +8655,9 @@ const UI = {
     syncLegacyInventory(a);
     for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount', 'tool']) {
       const item = a.equipment[slot];
-      html += this.kv(slot, item ? `${item.type} (${fmt(item.durability)}/${fmt(item.maxDurability)})` : '—');
+      const leg = item && (world.legendaryWeapons || []).find(lw => lw.itemId === item.id);
+      const extra = item ? ` (${fmt(item.durability)}/${fmt(item.maxDurability)}${item.quality ? ' · ' + item.quality : ''}${item.kills ? ' · kills ' + item.kills : ''})` : '';
+      html += this.kv(slot, item ? `${item.type}${extra}${leg ? ' ⚔ ' + leg.name : ''}` : '—');
     }
     html += `</div>`;
     html += `<div class="insp-section"><h4>เรื่องราวชีวิต</h4><div class="ce-desc" style="font-size:11.5px;line-height:1.5">${lifeSummary(a)}</div></div>`;
@@ -8131,8 +8938,10 @@ const UI = {
     const f = getFaction(u.factionId);
     const members = unitMembers(u);
     const s = getSettlement(u.locationId);
-    const comp = {};
-    for (const m of members) comp[m.profession] = (comp[m.profession] || 0) + 1;
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(u);
+    const roleComp = u.composition || defaultUnitComposition();
+    const profComp = {};
+    for (const m of members) profComp[m.profession] = (profComp[m.profession] || 0) + 1;
     let html = `<div class="insp-actions">${this.followBtn('unit', u.id)}</div>`;
     html += `<div class="insp-section"><h4>ข้อมูลหน่วย</h4>`;
     html += this.kv('ประเภท', u.kind);
@@ -8146,6 +8955,16 @@ const UI = {
     html += this.kv('พลังรบ', fmt(MilitarySystem.unitPower(u)));
     html += this.kv('Combat Power', fmt(u.combatPower || 0));
     html += this.kv('ชนะล่าสุด', u.recentVictories || 0, (u.recentVictories || 0) >= 2 ? 'good' : '');
+    html += this.kv('Formation', u.formation || 'loose');
+    const shockRisk = typeof TextCombatCore !== 'undefined' ? TextCombatCore.computeMoraleShock(u, []) : 0;
+    html += this.kv('Morale shock risk', fmt(shockRisk, 0), shockRisk > 40 ? 'bad' : '');
+    html += `</div>`;
+    html += `<div class="insp-section"><h4>Composition (Phase 18.1)</h4>`;
+    for (const [k, n] of Object.entries(roleComp)) if (n > 0) html += this.kv(k, n);
+    const vets = members.filter(m => (m.memory?.survivedBattles || 0) >= 2).length;
+    if (vets) html += this.kv('veterans', vets, 'good');
+    const recentBr = (world.battleReports || []).filter(br => br.attackers?.includes(u.id) || br.defenders?.includes(u.id)).slice(-1)[0];
+    if (recentBr) html += this.kv('last battle', `Day ${recentBr.day}: ${(recentBr.summaryText || '').slice(0, 60)}...`);
     html += `</div>`;
     // equipment composition
     const eqComp = {};
@@ -8172,8 +8991,8 @@ const UI = {
     html += this.kv('weapons', fmt(u.supply.weapons));
     if (u.lootGold) html += this.kv('ทองที่ปล้นมา', fmt(u.lootGold), 'warn');
     html += `</div>`;
-    html += `<div class="insp-section"><h4>องค์ประกอบ</h4>`;
-    for (const [p, n] of Object.entries(comp)) html += this.kv(p, n);
+    html += `<div class="insp-section"><h4>องค์ประกอบ (อาชีพ)</h4>`;
+    for (const [p, n] of Object.entries(profComp)) html += this.kv(p, n);
     html += `</div>`;
     if (u.battleHistory.length) {
       html += `<div class="insp-section"><h4>ประวัติการรบ</h4>`;
@@ -8630,7 +9449,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.0';
+const SAVE_SCHEMA_VERSION = '18.1';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -8812,6 +9631,8 @@ const SaveSystem = {
     w.supplyLines = w.supplyLines || [];
     w.armyCamps = w.armyCamps || [];
     w.scoutReports = w.scoutReports || [];
+    w.battleReports = w.battleReports || [];
+    w.legendaryWeapons = w.legendaryWeapons || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -8928,6 +9749,22 @@ const SaveSystem = {
     if (!a.warehouseIds) a.warehouseIds = [];
     if (a.contractId == null) a.contractId = null;
     if (a.pendingContractId == null) a.pendingContractId = null;
+    if (!a.body) a.body = defaultCombatBody(a.id);
+    if (!a.derivedCombat) a.derivedCombat = defaultDerivedCombat();
+    if (!a.injuries) a.injuries = [];
+    if (!a.duelRecord) a.duelRecord = { wins: 0, losses: 0, kills: 0 };
+    for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount', 'tool']) {
+      const item = a.equipment?.[slot];
+      if (!item) continue;
+      if (!item.id) item.id = uid();
+      if (item.quality == null) item.quality = 'common';
+      if (item.kills == null) item.kills = 0;
+      if (item.fame == null) item.fame = 0;
+      if (!item.ownerHistory) item.ownerHistory = [];
+      if (item.maxDurability == null) item.maxDurability = item.durability || 50;
+      if (item.durability == null) item.durability = item.maxDurability;
+    }
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.recalcDerivedCombat(a);
   },
 
   migrateUnit(u) {
@@ -8941,6 +9778,9 @@ const SaveSystem = {
     if (!u.bonds) u.bonds = defaultUnitBonds();
     else u.bonds = Object.assign(defaultUnitBonds(), u.bonds);
     if (u.retreating == null) u.retreating = false;
+    if (!u.composition) u.composition = defaultUnitComposition();
+    if (!u.formation) u.formation = 'loose';
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.updateUnitComposition(u);
   },
 
   migrateArmy(ar) {
@@ -9015,6 +9855,7 @@ const SaveSystem = {
     if (typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.initWorld();
     if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
     if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
+    if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
   },
 
   applyUiPrefs(prefs) {

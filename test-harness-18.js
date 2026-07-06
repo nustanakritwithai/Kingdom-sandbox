@@ -82,14 +82,15 @@ run(`
   if (ks.length >= 2) DiplomacySystem.declareWar(ks[0], ks[1], 'test war');
   const cap = world.settlements.find(s => s.factionId === ks[0].id && (s.type === 'castle' || s.type === 'town'));
   const tgt = world.settlements.find(s => s.factionId === ks[1].id && s.type !== 'camp');
-  const cmd = world.agents.find(a => a.alive && a.factionId === ks[0].id && a.skills.leadership > 3);
+  let cmd = world.agents.find(a => a.alive && a.factionId === ks[0].id);
+  if (cmd) cmd.skills.leadership = Math.max(cmd.skills.leadership || 0, 5);
   if (cap && tgt && cmd) {
-    const u = createUnit({ name: 'Test Unit', kind: 'field', leaderId: cmd.id, memberIds: [cmd.id], factionId: ks[0].id, locationId: cap.id, food: 40 });
+    const extras = world.agents.filter(a => a.alive && a.factionId === ks[0].id && a.id !== cmd.id).slice(0, 4).map(a => a.id);
+    const u = createUnit({ name: 'Test Unit', kind: 'field', leaderId: cmd.id, memberIds: [cmd.id, ...extras], factionId: ks[0].id, locationId: cap.id, food: 40 });
     const ar = createArmy({ name: 'Test Army', commanderId: cmd.id, factionId: ks[0].id, unitIds: [u.id], locationId: cap.id, objective: { type: 'attack', targetId: tgt.id }, food: 100, baseSettlementId: cap.id });
     CampaignWarfareSystem.ensureArmy(ar);
     CampaignWarfareSystem.createSupplyLine(ar, cap.id, tgt.id);
     CampaignWarfareSystem.computeStrategyProfile(cmd, ar);
-    startTravel(ar, tgt.id, 'war');
   }
 `);
 
@@ -122,6 +123,7 @@ else fail('no scout reports');
 
 const r = w.routes.find(x => !x.destroyed);
 if (r && w.armies[0]) {
+  run(`world.routes.find(x => x.id === ${r.id}).scoutCoverage = 0`);
   const riskHigh = run(`CampaignWarfareSystem.ambushRisk(world.routes.find(x => x.id === ${r.id}), world.armies[0])`);
   run(`world.routes.find(x => x.id === ${r.id}).scoutCoverage = 0.9`);
   const riskLow = run(`CampaignWarfareSystem.ambushRisk(world.routes.find(x => x.id === ${r.id}), world.armies[0])`);
@@ -172,8 +174,8 @@ else fail('siege equipment effect');
 
 // Save/load
 const payload = run('SaveSystem.buildSavePayload("test")');
-if (payload.schemaVersion === '18.0') ok('save schema 18.0');
-else fail('schema not 18.0: ' + payload.schemaVersion);
+if (payload.schemaVersion === '18.1') ok('save schema 18.1');
+else fail('schema not 18.1: ' + payload.schemaVersion);
 
 run(`
   const saved = SaveSystem.buildSavePayload('test');
