@@ -76,6 +76,9 @@ function getContract(id) { return (world.tradeContracts || []).find(c => c.id ==
 const MAX_AGENT_RELATIONS = 20;
 const MAX_MAJOR_EVENTS = 40;
 const MAX_SENTIMENT_ENTRIES = 12;
+const MAX_SCOUT_REPORTS = 80;
+const WAR_GOAL_TYPES = ['capture_settlement', 'defend_border', 'cut_trade_route', 'break_vassal', 'punish_rebels', 'secure_market_hub', 'destroy_bandit_camp', 'force_tribute'];
+const TERRAIN_TYPES = ['plain', 'forest', 'hill', 'river', 'road', 'marsh'];
 
 function defaultPersonalMemory(birthplaceId) {
   return {
@@ -117,6 +120,87 @@ function defaultUnitBonds() {
     leaderLoyaltyAvg: 50, veteranCount: 0, sharedBattleCount: 0,
     betrayalRisk: 0.1, moraleMemory: 0
   };
+}
+
+function defaultStrategyProfile() {
+  return {
+    preferredStrategy: 'direct_assault',
+    riskAppetite: 0.5, patience: 0.5, logisticsFocus: 0.4, scoutUse: 0.4, honor: 0.5
+  };
+}
+
+function defaultSiegeEquipment() {
+  return { ladders: 0, ram: 0, tower: 0, catapult: 0, buildDays: 0, ready: false };
+}
+
+function defaultSupplyLine(armyId, originId, targetId, path) {
+  return {
+    id: uid(),
+    armyId,
+    originSettlementId: originId,
+    targetSettlementId: targetId,
+    routePath: path ? path.slice() : [],
+    status: 'open',
+    foodFlow: 0, weaponFlow: 0,
+    danger: path ? pathDanger(path) : 0,
+    lastDeliveredDay: world.day,
+    escortStrength: 0,
+    disruptionEvents: []
+  };
+}
+
+function inferSettlementTerrain(s) {
+  if (s.terrain && TERRAIN_TYPES.includes(s.terrain)) return s.terrain;
+  if (s.type === 'camp') return 'forest';
+  if (s.type === 'fort' || s.type === 'castle') return 'hill';
+  if (s.y < 180) return 'forest';
+  if (s.y > 480) return 'marsh';
+  if (Math.abs(s.x - 500) < 90) return 'river';
+  return s.type === 'village' ? pick(['plain', 'forest', 'hill']) : 'plain';
+}
+
+function inferRouteTerrain(r) {
+  if (r.terrain && TERRAIN_TYPES.includes(r.terrain)) return r.terrain;
+  const sa = getSettlement(r.a), sb = getSettlement(r.b);
+  if (r.roadQuality > 0.65) return 'road';
+  const ta = sa ? inferSettlementTerrain(sa) : 'plain';
+  const tb = sb ? inferSettlementTerrain(sb) : 'plain';
+  if (ta === 'forest' || tb === 'forest') return 'forest';
+  if (ta === 'marsh' || tb === 'marsh') return 'marsh';
+  if (ta === 'river' || tb === 'river') return 'river';
+  if (r.roadQuality < 0.38) return 'forest';
+  return 'plain';
+}
+
+function terrainBattleContext(terrain) {
+  const m = {
+    plain: { kind: 'open', atk: 1.05, def: 0.95 },
+    forest: { kind: 'close', atk: 0.95, def: 1.12 },
+    hill: { kind: 'range', atk: 0.92, def: 1.22 },
+    river: { kind: 'close', atk: 0.88, def: 1.14 },
+    road: { kind: 'field', atk: 1, def: 1 },
+    marsh: { kind: 'close', atk: 0.84, def: 1.06 }
+  };
+  return m[terrain] || m.plain;
+}
+
+function pathDanger(path) {
+  if (!path || path.length < 2) return 0;
+  let d = 0, n = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const r = getRoute(path[i], path[i + 1]);
+    if (r) { d += (r.threat || r.danger || 0) + (r.ambushRisk || 0) * 0.45; n++; }
+  }
+  return n ? d / n : 0;
+}
+
+function settlementStrategicValue(s) {
+  if (!s || s.type === 'camp') return 10;
+  let v = { village: 25, town: 55, fort: 70, castle: 95 }[s.type] || 30;
+  if (s.marketRole?.hubLevel > 0) v += s.marketRole.hubLevel * 12;
+  if (s.buildings?.includes('Wall')) v += 15;
+  if (s.buildings?.includes('Market')) v += 8;
+  return v;
 }
 
 function defaultAgentRelation() {
@@ -370,7 +454,9 @@ function startWar(attackerF, defenderF, cause) {
     attackerId: attackerF.id, defenderId: defenderF.id,
     startDay: world.day, endDay: null, cause: cause || '',
     battles: [], captured: [], casualties: 0,
-    winner: null, summary: null
+    winner: null, summary: null,
+    goal: typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.pickWarGoal(attackerF, defenderF) : 'capture_settlement',
+    supplyDisruptions: 0, sieges: 0, ambushes: 0, goalAchieved: false
   };
   world.wars.push(w);
   attackerF.warState = true; defenderF.warState = true;
@@ -415,6 +501,10 @@ function endWar(w, winnerId, reason, peaceOpts) {
   w.summary = `สงครามระหว่าง${att ? att.name : 'ฝ่ายที่สูญสิ้น'}กับ${def ? def.name : 'ฝ่ายที่สูญสิ้น'}กินเวลา ${days} วัน`
     + (w.battles.length ? ` มีศึกสำคัญ ${w.battles.length} ครั้ง` : '')
     + (w.casualties ? ` สูญเสียรวม ${w.casualties} ชีวิต` : '')
+    + (w.supplyDisruptions ? ` ตัดเสบียง ${w.supplyDisruptions} ครั้ง` : '')
+    + (w.sieges ? ` ล้อมเมือง ${w.sieges} ครั้ง` : '')
+    + (w.ambushes ? ` ซุ่มโจมตี ${w.ambushes} ครั้ง` : '')
+    + (w.goal ? ` เป้าหมาย: ${w.goal}${w.goalAchieved ? ' (สำเร็จ)' : ''}` : '')
     + (winF ? ` จบลงด้วยชัยชนะของ${winF.name}` + (capturedNames ? ` หลังยึด${capturedNames}ได้สำเร็จ` : '')
             : ' จบลงโดยไม่มีผู้ชนะเด็ดขาด')
     + endNote
@@ -558,8 +648,16 @@ function createSettlement(opt) {
     tradeVolume: 0,
     priceVolatility: 0,
     // ── Phase 17: citizen sentiment ──
-    sentiment: defaultSettlementSentiment()
+    sentiment: defaultSettlementSentiment(),
+    // ── Phase 18: terrain / strategic value ──
+    terrain: opt.terrain || null,
+    strategicValue: opt.strategicValue != null ? opt.strategicValue : null,
+    siegeEquipment: { wallBonus: 0, watchtower: 0 }
   };
+  if (!s.terrain) s.terrain = inferSettlementTerrain(s);
+  if (s.strategicValue == null) s.strategicValue = settlementStrategicValue(s);
+  if (s.buildings.includes('Wall')) s.siegeEquipment.wallBonus = 1;
+  if (s.buildings.includes('Watchtower')) s.siegeEquipment.watchtower = 1;
   world.settlements.push(s);
   return s;
 }
@@ -580,8 +678,15 @@ function createRoute(aId, bId, quality) {
     caravanLosses: 0,
     bounty: 0,
     patrolMissionId: null,
-    priceGapFood: 0
+    priceGapFood: 0,
+    // ── Phase 18: terrain / campaign ──
+    terrain: null,
+    ambushRisk: null,
+    supplyTraffic: 0,
+    scoutCoverage: 0
   };
+  r.terrain = inferRouteTerrain(r);
+  r.ambushRisk = clamp((r.threat || r.danger || 0.1) * (r.terrain === 'forest' ? 1.35 : r.terrain === 'marsh' ? 1.15 : 0.9), 0.02, 0.85);
   world.routes.push(r);
   return r;
 }
@@ -708,7 +813,8 @@ function createUnit(opt) {
     recentVictories: 0,
     equipmentPower: 0,
     combatPower: 0,
-    bonds: defaultUnitBonds()
+    bonds: defaultUnitBonds(),
+    retreating: false
   };
   world.units.push(u);
   for (const id of u.memberIds) { const m = getAgent(id); if (m) m.unitId = u.id; }
@@ -726,7 +832,14 @@ function createArmy(opt) {
     supply: { food: opt.food || 200, arrows: 100, weapons: 30, horses: 5 },
     morale: 70, reputation: 0,
     locationId: opt.locationId,
-    travel: null
+    travel: null,
+    baseSettlementId: opt.baseSettlementId || opt.locationId,
+    supplyLineId: null,
+    campId: null,
+    retreatTargetId: null,
+    warGoal: opt.warGoal || 'capture_settlement',
+    strategyProfile: opt.strategyProfile || defaultStrategyProfile(),
+    siegeEquipment: opt.siegeEquipment || defaultSiegeEquipment()
   };
   world.armies.push(ar);
   for (const uId of ar.unitIds) { const u = getUnit(uId); if (u) u.armyId = ar.id; }
@@ -760,6 +873,7 @@ function generateWorld() {
     chronicle: [], wars: [], eras: [],
     treaties: [], vassalContracts: [],
     guilds: [], warehouses: [], tradeContracts: [],
+    supplyLines: [], armyCamps: [], scoutReports: [],
     marketIndex: defaultMarketIndex(),
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0, contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0 }
   };
@@ -926,6 +1040,7 @@ function generateWorld() {
   DiplomacySystem.initWorld();
   MarketTradeSystem.initWorld();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
+  if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -1031,6 +1146,7 @@ function advanceTravel(entity, speed) {
       return false;
     }
     r.traffic += 0.5;
+    if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.checkTravelAmbush(entity, r, aId, bId);
     const remain = r.distance - t.progress;
     const step = moved * (0.6 + r.roadQuality * 0.6);
     if (step >= remain) {
@@ -1212,6 +1328,9 @@ const CombatSystem = {
     if (terrain === 'open' && mt) p *= 1.2;
     if (terrain === 'close' && mh === 'sword') p *= 1.15;
     if (terrain === 'range' && rg === 'bow') p *= 1.25;
+    if (terrain === 'forest' && mt) p *= 0.82;
+    if (terrain === 'hill' && rg === 'bow') p *= 1.18;
+    if (terrain === 'marsh') p *= 0.9;
     return p;
   },
 
@@ -3308,6 +3427,543 @@ const AgentMemorySystem = {
   }
 };
 
+/* ═══════════════════ 10.95 PHASE 18: CAMPAIGN WARFARE ═══════════════════ */
+
+const CampaignWarfareSystem = {
+  initWorld() {
+    if (!world.supplyLines) world.supplyLines = [];
+    if (!world.armyCamps) world.armyCamps = [];
+    if (!world.scoutReports) world.scoutReports = [];
+    for (const s of world.settlements) {
+      if (!s.terrain) s.terrain = inferSettlementTerrain(s);
+      if (s.strategicValue == null) s.strategicValue = settlementStrategicValue(s);
+      if (!s.siegeEquipment) s.siegeEquipment = { wallBonus: s.buildings?.includes('Wall') ? 1 : 0, watchtower: s.buildings?.includes('Watchtower') ? 1 : 0 };
+    }
+    for (const r of world.routes) {
+      if (!r.terrain) r.terrain = inferRouteTerrain(r);
+      if (r.ambushRisk == null) r.ambushRisk = clamp((r.threat || r.danger || 0.1) * (r.terrain === 'forest' ? 1.4 : r.terrain === 'marsh' ? 1.2 : 0.9), 0.02, 0.85);
+      if (r.supplyTraffic == null) r.supplyTraffic = 0;
+      if (r.scoutCoverage == null) r.scoutCoverage = 0;
+    }
+    for (const ar of world.armies) this.ensureArmy(ar);
+    for (const w of world.wars) {
+      if (!w.goal) w.goal = 'capture_settlement';
+      if (w.supplyDisruptions == null) w.supplyDisruptions = 0;
+      if (w.sieges == null) w.sieges = 0;
+      if (w.ambushes == null) w.ambushes = 0;
+      if (w.goalAchieved == null) w.goalAchieved = false;
+    }
+    this.validateOrphans();
+  },
+
+  ensureArmy(ar) {
+    if (!ar) return;
+    if (!ar.strategyProfile) ar.strategyProfile = defaultStrategyProfile();
+    else ar.strategyProfile = Object.assign(defaultStrategyProfile(), ar.strategyProfile);
+    if (!ar.siegeEquipment) ar.siegeEquipment = defaultSiegeEquipment();
+    else ar.siegeEquipment = Object.assign(defaultSiegeEquipment(), ar.siegeEquipment);
+    if (!ar.warGoal) ar.warGoal = 'capture_settlement';
+    if (ar.retreatTargetId == null) ar.retreatTargetId = null;
+    if (ar.baseSettlementId == null) ar.baseSettlementId = ar.locationId;
+    if (ar.campId == null) ar.campId = null;
+    if (ar.supplyLineId == null) ar.supplyLineId = null;
+    const cmd = getAgent(ar.commanderId);
+    if (cmd) this.computeStrategyProfile(cmd, ar);
+  },
+
+  getSupplyLine(id) { return (world.supplyLines || []).find(sl => sl.id === id); },
+
+  createSupplyLine(ar, originId, targetId) {
+    if (!ar || !originId || !targetId || originId === targetId) return null;
+    const path = findPath(originId, targetId);
+    if (!path || path.length < 2) return null;
+    const existing = (world.supplyLines || []).find(sl => sl.armyId === ar.id && sl.status !== 'collapsed');
+    if (existing) {
+      existing.routePath = path;
+      existing.targetSettlementId = targetId;
+      existing.danger = pathDanger(path);
+      ar.supplyLineId = existing.id;
+      return existing;
+    }
+    const sl = defaultSupplyLine(ar.id, originId, targetId, path);
+    world.supplyLines.push(sl);
+    ar.supplyLineId = sl.id;
+    ar.baseSettlementId = originId;
+    return sl;
+  },
+
+  cutSupplyLine(sl, reason, byFactionId) {
+    if (!sl || sl.status === 'cut' || sl.status === 'collapsed') return;
+    sl.status = 'cut';
+    sl.disruptionEvents.push({ day: world.day, reason: reason || 'cut', byFactionId: byFactionId || null });
+    const ar = getArmy(sl.armyId);
+    if (ar) {
+      ar.morale = clamp(ar.morale - 12, 0, 100);
+      for (const uId of ar.unitIds) {
+        const u = getUnit(uId);
+        if (u) { u.fatigue = clamp(u.fatigue + 10, 0, 100); u.morale = clamp(u.morale - 8, 0, 100); }
+      }
+      const cmd = getAgent(ar.commanderId);
+      if (cmd && typeof AgentMemorySystem !== 'undefined') {
+        AgentMemorySystem.recordPersonalEvent(cmd, 'lost_supply_line', 'เส้นทางเสบียงถูกตัด', reason || 'supply line cut', 3, { settlements: [sl.originSettlementId, sl.targetSettlementId] });
+        cmd.strategyProfile = cmd.strategyProfile || defaultStrategyProfile();
+        ar.strategyProfile.logisticsFocus = clamp((ar.strategyProfile.logisticsFocus || 0.4) + 0.15, 0, 1);
+      }
+    }
+    const war = ar ? world.wars.find(w => !w.endDay && (w.attackerId === ar.factionId || w.defenderId === ar.factionId)) : null;
+    if (war) war.supplyDisruptions = (war.supplyDisruptions || 0) + 1;
+    Chronicle.add({
+      category: 'war', importance: 4,
+      title: `📦 เส้นทางเสบียงถูกตัด`,
+      description: reason || 'กองทัพขาดเสบียงจากแนวหลัง',
+      settlements: [sl.originSettlementId, sl.targetSettlementId].filter(x => x),
+      factions: byFactionId ? [byFactionId] : []
+    });
+    EventSystem.add('war', `📦 เส้นทางเสบียงถูกตัด! ${reason || ''}`);
+  },
+
+  deliverSupply(sl) {
+    if (!sl || sl.status === 'collapsed') return 0;
+    const ar = getArmy(sl.armyId);
+    const origin = getSettlement(sl.originSettlementId);
+    if (!ar || !origin || origin.type === 'camp') return 0;
+    const units = ar.unitIds.map(getUnit).filter(u => u && unitMembers(u).length);
+    const men = sum(units, u => unitMembers(u).length);
+    if (!men) return 0;
+    const cmd = getAgent(ar.commanderId);
+    const logMod = cmd ? 1 + cmd.skills.logistics * 0.05 : 1;
+    const need = Math.ceil(men * 0.8);
+    let delivered = 0;
+    if (sl.status === 'open' || sl.status === 'threatened') {
+      const foodTake = Math.min(Math.floor(origin.stock.food * 0.08), need * 2, Math.ceil(need * logMod));
+      if (foodTake > 0 && origin.stock.food >= foodTake) {
+        origin.stock.food -= foodTake;
+        ar.supply.food += foodTake;
+        sl.foodFlow += foodTake;
+        delivered += foodTake;
+      }
+      const wpnTake = Math.min(Math.floor(origin.stock.weapons * 0.05), Math.max(1, Math.floor(men / 8)));
+      if (wpnTake > 0 && origin.stock.weapons >= wpnTake) {
+        origin.stock.weapons -= wpnTake;
+        ar.supply.weapons = (ar.supply.weapons || 0) + wpnTake;
+        sl.weaponFlow += wpnTake;
+      }
+      sl.lastDeliveredDay = world.day;
+      sl.danger = pathDanger(sl.routePath);
+      if (sl.danger > 0.45) sl.status = 'threatened';
+      else if (sl.status === 'threatened' && sl.danger < 0.3) sl.status = 'open';
+    } else if (sl.status === 'cut') {
+      // small fallback to prevent softlock
+      const fallback = Math.min(2, Math.floor(men * 0.15));
+      ar.supply.food += fallback;
+      delivered = fallback;
+    }
+    return delivered;
+  },
+
+  updateSupplyLines() {
+    for (const sl of (world.supplyLines || []).slice()) {
+      const ar = getArmy(sl.armyId);
+      if (!ar) { sl.status = 'collapsed'; continue; }
+      this.deliverSupply(sl);
+      if (sl.status === 'open' || sl.status === 'threatened') {
+        for (let i = 0; i < sl.routePath.length - 1; i++) {
+          const r = getRoute(sl.routePath[i], sl.routePath[i + 1]);
+          if (r) {
+            r.supplyTraffic = (r.supplyTraffic || 0) + 0.4;
+            if (chance((r.ambushRisk || 0.1) * 0.04 * (1 - (r.scoutCoverage || 0) * 0.5))) {
+              this.cutSupplyLine(sl, `ถูกโจมตีบนเส้นทาง${inferRouteTerrain(r)}`, null);
+              break;
+            }
+          }
+        }
+      }
+      if (sl.status === 'cut' && world.day - (sl.disruptionEvents[sl.disruptionEvents.length - 1]?.day || 0) > 8 && chance(0.2)) {
+        sl.status = 'threatened';
+      }
+    }
+  },
+
+  establishCamp(ar) {
+    if (!ar || ar.campId) return getArmyCamp(ar.campId);
+    const camp = {
+      id: uid(), armyId: ar.id, locationId: ar.locationId,
+      dayEstablished: world.day,
+      stock: { food: Math.floor(ar.supply.food * 0.25), weapons: Math.floor((ar.supply.weapons || 0) * 0.2), arrows: Math.floor((ar.supply.arrows || 0) * 0.2) },
+      fortification: 0, visibility: 0.45, diseaseRisk: 0.08, security: 35,
+      linkedSupplyLineId: ar.supplyLineId
+    };
+    world.armyCamps.push(camp);
+    ar.campId = camp.id;
+    return camp;
+  },
+
+  getArmyCamp(id) { return (world.armyCamps || []).find(c => c.id === id); },
+
+  updateCamps() {
+    for (const camp of (world.armyCamps || []).slice()) {
+      const ar = getArmy(camp.armyId);
+      if (!ar) { world.armyCamps = world.armyCamps.filter(c => c.id !== camp.id); continue; }
+      const days = world.day - camp.dayEstablished;
+      if (ar.locationId === camp.locationId && !ar.travel) {
+        ar.supply.food += Math.min(camp.stock.food, 2);
+        camp.stock.food = Math.max(0, camp.stock.food - 1);
+        for (const uId of ar.unitIds) {
+          const u = getUnit(uId);
+          if (u) u.fatigue = clamp(u.fatigue - 4, 0, 100);
+        }
+        camp.diseaseRisk = clamp(camp.diseaseRisk + (days > 14 ? 0.02 : 0), 0.05, 0.6);
+        if (days > 20) ar.morale = clamp(ar.morale - 1, 0, 100);
+        if (camp.fortification > 0 && chance(0.01)) camp.stock.weapons = Math.max(0, camp.stock.weapons - 1);
+        if (chance(0.03 * (1 - camp.security / 100))) {
+          EventSystem.add('war', `🔥 ค่ายทัพถูกโจมตี! สูญเสียเสบียง`);
+          camp.stock.food = Math.floor(camp.stock.food * 0.6);
+          ar.morale -= 5;
+        }
+      } else if (world.day - camp.dayEstablished > 60) {
+        world.armyCamps = world.armyCamps.filter(c => c.id !== camp.id);
+        ar.campId = null;
+      }
+    }
+  },
+
+  addScoutReport(report) {
+    if (!world.scoutReports) world.scoutReports = [];
+    world.scoutReports.push(Object.assign({ day: world.day, confidence: 0.5, threat: 'unknown' }, report));
+    if (world.scoutReports.length > MAX_SCOUT_REPORTS) world.scoutReports.shift();
+  },
+
+  scoutCoverageForRoute(r) {
+    if (!r) return 0;
+    let cov = r.scoutCoverage || 0;
+    for (const rep of (world.scoutReports || []).slice(-15)) {
+      if (rep.locationId === r.a || rep.locationId === r.b) cov += rep.confidence * 0.15;
+    }
+    return clamp(cov, 0, 1);
+  },
+
+  runArmyScouts(ar) {
+    const cmd = getAgent(ar.commanderId);
+    if (!cmd) return;
+    const prof = ar.strategyProfile || defaultStrategyProfile();
+    if (prof.scoutUse < 0.25 && !chance(0.15)) return;
+    const targetId = ar.objective?.targetId || ar.locationId;
+    const path = ar.supplyLineId ? (this.getSupplyLine(ar.supplyLineId)?.routePath) : findPath(ar.baseSettlementId || ar.locationId, targetId);
+    if (!path || path.length < 2) return;
+    const seg = pick(path.slice(0, -1));
+    const nb = path[path.indexOf(seg) + 1];
+    const r = getRoute(seg, nb);
+    if (r) {
+      r.scoutCoverage = clamp((r.scoutCoverage || 0) + 0.12 + cmd.skills.tactics * 0.02, 0, 1);
+      const enemyNear = world.armies.filter(x => x.factionId !== ar.factionId && x.locationId === seg || x.locationId === nb);
+      let est = 0;
+      for (const ea of enemyNear) est += MilitarySystem.armyPower(ea);
+      this.addScoutReport({
+        locationId: seg, targetType: enemyNear.length ? 'enemy_army' : 'route',
+        estimatedPower: est || pathDanger(path) * 100,
+        confidence: clamp(0.35 + cmd.combatStats?.perception * 0.04 + prof.scoutUse * 0.3, 0.2, 0.95),
+        threat: (r.ambushRisk || 0) > 0.35 ? 'high' : 'low',
+        sourceUnitId: cmd.id, armyId: ar.id
+      });
+    }
+  },
+
+  ambushRisk(route, entity) {
+    if (!route) return 0;
+    let risk = (route.ambushRisk || route.danger || 0.1);
+    if (route.terrain === 'forest') risk *= 1.35;
+    if (route.terrain === 'marsh') risk *= 1.15;
+    if (route.terrain === 'road') risk *= 0.7;
+    const cov = this.scoutCoverageForRoute(route);
+    risk *= (1 - cov * 0.55);
+    const ar = entity.unitIds ? entity : (entity.armyId ? getArmy(entity.armyId) : null);
+    if (ar?.strategyProfile?.scoutUse > 0.5) risk *= 0.75;
+    const cmd = ar ? getAgent(ar.commanderId) : getAgent(entity.leaderId);
+    if (cmd) risk *= (1 - cmd.skills.tactics * 0.03 - (cmd.combatStats?.perception || 6) * 0.008);
+    const cavalry = entity.unitIds
+      ? ar.unitIds.map(getUnit).some(u => unitMembers(u).some(m => m.profession === 'cavalry' || m.equipment?.mount))
+      : unitMembers(entity).some(m => m.profession === 'cavalry' || m.equipment?.mount);
+    if (cavalry && route.terrain === 'plain') risk *= 0.65;
+    return clamp(risk, 0.01, 0.75);
+  },
+
+  checkTravelAmbush(entity, route, fromId, toId) {
+    if (!route || route.destroyed) return false;
+    const risk = this.ambushRisk(route, entity);
+    if (!chance(risk * 0.12)) return false;
+    const isArmy = !!entity.unitIds;
+    const units = isArmy ? entity.unitIds.map(getUnit).filter(u => u && unitMembers(u).length) : [entity];
+    if (!units.length) return false;
+    const bandits = world.units.filter(u => u.kind === 'warband' && !u.travel && (u.locationId === fromId || u.locationId === toId) && unitMembers(u).length > 0);
+    const attackers = bandits.length ? [pick(bandits)] : [];
+    if (!attackers.length && chance(0.5)) {
+      const loose = agentsAt(fromId).filter(a => a.profession === 'bandit' && !a.unitId);
+      if (loose.length >= 2) {
+        const lu = createUnit({ name: 'โจรซุ่มโจมตี', kind: 'warband', leaderId: loose[0].id, memberIds: loose.slice(0, 4).map(x => x.id), factionId: loose[0].factionId, locationId: fromId, food: 5 });
+        attackers.push(lu);
+      }
+    }
+    if (!attackers.length) return false;
+    const s = getSettlement(fromId);
+    const terrainCtx = terrainBattleContext(route.terrain || inferRouteTerrain(route));
+    const result = MilitarySystem.battle(attackers, units, {
+      label: s ? s.name : 'เส้นทาง', kind: 'ambush', terrain: terrainCtx.kind, terrainType: route.terrain,
+      settlementId: fromId, allowRetreat: true
+    });
+    route.ambushRisk = clamp((route.ambushRisk || 0.1) + 0.05, 0.02, 0.9);
+    route.recentRaids = (route.recentRaids || 0) + 1;
+    if (isArmy) {
+      entity.supply.food = Math.max(0, entity.supply.food - randInt(5, 20));
+      const sl = entity.supplyLineId ? this.getSupplyLine(entity.supplyLineId) : null;
+      if (sl && chance(0.35)) this.cutSupplyLine(sl, 'ถูกซุ่มโจมตีบนเส้นทางเสบียง');
+    } else {
+      entity.supply.food = Math.max(0, (entity.supply.food || 0) - randInt(3, 12));
+    }
+    for (const u of units) {
+      for (const m of unitMembers(u)) {
+        if (typeof AgentMemorySystem !== 'undefined') {
+          AgentMemorySystem.recordPersonalEvent(m, 'survived_ambush', 'รอดจากการซุ่มโจมตี', `บนเส้นทาง${route.terrain || 'unknown'}`, result.attackerWins ? 2 : 3, {});
+          if (!result.attackerWins) addGrudge(m, getAgent(attackers[0].leaderId)?.id, 'ambush', 10);
+        }
+      }
+    }
+    const war = isArmy ? world.wars.find(w => !w.endDay && w.attackerId === entity.factionId) : null;
+    if (war) war.ambushes = (war.ambushes || 0) + 1;
+    if (sum(units, u => unitMembers(u).length) >= 6) {
+      Chronicle.add({ category: 'war', importance: 3, title: '⚠ การซุ่มโจมตีใหญ่', description: `บนเส้นทาง${route.terrain} เสียชีวิต ${result.totalDead || 0}`, settlements: [fromId] });
+    }
+    return true;
+  },
+
+  computeStrategyProfile(commander, ar) {
+    if (!commander || !ar) return defaultStrategyProfile();
+    const p = ar.strategyProfile || defaultStrategyProfile();
+    const mem = commander.memory?.personal;
+    p.riskAppetite = clamp(commander.traits.bravery * 0.5 + commander.traits.ambition * 0.35, 0.1, 0.95);
+    p.patience = clamp(0.4 + commander.traits.discipline * 0.4 - commander.traits.ambition * 0.15, 0.1, 0.9);
+    p.logisticsFocus = clamp(0.25 + commander.skills.logistics * 0.06 + (mem?.majorEvents?.some(e => e.type === 'starved_on_campaign' || e.type === 'lost_supply_line') ? 0.25 : 0), 0.1, 0.95);
+    p.scoutUse = clamp(0.2 + commander.combatStats?.perception * 0.04 + commander.skills.tactics * 0.04, 0.1, 0.9);
+    p.honor = clamp(0.35 + commander.traits.loyalty * 0.45 - commander.traits.greed * 0.2, 0.05, 0.95);
+    const units = ar.unitIds.map(getUnit).filter(Boolean);
+    const cav = sum(units, u => unitMembers(u).filter(m => m.profession === 'cavalry').length);
+    const men = sum(units, u => unitMembers(u).length) || 1;
+    if (p.logisticsFocus > 0.6) p.preferredStrategy = 'cut_supply';
+    else if (cav / men > 0.25) p.preferredStrategy = 'raid_economy';
+    else if (p.patience > 0.65) p.preferredStrategy = 'siege';
+    else if (p.riskAppetite < 0.35) p.preferredStrategy = 'avoid_battle';
+    else if (p.honor > 0.7) p.preferredStrategy = 'defend_trade';
+    else p.preferredStrategy = 'direct_assault';
+    ar.strategyProfile = p;
+    commander.strategyProfile = p;
+    return p;
+  },
+
+  pickWarGoal(attacker, defender, target) {
+    const war = activeWarBetween(attacker.id, defender.id);
+    if (war?.goal) return war.goal;
+    const hubs = world.settlements.filter(s => s.factionId === defender.id && (s.marketRole?.hubLevel || 0) > 0);
+    if (hubs.length && chance(0.35)) return 'secure_market_hub';
+    if (target?.type === 'fort' || target?.type === 'castle') return 'capture_settlement';
+    if (defender.isBandit) return 'destroy_bandit_camp';
+  if (isVassalOf(defender, attacker)) return 'break_vassal';
+    return pick(['capture_settlement', 'cut_trade_route', 'force_tribute', 'defend_border']);
+  },
+
+  pickCampaignTarget(f, enemyF, goal) {
+    const enemySetts = world.settlements.filter(s => s.factionId === enemyF.id && s.type !== 'camp');
+    if (!enemySetts.length) return null;
+    if (goal === 'secure_market_hub') {
+      const hubs = enemySetts.filter(s => (s.marketRole?.hubLevel || 0) > 0);
+      if (hubs.length) return hubs.reduce((m, x) => (x.strategicValue || 0) > (m.strategicValue || 0) ? x : m, hubs[0]);
+    }
+    if (goal === 'cut_trade_route') {
+      return enemySetts.reduce((m, x) => (x.tradeVolume || 0) > (m.tradeVolume || 0) ? x : m, enemySetts[0]);
+    }
+    return enemySetts.reduce((m, x) => {
+      const gm = m.garrisonUnitId ? MilitarySystem.unitPower(getUnit(m.garrisonUnitId)) : 0;
+      const gx = x.garrisonUnitId ? MilitarySystem.unitPower(getUnit(x.garrisonUnitId)) : 0;
+      return gx < gm ? x : m;
+    }, enemySetts[0]);
+  },
+
+  updateSiegeEquipment(ar, target) {
+    if (!ar?.siegeEquipment || !target?.siege) return;
+    const se = ar.siegeEquipment;
+    if (se.ready) return;
+    const cmd = getAgent(ar.commanderId);
+    const base = getSettlement(ar.baseSettlementId || ar.locationId);
+    if (!base) return;
+    if (base.stock.wood < 2 || base.stock.tools < 1) {
+      ar.morale = clamp(ar.morale - 1, 0, 100);
+      return;
+    }
+    se.buildDays = (se.buildDays || 0) + 1;
+    if (se.buildDays % 3 === 0) { base.stock.wood -= 2; base.stock.tools -= 0.5; }
+    const rate = 1 + (cmd?.skills.logistics || 0) * 0.15 + (cmd?.skills.crafting || 0) * 0.1;
+    if (se.buildDays > 4 / rate) se.ladders = 1;
+    if (se.buildDays > 8 / rate) se.ram = 1;
+    if (se.buildDays > 14 / rate) { se.tower = 1; se.ready = true; }
+    ar.supply.food -= 1;
+    if (se.ready) {
+      const war = world.wars.find(w => !w.endDay && w.attackerId === ar.factionId);
+      if (war) war.sieges = (war.sieges || 0) + 1;
+      Chronicle.add({ category: 'war', importance: 3, title: `🏗 เครื่องมือล้อมเมืองพร้อม`, description: `${ar.name} สร้างเครื่องล้อมสำหรับ${target.name}เสร็จ`, settlements: [target.id], agents: cmd ? [cmd.id] : [] });
+      if (cmd && typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.recordPersonalEvent(cmd, 'built_siege_engine', 'สร้างเครื่องมือล้อมเมือง', target.name, 3, { settlements: [target.id] });
+    }
+  },
+
+  siegeDefenseBonus(target, ar) {
+    let bonus = (target.buildings?.includes('Wall') ? 60 : 0) + (target.buildings?.includes('Watchtower') ? 15 : 0);
+    const se = ar?.siegeEquipment;
+    if (se?.ready) {
+      bonus -= (se.ladders ? 8 : 0) + (se.ram ? 18 : 0) + (se.tower ? 25 : 0) + (se.catapult ? 15 : 0);
+    }
+    return bonus;
+  },
+
+  handleBattleRetreat(loserUnits, winnerUnits, loserWasAttacker, context) {
+    if (!loserUnits?.length) return { pursuitLosses: 0 };
+    const ar = loserUnits[0]?.armyId ? getArmy(loserUnits[0].armyId) : null;
+    let retreatTarget = ar?.baseSettlementId || ar?.locationId || context.settlementId;
+    if (ar?.retreatTargetId) retreatTarget = ar.retreatTargetId;
+    const path = retreatTarget ? findPath(loserUnits[0].locationId, retreatTarget) : null;
+    const scoutSafe = path && (world.scoutReports || []).some(r => path.includes(r.locationId) && r.confidence > 0.5);
+    let pursuitLosses = 0;
+    const cavWin = sum(winnerUnits, u => unitMembers(u).filter(m => m.profession === 'cavalry' || m.equipment?.mount).length);
+    const pursueChance = clamp(0.15 + cavWin * 0.04 - (scoutSafe ? 0.12 : 0), 0.05, 0.55);
+    for (const u of loserUnits) {
+      u.retreating = true;
+      const members = unitMembers(u);
+      const moraleLow = u.morale < 35;
+      for (const m of members) {
+        if (moraleLow && chance(0.2)) {
+          m.unitId = null;
+          u.memberIds = u.memberIds.filter(id => id !== m.id);
+          if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.recordPersonalEvent(m, 'survived_rout', 'หนีจากสนามรบอย่างตื่นตระหนก', context.label || '', 2, {});
+        } else if (chance(pursueChance * 0.25)) {
+          NeedSystem.kill(m, 'ถูกไล่ตามหลังถอยทัพ');
+          pursuitLosses++;
+        }
+      }
+      const leader = getAgent(u.leaderId);
+      const cmd = ar ? getAgent(ar.commanderId) : leader;
+      if (cmd && typeof AgentMemorySystem !== 'undefined' && scoutSafe) {
+        AgentMemorySystem.recordPersonalEvent(u.leaderId ? getAgent(u.leaderId) : cmd, 'commander_saved_retreat', 'ถอนทัพอย่างมีระเบียบ', context.label || '', 3, { agents: [cmd.id] });
+        addGratitude(getAgent(u.leaderId), cmd.id, 'saved_retreat', 10);
+      } else if (cmd && typeof AgentMemorySystem !== 'undefined' && moraleLow) {
+        for (const m of members.filter(x => x.alive)) AgentMemorySystem.recordPersonalEvent(m, 'abandoned_in_retreat', 'ถูกทิ้งในยามถอยทัพ', context.label || '', 3, { agents: [cmd.id] });
+      }
+    }
+    if (ar) {
+      ar.retreatTargetId = retreatTarget;
+      if (retreatTarget && path) startTravel(ar, retreatTarget, 'retreat');
+      ar.objective = { type: 'retreat', targetId: retreatTarget };
+    }
+    if (pursuitLosses >= 3) {
+      Chronicle.add({ category: 'war', importance: 3, title: '🏃 การถอยทัพอันดุเดือด', description: `สูญเสีย ${pursuitLosses} ในการไล่ตาม`, settlements: context.settlementId ? [context.settlementId] : [] });
+    }
+    return { pursuitLosses };
+  },
+
+  tickDaily() {
+    if (!world.supplyLines) world.supplyLines = [];
+    if (!world.armyCamps) world.armyCamps = [];
+    if (!world.scoutReports) world.scoutReports = [];
+    for (const ar of world.armies) {
+      this.ensureArmy(ar);
+      const target = ar.objective?.targetId ? getSettlement(ar.objective.targetId) : null;
+      const base = getSettlement(ar.baseSettlementId || ar.locationId);
+      const distSteps = base && target ? (findPath(base.id, target.id)?.length || 0) : 0;
+      if (distSteps > 2 || ar.objective?.type === 'attack') {
+        if (base && target) this.createSupplyLine(ar, base.id, target.id);
+      }
+      if (ar.supplyLineId) this.deliverSupply(this.getSupplyLine(ar.supplyLineId));
+      if (target?.siege && target.siege.armyId === ar.id) {
+        if (!ar.campId) this.establishCamp(ar);
+        this.updateSiegeEquipment(ar, target);
+      }
+      if (world.day % 2 === 0) this.runArmyScouts(ar);
+      const sl = ar.supplyLineId ? this.getSupplyLine(ar.supplyLineId) : null;
+      if (sl?.status === 'cut') {
+        ar.supply.food = Math.max(0, ar.supply.food - 1);
+        for (const uId of ar.unitIds) {
+          const u = getUnit(uId);
+          if (u) {
+            u.fatigue = clamp(u.fatigue + 2, 0, 100);
+            if (ar.supply.food < unitMembers(u).length) u.morale = clamp(u.morale - 2, 0, 100);
+          }
+        }
+        if (ar.supply.food <= 0 && chance(0.08)) {
+          EventSystem.add('war', `🍞 กองทัพ${ar.name}อดอยากบนรบ — ขวัญกำลังทัพทรุด`);
+          ar.morale = clamp(ar.morale - 8, 0, 100);
+          const cmd = getAgent(ar.commanderId);
+          if (cmd && typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.recordPersonalEvent(cmd, 'starved_on_campaign', 'อดอยากบนรบ', ar.name, 3, {});
+        }
+      }
+    }
+    if (world.day % 2 === 0) this.updateSupplyLines();
+    this.updateCamps();
+    this.validateOrphans();
+  },
+
+  validateOrphans() {
+    const armyIds = new Set(world.armies.map(a => a.id));
+    world.supplyLines = (world.supplyLines || []).filter(sl => armyIds.has(sl.armyId) || sl.status !== 'collapsed');
+    world.armyCamps = (world.armyCamps || []).filter(c => armyIds.has(c.armyId));
+    for (const sl of world.supplyLines || []) {
+      sl.routePath = (sl.routePath || []).filter(id => getSettlement(id));
+      if (sl.routePath.length < 2) sl.status = 'collapsed';
+    }
+  },
+
+  rankings() {
+    const lines = (world.supplyLines || []).filter(sl => sl.status !== 'collapsed');
+    const vulnerable = lines.slice().sort((a, b) => b.danger - a.danger).slice(0, 8);
+    const lowSupply = world.armies.filter(ar => {
+      const men = sum(ar.unitIds.map(getUnit), u => unitMembers(u).length);
+      return men > 0 && ar.supply.food < men * 2;
+    }).slice(0, 8);
+    const sieges = world.settlements.filter(s => s.siege);
+    const campaigns = world.armies.filter(ar => ar.objective?.type === 'attack' || ar.travel);
+    return { vulnerable, lowSupply, sieges, campaigns, scoutReports: (world.scoutReports || []).slice(-12).reverse() };
+  },
+
+  /* Sandbox helpers */
+  forceSupplyCrisis(ar) {
+    if (!ar) return;
+    const sl = ar.supplyLineId ? this.getSupplyLine(ar.supplyLineId) : null;
+    if (sl) this.cutSupplyLine(sl, '[Sandbox] วิกฤตเสบียง');
+    ar.supply.food = Math.max(0, Math.floor(ar.supply.food * 0.2));
+    ar.morale = clamp(ar.morale - 15, 0, 100);
+  },
+
+  spawnScoutUnit(ar) {
+    if (!ar) return;
+    this.runArmyScouts(ar);
+    this.addScoutReport({ locationId: ar.locationId, targetType: 'scout_enemy_army', estimatedPower: 50, confidence: 0.8, threat: 'medium', sourceUnitId: ar.commanderId, armyId: ar.id });
+  },
+
+  giveSiegeEquipment(ar) {
+    if (!ar) return;
+    ar.siegeEquipment = { ladders: 1, ram: 1, tower: 1, catapult: 0, buildDays: 20, ready: true };
+  },
+
+  forceAmbush(routeId) {
+    const r = world.routes.find(x => x.id === routeId);
+    if (!r) return;
+    const ar = world.armies[0];
+    if (ar) this.checkTravelAmbush(ar, r, r.a, r.b);
+  },
+
+  setWarGoal(fA, fB, goal) {
+    const w = activeWarBetween(fA?.id, fB?.id);
+    if (w && WAR_GOAL_TYPES.includes(goal)) w.goal = goal;
+    for (const ar of world.armies.filter(a => a.factionId === fA?.id)) ar.warGoal = goal;
+  }
+};
+
+function getArmyCamp(id) { return CampaignWarfareSystem.getArmyCamp(id); }
+
 /* ═══════════════════ 11. TRADER SYSTEM ═══════════════════ */
 
 const TraderSystem = {
@@ -3647,7 +4303,23 @@ const MilitarySystem = {
   /* ── การรบ: attackerPower vs defenderPower ── */
   battle(attackerUnits, defenderUnits, context) {
     world.stats.battles++;
-    const terrain = context.terrain || (context.kind === 'raid' ? 'close' : 'field');
+    let terrain = context.terrain || (context.kind === 'raid' ? 'close' : 'field');
+    let terrainType = context.terrainType;
+    if (!terrainType && context.settlementId) {
+      const st = getSettlement(context.settlementId);
+      if (st) {
+        terrainType = st.terrain || inferSettlementTerrain(st);
+        const tc = terrainBattleContext(terrainType);
+        terrain = tc.kind;
+        context._terrainAtk = tc.atk;
+        context._terrainDef = tc.def;
+      }
+    } else if (terrainType) {
+      const tc = terrainBattleContext(terrainType);
+      terrain = tc.kind;
+      context._terrainAtk = tc.atk;
+      context._terrainDef = tc.def;
+    }
     let atkPower = 0, defPower = 0;
     for (const u of attackerUnits) atkPower += this.unitPower(u, terrain);
     for (const u of defenderUnits) {
@@ -3661,8 +4333,8 @@ const MilitarySystem = {
         }
       }
     }
-    atkPower *= rand(0.82, 1.18);
-    defPower = (defPower + (context.defenseBonus || 0)) * rand(0.82, 1.18);
+    atkPower *= rand(0.82, 1.18) * (context._terrainAtk || 1);
+    defPower = (defPower + (context.defenseBonus || 0)) * rand(0.82, 1.18) * (context._terrainDef || 1);
     const attackerWins = atkPower > defPower;
     const ratio = clamp(Math.min(atkPower, defPower) / Math.max(atkPower, defPower, 1), 0.1, 1);
     const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
@@ -3718,6 +4390,14 @@ const MilitarySystem = {
     const atkResult = applyCasualties(attackerUnits, attackerWins ? winnerRate : loserRate, attackerWins);
     const defResult = applyCasualties(defenderUnits, attackerWins ? loserRate : winnerRate, !attackerWins);
     const totalDead = atkResult.dead + defResult.dead;
+    let pursuitLosses = 0;
+    if (!attackerWins && context.allowRetreat !== false && typeof CampaignWarfareSystem !== 'undefined') {
+      const pr = CampaignWarfareSystem.handleBattleRetreat(attackerUnits, defenderUnits, true, context);
+      pursuitLosses = pr.pursuitLosses || 0;
+    } else if (attackerWins && context.allowRetreat !== false && typeof CampaignWarfareSystem !== 'undefined' && context.kind !== 'raid') {
+      const pr = CampaignWarfareSystem.handleBattleRetreat(defenderUnits, attackerUnits, false, context);
+      pursuitLosses = pr.pursuitLosses || 0;
+    }
 
     CombatSystem.applyBattleWear(attackerUnits, attackerWins);
     CombatSystem.applyBattleWear(defenderUnits, !attackerWins);
@@ -3747,7 +4427,7 @@ const MilitarySystem = {
       });
     }
 
-    return { attackerWins, atkPower, defPower, atkResult, defResult, name: bName, totalDead };
+    return { attackerWins, atkPower, defPower, atkResult, defResult, name: bName, totalDead, pursuitLosses };
   },
 
   checkPromotion(a) {
@@ -3816,8 +4496,10 @@ const MilitarySystem = {
   resolveCapture(attUnits, attFaction, commander, s) {
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
     const defUnits = garrison ? [garrison] : [];
-    const defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 +
+    let defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 +
       (s.type === 'fort' ? 50 : s.type === 'castle' ? 90 : 0);
+    const ar = attUnits[0]?.armyId ? getArmy(attUnits[0].armyId) : null;
+    if (ar && typeof CampaignWarfareSystem !== 'undefined') defenseBonus += CampaignWarfareSystem.siegeDefenseBonus(s, ar);
     // เมือง unrest สูง loyalty ต่ำ อาจเปิดประตู
     const oldFaction = getFaction(s.factionId);
     const hateOpen = oldFaction && (s.sentiment?.hatedFactions?.[oldFaction.id] || 0) > 25;
@@ -4124,6 +4806,9 @@ const MilitarySystem = {
           // ล้อมก่อนถ้าเมืองแข็ง
           if ((target.type === 'castle' || target.buildings.includes('Wall')) && !target.siege && chance(0.6)) {
             target.siege = { armyId: ar.id, days: 0 };
+            if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.establishCamp(ar);
+            const war = activeWarBetween(faction.id, target.factionId);
+            if (war) war.sieges = (war.sieges || 0) + 1;
             EventSystem.add('war', `🏰 กองทัพ${faction.name}เริ่มล้อม${target.name} — เสบียงเข้าออกไม่ได้`);
             settlementHistory(target, `ถูกกองทัพ${faction.name}ล้อมเมือง`);
             Chronicle.add({
@@ -4138,10 +4823,12 @@ const MilitarySystem = {
           const captured = this.resolveCapture(units, faction, commander || getAgent(units[0].leaderId), target);
           target.siege = null;
           if (captured) {
-            // จบภารกิจ กองทัพพักในเมือง — สงครามจบด้วยชัยชนะฝ่ายบุก
-            ar.objective = { type: 'idle' };
             const war = oldFactionId ? activeWarBetween(ar.factionId, oldFactionId) : null;
-            if (war) endWar(war, ar.factionId, 'ฝ่ายบุกบรรลุเป้าหมายสงคราม');
+            if (war) {
+              war.goalAchieved = true;
+              endWar(war, ar.factionId, 'ฝ่ายบุกบรรลุเป้าหมายสงคราม');
+            }
+            ar.objective = { type: 'idle' };
             const f = getFaction(ar.factionId);
             if (f) { f.warState = false; }
           } else {
@@ -4679,18 +5366,28 @@ const GovernanceSystem = {
     // commander = คนที่ leadership สูงสุดใน faction
     const commander = world.agents.filter(a => a.alive && a.factionId === f.id && (MILITARY_PROFS.has(a.profession) || RULER_PROFS.has(a.profession)))
       .reduce((m, x) => (x.skills.leadership + x.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? x : m, ruler);
-    const target = enemySettlements.reduce((m, x) => {
+    const target = typeof CampaignWarfareSystem !== 'undefined'
+      ? CampaignWarfareSystem.pickCampaignTarget(f, enemyF, activeWarBetween(f.id, enemyF.id)?.goal || 'capture_settlement')
+      : enemySettlements.reduce((m, x) => {
       const gm = m.garrisonUnitId ? MilitarySystem.unitPower(getUnit(m.garrisonUnitId)) : 0;
       const gx = x.garrisonUnitId ? MilitarySystem.unitPower(getUnit(x.garrisonUnitId)) : 0;
       return gx < gm ? x : m;
     }, enemySettlements[0]);
+    if (!target) return;
     const foodBought = Math.min(capital.stock.food * 0.4, 250);
     capital.stock.food -= foodBought;
     const ar = createArmy({
       name: `กองทัพ${f.name}`, commanderId: commander.id, factionId: f.id,
       unitIds: myUnits.map(u => u.id), locationId: myUnits[0].locationId,
-      objective: { type: 'attack', targetId: target.id }, food: foodBought
+      objective: { type: 'attack', targetId: target.id }, food: foodBought,
+      baseSettlementId: capital.id,
+      warGoal: typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.pickWarGoal(f, enemyF, target) : 'capture_settlement'
     });
+    if (typeof CampaignWarfareSystem !== 'undefined') {
+      CampaignWarfareSystem.ensureArmy(ar);
+      CampaignWarfareSystem.computeStrategyProfile(commander, ar);
+      CampaignWarfareSystem.createSupplyLine(ar, capital.id, target.id);
+    }
     // รวมพลที่จุดเดียวแล้วเดิน
     for (const u of myUnits) { u.locationId = ar.locationId; for (const m of unitMembers(u)) m.locationId = ar.locationId; }
     startTravel(ar, target.id, 'war');
@@ -5372,6 +6069,7 @@ function simulateDay() {
   DiplomacySystem.tick();
   MarketTradeSystem.tickDaily();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
+  if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
 
   // เติม garrison จากทหารว่าง
   for (const s of world.settlements) {
@@ -6059,6 +6757,24 @@ const ObserverSystem = {
       html += pr.connected.filter(x => x.n > 0).map(x => row(x.agent.name, `${x.n} relations`, 'agent', x.agent.id)).join('');
       html += '<div class="obs-section-head">Most Hated</div>';
       html += pr.hated.filter(x => x.hate > 5).map(x => row(x.agent.name, `hate ${fmt(x.hate, 0)}`, 'agent', x.agent.id)).join('');
+    } else if (tab === 'campaigns' && typeof CampaignWarfareSystem !== 'undefined') {
+      const cr = CampaignWarfareSystem.rankings();
+      html = '<div class="obs-section-head">Active Campaigns</div>';
+      html += cr.campaigns.length ? cr.campaigns.map(ar =>
+        row(ar.name, `${ar.objective?.type || 'idle'} · food ${fmt(ar.supply?.food || 0)}`, 'army', ar.id)).join('')
+        : '<p class="hint">ไม่มีกองทัพเคลื่อนที่</p>';
+      html += '<div class="obs-section-head">Supply Lines at Risk</div>';
+      html += cr.vulnerable.filter(sl => sl.status !== 'open').map(sl =>
+        row(`Supply ${sl.status}`, `danger ${fmt(sl.danger * 100, 0)}%`, 'army', sl.armyId)).join('')
+        || cr.vulnerable.slice(0, 5).map(sl => row(`Line → ${(getSettlement(sl.targetSettlementId) || {}).name || '?'}`, `${sl.status} · ${fmt(sl.danger * 100, 0)}%`, 'army', sl.armyId)).join('')
+        || '<p class="hint">ไม่มีเส้นทางเสบียง</p>';
+      html += '<div class="obs-section-head">Armies Low on Supply</div>';
+      html += cr.lowSupply.map(ar => row(ar.name, `food ${fmt(ar.supply.food)}`, 'army', ar.id)).join('') || '<p class="hint">เสบียงพอใช้</p>';
+      html += '<div class="obs-section-head">Ongoing Sieges</div>';
+      html += cr.sieges.map(s => row(s.name, `day ${s.siege?.days || 0}`, 'settlement', s.id)).join('') || '<p class="hint">ไม่มีการล้อม</p>';
+      html += '<div class="obs-section-head">Scout Reports</div>';
+      html += cr.scoutReports.map(rep => row(`${rep.targetType} @ ${(getSettlement(rep.locationId) || {}).name || '?'}`, `conf ${fmt((rep.confidence || 0) * 100, 0)}% · ${rep.threat}`, 'army', rep.armyId || 0)).join('')
+        || '<p class="hint">ยังไม่มีรายงานลาดตระเวน</p>';
     }
     body.innerHTML = html;
     for (const rowEl of body.querySelectorAll('.obs-row')) {
@@ -6240,6 +6956,39 @@ const Renderer = {
       ctx.lineTo(this.sx(b.x), this.sy(b.y));
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // supply lines (Phase 18)
+    if (typeof CampaignWarfareSystem !== 'undefined') {
+      for (const sl of (world.supplyLines || [])) {
+        if (sl.status === 'collapsed' || !sl.routePath || sl.routePath.length < 2) continue;
+        if (UI.selected?.kind !== 'army') continue;
+        const selAr = getArmy(UI.selected.id);
+        if (!selAr || selAr.supplyLineId !== sl.id) continue;
+        const color = sl.status === 'cut' ? 'rgba(239,83,80,0.75)' : sl.status === 'threatened' ? 'rgba(255,193,7,0.65)' : 'rgba(100,181,246,0.55)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        for (let i = 0; i < sl.routePath.length; i++) {
+          const st = getSettlement(sl.routePath[i]);
+          if (!st) continue;
+          const x = this.sx(st.x), y = this.sy(st.y);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // army camps
+      for (const camp of (world.armyCamps || [])) {
+        const st = getSettlement(camp.locationId);
+        if (!st) continue;
+        const x = this.sx(st.x) + 10, y = this.sy(st.y) - 10;
+        ctx.fillStyle = 'rgba(255,152,0,0.85)';
+        ctx.beginPath();
+        ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y + 4); ctx.lineTo(x - 5, y + 4);
+        ctx.closePath(); ctx.fill();
+      }
     }
 
     // settlements
@@ -7218,6 +7967,19 @@ const UI = {
     if (s.drought > 0) html += this.kv('☀ ภัยแล้ง', `อีก ${s.drought} วัน`, 'bad');
     if (s.plague > 0) html += this.kv('☠ โรคระบาด', `ระดับ ${fmt(s.plague, 1)}`, 'bad');
     html += `</div>`;
+    html += `<div class="insp-section"><h4>Strategic (Phase 18)</h4>`;
+    html += this.kv('Terrain', s.terrain || inferSettlementTerrain(s));
+    html += this.kv('Strategic Value', fmt(s.strategicValue || settlementStrategicValue(s)));
+    if (s.siege) {
+      const ar = getArmy(s.siege.armyId);
+      html += this.kv('Under Siege', `Day ${s.siege.days}`, 'bad');
+      if (ar?.siegeEquipment?.ready) html += this.kv('Enemy Siege Gear', 'พร้อมใช้', 'warn');
+    }
+    if (s.siegeEquipment) {
+      html += this.kv('Wall Bonus', s.siegeEquipment.wallBonus ? 'มีกำแพง' : '—');
+      html += this.kv('Watchtower', s.siegeEquipment.watchtower ? 'มี' : '—');
+    }
+    html += `</div>`;
     if (s.sentiment && typeof AgentMemorySystem !== 'undefined') {
       const heroes = Object.entries(s.sentiment.heroes || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
       const villains = Object.entries(s.sentiment.villains || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -7436,6 +8198,11 @@ const UI = {
     html += this.kv('Caravan Losses', r.caravanLosses || 0, (r.caravanLosses || 0) > 3 ? 'bad' : '');
     html += this.kv('Food Price Gap', fmt(r.priceGapFood || 0, 2));
     html += this.kv('Traffic', fmt(r.traffic, 1));
+    html += `</div><div class="insp-section"><h4>Campaign (Phase 18)</h4>`;
+    html += this.kv('Terrain', r.terrain || inferRouteTerrain(r));
+    html += this.kv('Ambush Risk', fmt((r.ambushRisk || 0) * 100, 0) + '%', (r.ambushRisk || 0) > 0.35 ? 'bad' : '');
+    html += this.kv('Supply Traffic', fmt(r.supplyTraffic || 0, 1));
+    html += this.kv('Scout Coverage', fmt((r.scoutCoverage || 0) * 100, 0) + '%');
     if (r.patrolMissionId) {
       const pu = getUnit(r.patrolMissionId);
       html += this.kv('Patrol Mission', pu ? this.link('unit', pu.id, pu.name) : 'active');
@@ -7465,7 +8232,44 @@ const UI = {
     html += this.kv('ภารกิจ', ar.objective.type === 'attack' ? `บุก${(getSettlement(ar.objective.targetId) || {}).name || ''}` : ar.objective.type);
     html += this.kv('พลังรบ', fmt(MilitarySystem.armyPower(ar)));
     html += this.kv('Morale', fmt(ar.morale)) + this.bar(ar.morale, '#ab47bc');
+    const war = world.wars.find(w => !w.endDay && (w.attackerId === ar.factionId || w.defenderId === ar.factionId));
+    if (war) html += this.kv('War Goal', war.goal || ar.warGoal || '—');
+    const prof = ar.strategyProfile || defaultStrategyProfile();
+    html += this.kv('Strategy', prof.preferredStrategy || '—');
     html += `</div>`;
+    const sl = ar.supplyLineId && typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.getSupplyLine(ar.supplyLineId) : null;
+    if (sl) {
+      html += `<div class="insp-section"><h4>Supply Line</h4>`;
+      html += this.kv('Status', sl.status, sl.status === 'cut' ? 'bad' : sl.status === 'threatened' ? 'warn' : 'good');
+      html += this.kv('From', this.link('settlement', sl.originSettlementId, (getSettlement(sl.originSettlementId) || {}).name || '?'));
+      html += this.kv('To', this.link('settlement', sl.targetSettlementId, (getSettlement(sl.targetSettlementId) || {}).name || '?'));
+      html += this.kv('Danger', fmt(sl.danger * 100, 0) + '%');
+      html += this.kv('Last Delivery', `Day ${sl.lastDeliveredDay}`);
+      html += `</div>`;
+    }
+    const camp = ar.campId && typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.getArmyCamp(ar.campId) : null;
+    if (camp) {
+      html += `<div class="insp-section"><h4>Army Camp</h4>`;
+      html += this.kv('Established', `Day ${camp.dayEstablished}`);
+      html += this.kv('Fortification', fmt(camp.fortification));
+      html += this.kv('Camp Food', fmt(camp.stock.food));
+      html += `</div>`;
+    }
+    const se = ar.siegeEquipment;
+    if (se && (se.ready || se.buildDays > 0)) {
+      html += `<div class="insp-section"><h4>Siege Equipment</h4>`;
+      html += this.kv('Progress', se.ready ? 'พร้อมใช้' : `กำลังสร้าง (${se.buildDays} วัน)`);
+      html += this.kv('Ladders/Ram/Tower', `${se.ladders}/${se.ram}/${se.tower}`);
+      html += `</div>`;
+    }
+    const reports = (world.scoutReports || []).filter(rep => rep.armyId === ar.id).slice(-5);
+    if (reports.length) {
+      html += `<div class="insp-section"><h4>Scout Reports</h4>`;
+      for (const rep of reports) {
+        html += this.kv(`Day ${rep.day}`, `${rep.targetType} · ${fmt((rep.confidence || 0) * 100, 0)}% · ${rep.threat}`);
+      }
+      html += `</div>`;
+    }
     html += `<div class="insp-section"><h4>เสบียงกองทัพ</h4>`;
     for (const [k, v] of Object.entries(ar.supply)) html += this.kv(k, fmt(v), k === 'food' && v < totalMen * 3 ? 'bad' : '');
     html += `</div>`;
@@ -7478,7 +8282,7 @@ const UI = {
 
 /* ── Sandbox Tools ── */
 const SandboxTools = {
-  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax']),
+  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal']),
 
   activate(tool, btn) {
     // เครื่องมือกดแล้วทำทันที
@@ -7590,6 +8394,33 @@ const SandboxTools = {
         if (world.marketIndex) { world.marketIndex.foodIndex = (world.marketIndex.foodIndex || 1) * 1.5; world.marketIndex.volatility += 15; }
         EventSystem.add('trade', '📉 [Sandbox] Market Crash — ราคาพุ่งความผันผวนสูง');
         Chronicle.add({ category: 'market', importance: 4, title: '📉 ตลาดถล่ม', description: 'ราคาอาหารและสินค้าพุ่งสูงอย่างกะทันหัน ความไม่แน่นอนครอบงำ' });
+      },
+      supplyCrisis: () => {
+        const ar = world.armies[0];
+        if (ar && typeof CampaignWarfareSystem !== 'undefined') {
+          CampaignWarfareSystem.forceSupplyCrisis(ar);
+          EventSystem.add('war', `📦 [Sandbox] วิกฤตเสบียงที่${ar.name}`);
+        } else EventSystem.add('system', '✨ [Sandbox] ยังไม่มีกองทัพ');
+      },
+      spawnScout: () => {
+        const ar = world.armies[0];
+        if (ar && typeof CampaignWarfareSystem !== 'undefined') {
+          CampaignWarfareSystem.spawnScoutUnit(ar);
+          EventSystem.add('war', `🔭 [Sandbox] ส่งหน่วยลาดตระเวนจาก${ar.name}`);
+        }
+      },
+      revealScouts: () => {
+        if (typeof CampaignWarfareSystem !== 'undefined') {
+          for (const ar of world.armies) CampaignWarfareSystem.spawnScoutUnit(ar);
+          EventSystem.add('system', '🔭 [Sandbox] เปิดเผยรายงานลาดตระเวนทั้งหมด');
+        }
+      },
+      giveSiegeGear: () => {
+        const ar = world.armies.find(a => a.objective?.type === 'attack') || world.armies[0];
+        if (ar && typeof CampaignWarfareSystem !== 'undefined') {
+          CampaignWarfareSystem.giveSiegeEquipment(ar);
+          EventSystem.add('war', `🏗 [Sandbox] มอบเครื่องมือล้อมเมืองให้${ar.name}`);
+        }
       }
     };
 
@@ -7750,6 +8581,42 @@ const SandboxTools = {
           this.disarm();
         }
         break;
+      case 'cutSupplyLine': {
+        const ar = picked?.kind === 'army' ? getArmy(picked.id) : world.armies.find(a => a.locationId === pickedSettlement?.id);
+        if (ar && typeof CampaignWarfareSystem !== 'undefined') {
+          const sl = ar.supplyLineId ? CampaignWarfareSystem.getSupplyLine(ar.supplyLineId) : null;
+          if (sl) CampaignWarfareSystem.cutSupplyLine(sl, '[Sandbox] ตัดเส้นทางเสบียง');
+          else EventSystem.add('system', '✨ [Sandbox] กองทัพนี้ยังไม่มี supply line');
+          this.disarm();
+        }
+        break;
+      }
+      case 'fortifyCamp': {
+        const ar = picked?.kind === 'army' ? getArmy(picked.id) : null;
+        if (ar && typeof CampaignWarfareSystem !== 'undefined') {
+          const camp = ar.campId ? CampaignWarfareSystem.getArmyCamp(ar.campId) : CampaignWarfareSystem.establishCamp(ar);
+          if (camp) { camp.fortification = Math.min(5, camp.fortification + 2); camp.security += 15; }
+          EventSystem.add('war', `🏕 [Sandbox] เสริมค่ายทัพ${ar.name}`);
+          this.disarm();
+        }
+        break;
+      }
+      case 'forceAmbush':
+        if (picked?.kind === 'route' && typeof CampaignWarfareSystem !== 'undefined') {
+          const r = world.routes.find(x => x.id === picked.id);
+          if (r) { r.ambushRisk = Math.min(0.9, (r.ambushRisk || 0.2) + 0.3); CampaignWarfareSystem.forceAmbush(r.id); }
+          this.disarm();
+        }
+        break;
+      case 'setWarGoal': {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2 && typeof CampaignWarfareSystem !== 'undefined') {
+          CampaignWarfareSystem.setWarGoal(ks[0], ks[1], pick(WAR_GOAL_TYPES));
+          EventSystem.add('war', `🎯 [Sandbox] ตั้ง war goal สำหรับ${ks[0].name}`);
+        }
+        this.disarm();
+        break;
+      }
     }
   },
 
@@ -7763,7 +8630,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '17.0';
+const SAVE_SCHEMA_VERSION = '18.0';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -7942,6 +8809,9 @@ const SaveSystem = {
     w.guilds = w.guilds || [];
     w.warehouses = w.warehouses || [];
     w.tradeContracts = w.tradeContracts || [];
+    w.supplyLines = w.supplyLines || [];
+    w.armyCamps = w.armyCamps || [];
+    w.scoutReports = w.scoutReports || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -7958,6 +8828,7 @@ const SaveSystem = {
     for (const u of w.units) this.migrateUnit(u);
     for (const ar of w.armies) this.migrateArmy(ar);
     for (const f of w.factions) this.migrateFaction(f);
+    for (const wwar of w.wars) this.migrateWar(wwar);
     for (const wh of w.warehouses) this.migrateWarehouse(wh);
     for (const g of w.guilds) this.migrateGuild(g);
     for (const c of w.tradeContracts) this.migrateContract(c);
@@ -7989,6 +8860,9 @@ const SaveSystem = {
     if (s.priceVolatility == null) s.priceVolatility = 0;
     if (!s.sentiment) s.sentiment = defaultSettlementSentiment();
     else s.sentiment = Object.assign(defaultSettlementSentiment(), s.sentiment);
+    if (!s.terrain) s.terrain = inferSettlementTerrain(s);
+    if (s.strategicValue == null) s.strategicValue = settlementStrategicValue(s);
+    if (!s.siegeEquipment) s.siegeEquipment = { wallBonus: s.buildings?.includes('Wall') ? 1 : 0, watchtower: s.buildings?.includes('Watchtower') ? 1 : 0 };
   },
 
   migrateRoute(r) {
@@ -8002,6 +8876,18 @@ const SaveSystem = {
     r._peakThreat = r._peakThreat || r.threat || 0;
     if (r.patrolMissionId == null) r.patrolMissionId = null;
     r.destroyed = !!r.destroyed;
+    if (!r.terrain) r.terrain = inferRouteTerrain(r);
+    if (r.ambushRisk == null) r.ambushRisk = clamp((r.threat || r.danger || 0.1) * 0.9, 0.02, 0.85);
+    if (r.supplyTraffic == null) r.supplyTraffic = 0;
+    if (r.scoutCoverage == null) r.scoutCoverage = 0;
+  },
+
+  migrateWar(w) {
+    if (!w.goal) w.goal = 'capture_settlement';
+    if (w.supplyDisruptions == null) w.supplyDisruptions = 0;
+    if (w.sieges == null) w.sieges = 0;
+    if (w.ambushes == null) w.ambushes = 0;
+    if (w.goalAchieved == null) w.goalAchieved = false;
   },
 
   migrateAgent(a) {
@@ -8054,12 +8940,21 @@ const SaveSystem = {
     u.combatPower = u.combatPower || 0;
     if (!u.bonds) u.bonds = defaultUnitBonds();
     else u.bonds = Object.assign(defaultUnitBonds(), u.bonds);
+    if (u.retreating == null) u.retreating = false;
   },
 
   migrateArmy(ar) {
     ar.unitIds = ar.unitIds || [];
     ar.objective = ar.objective || { type: 'idle' };
     ar.supply = Object.assign({ food: 200, arrows: 100, weapons: 30, horses: 5 }, ar.supply || {});
+    if (!ar.strategyProfile) ar.strategyProfile = defaultStrategyProfile();
+    else ar.strategyProfile = Object.assign(defaultStrategyProfile(), ar.strategyProfile);
+    if (!ar.siegeEquipment) ar.siegeEquipment = defaultSiegeEquipment();
+    if (!ar.warGoal) ar.warGoal = 'capture_settlement';
+    if (ar.baseSettlementId == null) ar.baseSettlementId = ar.locationId;
+    if (ar.supplyLineId == null) ar.supplyLineId = null;
+    if (ar.campId == null) ar.campId = null;
+    if (ar.retreatTargetId == null) ar.retreatTargetId = null;
   },
 
   migrateFaction(f) {
@@ -8119,6 +9014,7 @@ const SaveSystem = {
     DiplomacySystem.syncFromLegacy();
     if (typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.initWorld();
     if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
+    if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.initWorld();
   },
 
   applyUiPrefs(prefs) {
