@@ -15,7 +15,7 @@
     <span class="logo">⬢</span>
     <span>Living Kingdom Sandbox</span>
     <span id="dayCounter" class="day-counter">Day 0</span>
-    <span class="version-badge" title="Phase 15 Observer UX">v15</span>
+    <span class="version-badge" title="Phase 12 Market Hub">v15.1</span>
   </div>
 
   <div class="tb-group tb-search">
@@ -48,6 +48,7 @@
       <option value="faction">เขตอิทธิพล (Faction Control)</option>
     </select>
     <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
+    <button id="btnMarket" class="tb-btn accent">🏦 Market</button>
     <button id="btnObserver" class="tb-btn accent">🧭 Observer</button>
     <button id="btnChronicle" class="tb-btn accent">📖 Chronicle</button>
     <button id="btnDiplomacy" class="tb-btn accent">🌐 Diplomacy</button>
@@ -112,6 +113,9 @@
         <button class="obs-tab" data-tab="factions">🚩 Factions</button>
         <button class="obs-tab" data-tab="wars">💥 Wars</button>
         <button class="obs-tab" data-tab="treaties">📜 Treaties</button>
+        <button class="obs-tab" data-tab="market">🏦 Market</button>
+        <button class="obs-tab" data-tab="guild">🏛 Guilds</button>
+        <button class="obs-tab" data-tab="contracts">📜 Contracts</button>
         <button class="obs-tab" data-tab="events">📰 Events</button>
       </div>
       <div class="obs-pause-toggles">
@@ -159,8 +163,25 @@
         <button class="tool-btn" data-tool="breakTreaty">✖ หักสนธิสัญญา</button>
         <button class="tool-btn" data-tool="makeVassal">👑 ทำให้เป็นเมืองขึ้น</button>
         <button class="tool-btn" data-tool="giveWealth">💰 ให้เงินเมือง (คลิกเมือง)</button>
+        <button class="tool-btn" data-tool="createMarketHub">🏦 Create Market Hub</button>
+        <button class="tool-btn" data-tool="spawnMerchantGuild">🏛 Spawn Merchant Guild</button>
+        <button class="tool-btn" data-tool="addTradeContract">📜 Add Trade Contract</button>
+        <button class="tool-btn" data-tool="raiseTradeTax">📈 Raise Trade Tax</button>
+        <button class="tool-btn" data-tool="lowerTradeTax">📉 Lower Trade Tax</button>
+        <button class="tool-btn" data-tool="fundGuildPatrol">🛡 Fund Guild Patrol</button>
+        <button class="tool-btn" data-tool="createTradeBoom">📈 Trade Boom</button>
+        <button class="tool-btn" data-tool="createMarketCrash">📉 Market Crash</button>
       </div>
       <p class="tool-note">เครื่องมือที่ต้องคลิกเป้าหมาย: เลือกเครื่องมือแล้วคลิกบนแผนที่ (คลิกขวาเพื่อยกเลิก)</p>
+    </div>
+
+    <!-- Market / Guilds panel (Phase 12) -->
+    <div id="marketPanel" class="hidden">
+      <div class="chron-header">
+        <h3>🏦 Market / Guilds</h3>
+        <button id="marketClose" class="tb-btn">✕</button>
+      </div>
+      <div id="marketPanelBody" class="observer-body"></div>
     </div>
 
     <!-- Chronicle panel (Phase 10) -->
@@ -178,6 +199,8 @@
         <button class="chron-filter" data-f="settlement">เมือง</button>
         <button class="chron-filter" data-f="diplomacy">การทูต</button>
         <button class="chron-filter" data-f="trade">การค้า</button>
+        <button class="chron-filter" data-f="market">ตลาด</button>
+        <button class="chron-filter" data-f="guild">สมาคมพ่อค้า</button>
         <button class="chron-filter" data-f="disaster">ภัยพิบัติ</button>
         <button class="chron-filter" data-f="faction">ฝ่าย</button>
         <button class="chron-filter" data-f="era">ยุคสมัย</button>
