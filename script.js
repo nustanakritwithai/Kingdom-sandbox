@@ -72,6 +72,110 @@ function getGuild(id) { return (world.guilds || []).find(g => g.id === id); }
 function getWarehouse(id) { return (world.warehouses || []).find(w => w.id === id); }
 function getContract(id) { return (world.tradeContracts || []).find(c => c.id === id); }
 
+/* ── Phase 17: Agent memory / relationships / motives ── */
+const MAX_AGENT_RELATIONS = 20;
+const MAX_MAJOR_EVENTS = 40;
+const MAX_SENTIMENT_ENTRIES = 12;
+
+function defaultPersonalMemory(birthplaceId) {
+  return {
+    bornDay: world.day,
+    birthplaceId: birthplaceId || null,
+    majorEvents: [],
+    trauma: [],
+    gratitude: [],
+    grudges: [],
+    fears: [],
+    loyalties: [],
+    betrayalsWitnessed: [],
+    savedBy: [],
+    harmedBy: [],
+    favoritePlaces: [],
+    avoidedRoutes: [],
+    formerCommanders: [],
+    formerGuilds: [],
+    formerSettlements: []
+  };
+}
+
+function defaultMotives() {
+  return {
+    survival: 50, wealth: 30, safety: 40, loyalty: 30, revenge: 10,
+    ambition: 25, duty: 20, trade: 15, power: 10, familyClan: 20, fear: 15
+  };
+}
+
+function defaultSettlementSentiment() {
+  return {
+    heroes: {}, villains: {}, lovedFactions: {}, hatedFactions: {},
+    rememberedCrises: [], refugeeOrigins: {}
+  };
+}
+
+function defaultUnitBonds() {
+  return {
+    leaderLoyaltyAvg: 50, veteranCount: 0, sharedBattleCount: 0,
+    betrayalRisk: 0.1, moraleMemory: 0
+  };
+}
+
+function defaultAgentRelation() {
+  return {
+    score: 0, trust: 50, fear: 0, respect: 0, rivalry: 0,
+    gratitude: 0, grudge: 0, loyalty: 0, lastInteractionDay: world.day, tags: []
+  };
+}
+
+function getAgentRelation(a, bId) {
+  if (!a || !bId || a.id === bId) return null;
+  AgentMemorySystem.ensureAgent(a);
+  const b = getAgent(bId);
+  if (!b || !b.alive) return null;
+  if (!a.relationships[bId]) a.relationships[bId] = defaultAgentRelation();
+  const r = a.relationships[bId];
+  if (!r.tags) r.tags = [];
+  return r;
+}
+
+function changeAgentRelation(a, bId, delta, reason) {
+  if (!a || !bId || a.id === bId) return;
+  const r = getAgentRelation(a, bId);
+  if (!r) return;
+  if (!r.tags) r.tags = [];
+  if (delta.score) r.score = clamp(r.score + delta.score, -100, 100);
+  if (delta.trust) r.trust = clamp(r.trust + delta.trust, 0, 100);
+  if (delta.fear) r.fear = clamp(r.fear + delta.fear, 0, 100);
+  if (delta.respect) r.respect = clamp(r.respect + delta.respect, 0, 100);
+  if (delta.rivalry) r.rivalry = clamp(r.rivalry + delta.rivalry, 0, 100);
+  if (delta.gratitude) r.gratitude = clamp(r.gratitude + delta.gratitude, 0, 100);
+  if (delta.grudge) r.grudge = clamp(r.grudge + delta.grudge, 0, 100);
+  if (delta.loyalty) r.loyalty = clamp(r.loyalty + delta.loyalty, 0, 100);
+  r.lastInteractionDay = world.day;
+  if (reason && !r.tags.includes(reason)) r.tags.push(reason);
+  AgentMemorySystem.pruneRelationships(a);
+}
+
+function addGrudge(a, targetId, reason, intensity) {
+  if (!a || !targetId) return;
+  changeAgentRelation(a, targetId, { grudge: intensity || 15, score: -(intensity || 15) * 0.5 }, reason || 'grudge');
+  const p = a.memory.personal;
+  if (!p.grudges.some(g => g.targetId === targetId)) p.grudges.push({ targetId, reason: reason || 'grudge', intensity: intensity || 15, day: world.day });
+}
+
+function addGratitude(a, targetId, reason, intensity) {
+  if (!a || !targetId) return;
+  changeAgentRelation(a, targetId, { gratitude: intensity || 12, trust: (intensity || 12) * 0.4, score: (intensity || 12) * 0.5 }, reason || 'gratitude');
+  const p = a.memory.personal;
+  if (!p.gratitude.some(g => g.targetId === targetId)) p.gratitude.push({ targetId, reason: reason || 'gratitude', intensity: intensity || 12, day: world.day });
+}
+
+function addLoyalty(a, leaderId, reason, intensity) {
+  if (!a || !leaderId) return;
+  changeAgentRelation(a, leaderId, { loyalty: intensity || 18, trust: (intensity || 18) * 0.3, score: (intensity || 18) * 0.4 }, reason || 'loyalty');
+  const p = a.memory.personal;
+  if (!p.loyalties.some(l => l.targetId === leaderId)) p.loyalties.push({ targetId: leaderId, reason: reason || 'loyalty', intensity: intensity || 18, day: world.day });
+}
+
 const BASE_PRICE = {
   food: 10, wood: 8, ore: 15, tools: 35,
   weapons: 60, bows: 45, arrows: 4, horses: 120
@@ -333,7 +437,8 @@ function endWar(w, winnerId, reason, peaceOpts) {
 
 /* ── สรุปชีวิตตัวละครเป็นภาษาไทยสั้นๆ ── */
 function lifeSummary(a) {
-  const birthplace = getSettlement(a.birthplaceId);
+  AgentMemorySystem.ensureAgent(a);
+  const birthplace = getSettlement(a.birthplaceId || a.memory.personal?.birthplaceId);
   const first = a.career[0];
   const profTH = {
     farmer: 'ชาวนา', woodcutter: 'คนตัดไม้', miner: 'คนงานเหมือง', crafter: 'ช่างฝีมือ',
@@ -342,7 +447,29 @@ function lifeSummary(a) {
     commander: 'แม่ทัพ', mayor: 'เจ้าเมือง', lord: 'ขุนนาง', king: 'ราชา',
     unemployed: 'คนว่างงาน', migrant: 'ผู้อพยพ', refugee: 'ผู้ลี้ภัย'
   };
-  let txt = `เริ่มชีวิตเป็น${profTH[first.profession] || first.profession}ที่${birthplace ? birthplace.name : 'แดนไกล'}`;
+  const bornDay = a.memory.personal?.bornDay ?? 0;
+  let txt = `เกิดที่${birthplace ? birthplace.name : 'แดนไกล'}ในวันที่ ${bornDay} เริ่มชีวิตเป็น${profTH[first.profession] || first.profession}`;
+  const p = a.memory.personal;
+  const turning = (p.majorEvents || []).filter(e => e.importance >= 3).slice(-3);
+  for (const ev of turning) {
+    if (ev.type === 'robbed_by_bandits') txt += ` ก่อนถูกโจรปล้นบนเส้นทางในวันที่ ${ev.day}`;
+    else if (ev.type === 'survived_battle') txt += ` รอดจาก${ev.title || 'ศึกใหญ่'}ในวันที่ ${ev.day}`;
+    else if (ev.type === 'commander_saved_me') txt += ` ได้รับการช่วยเหลือจากผู้นำในวันที่ ${ev.day}`;
+    else if (ev.type === 'city_starved') txt += ` ประสบความอดอยากที่${(getSettlement(ev.settlements?.[0]) || {}).name || 'ถิ่นฐาน'}ในวันที่ ${ev.day}`;
+    else if (ev.type === 'joined_guild') txt += ` เข้าร่วมสมาคมพ่อค้าในวันที่ ${ev.day}`;
+    else if (ev.type === 'lost_home') txt += ` สูญเสียบ้านเกิดในวันที่ ${ev.day}`;
+    else if (ev.type === 'trade_disaster') txt += ` ประสบภัยการค้าในวันที่ ${ev.day}`;
+  }
+  if (p.grudges?.length) {
+    const g = p.grudges[p.grudges.length - 1];
+    const tgt = getAgent(g.targetId);
+    if (tgt) txt += ` ถือแค้น${tgt.name.split(' ')[0]}`;
+  }
+  if (p.loyalties?.length) {
+    const l = p.loyalties[p.loyalties.length - 1];
+    const tgt = getAgent(l.targetId);
+    if (tgt) txt += ` ภักดีต่อ${tgt.name.split(' ')[0]}`;
+  }
   const changes = a.career.length - 1;
   if (changes >= 2) txt += ` ผ่านมาแล้ว ${changes} อาชีพ`;
   if (a.memory.citiesVisited.length >= 2) txt += ` เดินทางผ่าน ${a.memory.citiesVisited.length} ถิ่นฐาน`;
@@ -356,7 +483,7 @@ function lifeSummary(a) {
   }
   if (a.alive) {
     const now = profTH[a.profession] || a.profession;
-    txt += ` ปัจจุบันเป็น${now}${a.title ? `ฉายา "${a.title}"` : ''}`;
+    txt += ` ปัจจุบันเป็น${now}${a.title ? ` ฉายา "${a.title}"` : ''}`;
   }
   return txt;
 }
@@ -429,7 +556,9 @@ function createSettlement(opt) {
     // ── Phase 12: market hub / trade ──
     marketRole: defaultMarketRole(),
     tradeVolume: 0,
-    priceVolatility: 0
+    priceVolatility: 0,
+    // ── Phase 17: citizen sentiment ──
+    sentiment: defaultSettlementSentiment()
   };
   world.settlements.push(s);
   return s;
@@ -532,7 +661,13 @@ function createAgent(opt) {
       bravery: rand(0.15, 0.9), greed: rand(0.15, 0.9), loyalty: rand(0.2, 0.95),
       ambition: rand(0.1, 0.95), riskTolerance: rand(0.1, 0.9), discipline: rand(0.2, 0.9)
     },
-    memory: { battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 },
+    memory: {
+      battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [],
+      daysHungry: 0, raidsDone: 0, tradeProfit: 0,
+      personal: defaultPersonalMemory(opt.locationId)
+    },
+    relationships: {},
+    motives: defaultMotives(),
     // governor attributes (ใช้เมื่อได้เป็นผู้ปกครอง)
     gov: null,
     travel: null,        // { path:[ids], seg, progress, purpose }
@@ -572,7 +707,8 @@ function createUnit(opt) {
     // ── Phase 10.5 ──
     recentVictories: 0,
     equipmentPower: 0,
-    combatPower: 0
+    combatPower: 0,
+    bonds: defaultUnitBonds()
   };
   world.units.push(u);
   for (const id of u.memberIds) { const m = getAgent(id); if (m) m.unitId = u.id; }
@@ -789,6 +925,7 @@ function generateWorld() {
   EventSystem.add('system', `🌍 โลกใหม่ถือกำเนิด — ${world.agents.length} ชีวิตใน ${world.settlements.length} ถิ่นฐาน ภายใต้${kingdom.name}`);
   DiplomacySystem.initWorld();
   MarketTradeSystem.initWorld();
+  if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -830,7 +967,7 @@ function seedSkillForProfession(ag, prof) {
 /* ═══════════ 6. ROUTE GRAPH / PATHFINDING / TRAVEL ═══════════ */
 
 // Dijkstra บนกราฟ settlement — weight = ระยะ × สภาพถนน (+ ความอันตรายถ้า avoidDanger)
-function findPath(fromId, toId, avoidDanger) {
+function findPath(fromId, toId, avoidDanger, agent) {
   if (fromId === toId) return [fromId];
   const distMap = new Map(), prev = new Map(), visited = new Set();
   distMap.set(fromId, 0);
@@ -847,6 +984,7 @@ function findPath(fromId, toId, avoidDanger) {
       if (nb == null || visited.has(nb)) continue;
       let w = r.distance * (1.6 - r.roadQuality * 0.6);
       if (avoidDanger) w *= (1 + r.danger * 3);
+      if (agent && typeof AgentMemorySystem !== 'undefined') w *= AgentMemorySystem.routeWeightMultiplier(agent, r);
       const nd = best + w;
       if (nd < (distMap.get(nb) ?? Infinity)) { distMap.set(nb, nd); prev.set(nb, cur); }
     }
@@ -858,7 +996,8 @@ function findPath(fromId, toId, avoidDanger) {
 }
 
 function startTravel(entity, toId, purpose, avoidDanger) {
-  const path = findPath(entity.locationId, toId, avoidDanger);
+  const agent = entity.profession ? entity : null;
+  const path = findPath(entity.locationId, toId, avoidDanger, agent);
   if (!path || path.length < 2) return false;
   entity.travel = { path, seg: 0, progress: 0, purpose: purpose || 'move' };
   return true;
@@ -1404,6 +1543,7 @@ const LogisticsSystem = {
     clearTownCaravan(carrier, 'delivered');
     EventSystem.add('economy', `✅ คาราวานช่วยเหลือฉุกเฉินถึง${needy.name} — ส่งอาหาร ${qty} หน่วย`);
     settlementHistory(needy, `คาราวานช่วยเหลือฉุกเฉินจาก${donor ? donor.name : 'แดนไกล'}นำอาหาร ${qty} หน่วยมาถึง`);
+    if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.onReliefArrived(needy, carrier.id);
   },
 
   convertToTrader(s, bonus) {
@@ -2315,6 +2455,7 @@ const MarketTradeSystem = {
         t.merchantRank = 'guild_member';
         t.title = MERCHANT_RANK_TITLES.guild_member;
       }
+      if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.onGuildJoined(t, g.id);
     }
     const wh = createWarehouse({ settlementId: s.id, ownerType: 'guild', ownerId: g.id, capacity: 80, security: 45 });
     g.warehouses.push(wh.id);
@@ -2772,6 +2913,401 @@ const MarketTradeSystem = {
   }
 };
 
+/* ═══════════════════ 10.9 PHASE 17: AGENT MEMORY / RELATIONSHIPS ═══════════════════ */
+
+const AgentMemorySystem = {
+  initWorld() {
+    for (const a of world.agents) this.ensureAgent(a);
+    for (const s of world.settlements) this.ensureSettlement(s);
+    for (const u of world.units) this.ensureUnit(u);
+    this.validateAll();
+  },
+
+  ensureAgent(a) {
+    if (!a.memory) a.memory = { battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 };
+    const bp = a.birthplaceId || a.locationId;
+    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(bp);
+    else {
+      const d = defaultPersonalMemory(bp);
+      a.memory.personal = Object.assign(d, a.memory.personal);
+      for (const k of ['majorEvents', 'trauma', 'gratitude', 'grudges', 'fears', 'loyalties', 'betrayalsWitnessed', 'savedBy', 'harmedBy', 'favoritePlaces', 'avoidedRoutes', 'formerCommanders', 'formerGuilds', 'formerSettlements']) {
+        if (!a.memory.personal[k]) a.memory.personal[k] = Array.isArray(d[k]) ? [] : d[k];
+      }
+    }
+    if (a.memory.personal.bornDay == null) a.memory.personal.bornDay = Math.max(0, world.day - (a.age || 20));
+    if (!a.memory.personal.birthplaceId) a.memory.personal.birthplaceId = bp;
+    if (!a.relationships) a.relationships = {};
+    if (!a.motives) a.motives = defaultMotives();
+    if (a._motiveDay == null) a._motiveDay = -99;
+  },
+
+  ensureSettlement(s) {
+    if (!s.sentiment) s.sentiment = defaultSettlementSentiment();
+    else s.sentiment = Object.assign(defaultSettlementSentiment(), s.sentiment);
+  },
+
+  ensureUnit(u) {
+    if (!u.bonds) u.bonds = defaultUnitBonds();
+    else u.bonds = Object.assign(defaultUnitBonds(), u.bonds);
+  },
+
+  recordPersonalEvent(a, type, title, description, importance, refs) {
+    if (!a || !a.alive) return;
+    this.ensureAgent(a);
+    const p = a.memory.personal;
+    const entry = {
+      day: world.day, type, title, description: description || title,
+      importance: importance || 2,
+      agents: (refs?.agents || []).slice(),
+      settlements: (refs?.settlements || []).slice(),
+      factions: (refs?.factions || []).slice()
+    };
+    p.majorEvents.push(entry);
+    if (p.majorEvents.length > MAX_MAJOR_EVENTS) p.majorEvents.shift();
+    if (importance >= 3) {
+      const cat = ['robbed_by_bandits', 'survived_battle', 'commander_saved_me', 'commander_abandoned_me',
+        'friend_died', 'enemy_killed', 'trade_success', 'trade_disaster', 'lost_home', 'captured_city'].includes(type) ? 'personal' : 'relationship';
+      if (importance >= 4 || ['mutiny', 'revenge_completed', 'friendship_forged'].includes(type)) {
+        Chronicle.add({
+          category: cat, importance,
+          title, description: description || title,
+          agents: [a.id, ...(refs?.agents || [])].filter((x, i, arr) => arr.indexOf(x) === i),
+          settlements: refs?.settlements || [], factions: refs?.factions || []
+        });
+      }
+    }
+  },
+
+  pruneRelationships(a) {
+    const ids = Object.keys(a.relationships);
+    if (ids.length <= MAX_AGENT_RELATIONS) return;
+    const ranked = ids.map(id => {
+      const r = a.relationships[id];
+      const strength = Math.abs(r.score) + r.grudge + r.gratitude + r.loyalty + r.trust * 0.2;
+      return { id: +id, strength, day: r.lastInteractionDay || 0 };
+    }).sort((x, y) => y.strength - x.strength || y.day - x.day);
+    for (let i = MAX_AGENT_RELATIONS; i < ranked.length; i++) delete a.relationships[ranked[i].id];
+  },
+
+  decayRelationships() {
+    for (const a of world.agents) {
+      if (!a.alive || !a.relationships) continue;
+      for (const [id, r] of Object.entries(a.relationships)) {
+        const age = world.day - (r.lastInteractionDay || 0);
+        if (age > 300 && Math.abs(r.score) < 8 && r.grudge < 5 && r.loyalty < 8) {
+          delete a.relationships[id];
+          continue;
+        }
+        if (age > 60) {
+          r.grudge = clamp(r.grudge - 0.15, 0, 100);
+          r.gratitude = clamp(r.gratitude - 0.1, 0, 100);
+          r.rivalry = clamp(r.rivalry - 0.1, 0, 100);
+        }
+      }
+      this.pruneRelationships(a);
+    }
+  },
+
+  updateMotives(a) {
+    this.ensureAgent(a);
+    const m = a.motives;
+    const p = a.memory.personal;
+    m.survival = clamp(40 + (100 - a.stats.hunger) * 0.4 + (100 - a.stats.health) * 0.2, 0, 100);
+    m.wealth = clamp(25 + a.traits.greed * 40 + Math.min(a.money, 200) * 0.15 + (a.memory.tradeProfit || 0) * 0.05, 0, 100);
+    m.safety = clamp(35 + (() => { const loc = getSettlement(a.locationId); return loc ? (1 - EconomySystem.localDanger(loc)) * 40 : 20; })() + (p.fears?.length || 0) * 4, 0, 100);
+    m.loyalty = clamp(20 + a.traits.loyalty * 35 + (p.loyalties?.length || 0) * 6, 0, 100);
+    m.revenge = clamp(10 + (p.grudges?.length || 0) * 12 + sum(Object.values(a.relationships || {}), r => r.grudge || 0) * 0.08, 0, 100);
+    m.ambition = clamp(15 + a.traits.ambition * 50 + (a.fame || 0) * 0.5, 0, 100);
+    m.duty = clamp(15 + a.traits.discipline * 30 + (MILITARY_PROFS.has(a.profession) ? 20 : 0), 0, 100);
+    m.trade = clamp(10 + (a.profession === 'trader' ? 35 : 0) + a.skills.trading * 4 + (a.guildId ? 15 : 0), 0, 100);
+    m.power = clamp(10 + a.traits.ambition * 25 + a.skills.leadership * 5 + (RULER_PROFS.has(a.profession) ? 25 : 0), 0, 100);
+    m.familyClan = clamp(20 + (p.favoritePlaces?.length || 0) * 5 + (a.homeId === a.locationId ? 15 : 0), 0, 100);
+    m.fear = clamp(10 + (p.fears?.length || 0) * 10 + (p.avoidedRoutes?.length || 0) * 5 + (p.trauma?.length || 0) * 6, 0, 100);
+    a._motiveDay = world.day;
+  },
+
+  tickDaily() {
+    if (world.day % 25 === 0) this.decayRelationships();
+    if (world.day % 5 === 0) {
+      for (const a of world.agents) if (a.alive) this.updateMotives(a);
+    }
+    if (world.day % 10 === 0) {
+      for (const u of world.units) if (unitMembers(u).length) this.updateUnitBonds(u);
+    }
+  },
+
+  updateUnitBonds(u) {
+    this.ensureUnit(u);
+    const members = unitMembers(u);
+    const leader = getAgent(u.leaderId);
+    if (!members.length) return;
+    let loyaltySum = 0, veterans = 0;
+    for (const m of members) {
+      this.ensureAgent(m);
+      if (leader) {
+        const rel = getAgentRelation(m, leader.id);
+        loyaltySum += rel ? rel.loyalty : 30;
+      }
+      if ((m.memory.survivedBattles || 0) >= 2) veterans++;
+    }
+    u.bonds.leaderLoyaltyAvg = leader ? loyaltySum / members.length : 50;
+    u.bonds.veteranCount = veterans;
+    u.bonds.sharedBattleCount = (u.battleHistory || []).length;
+    u.bonds.betrayalRisk = clamp(0.2 - u.bonds.leaderLoyaltyAvg * 0.002 + u.bonds.moraleMemory * 0.003, 0.02, 0.5);
+    u.cohesion = clamp(50 + u.bonds.leaderLoyaltyAvg * 0.3 + veterans * 4 + u.bonds.sharedBattleCount * 2 - u.bonds.betrayalRisk * 30, 20, 100);
+  },
+
+  routeWeightMultiplier(agent, route) {
+    if (!agent?.memory?.personal) return 1;
+    const p = agent.memory.personal;
+    let mult = 1;
+    if (p.avoidedRoutes?.includes(route.id)) mult += 2.5;
+    for (const f of (p.fears || [])) {
+      if (f.type === 'route' && f.routeId === route.id) mult += 1.5 + (f.intensity || 10) * 0.05;
+    }
+    return mult;
+  },
+
+  pathAvoidPenalty(agent, path) {
+    if (!path || path.length < 2) return 0;
+    let pen = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const r = getRoute(path[i], path[i + 1]);
+      if (r && agent.memory?.personal?.avoidedRoutes?.includes(r.id)) pen += 25;
+    }
+    return pen;
+  },
+
+  desertionResist(member, leader) {
+    if (!member || !leader) return 0;
+    const rel = getAgentRelation(member, leader.id);
+    const unit = member.unitId ? getUnit(member.unitId) : null;
+    let resist = rel ? rel.loyalty * 0.006 + rel.trust * 0.003 : 0;
+    if (unit?.bonds) resist += unit.bonds.leaderLoyaltyAvg * 0.004 + unit.bonds.veteranCount * 0.02;
+    return clamp(resist, 0, 0.55);
+  },
+
+  noteSettlementHero(s, agentId, delta, reason) {
+    if (!s || !agentId) return;
+    this.ensureSettlement(s);
+    s.sentiment.heroes[agentId] = clamp((s.sentiment.heroes[agentId] || 0) + delta, -MAX_SENTIMENT_ENTRIES * 10, MAX_SENTIMENT_ENTRIES * 10);
+    if (reason && s.sentiment.rememberedCrises.length < MAX_SENTIMENT_ENTRIES) {
+      s.sentiment.rememberedCrises.push({ day: world.day, type: 'hero', agentId, text: reason });
+    }
+    if (delta > 5) s.loyalty = clamp(s.loyalty + delta * 0.15, 0, 100);
+  },
+
+  noteSettlementVillain(s, agentId, delta, reason) {
+    if (!s || !agentId) return;
+    this.ensureSettlement(s);
+    s.sentiment.villains[agentId] = clamp((s.sentiment.villains[agentId] || 0) + delta, 0, MAX_SENTIMENT_ENTRIES * 10);
+    if (reason) s.unrest = clamp(s.unrest + delta * 0.2, 0, 100);
+    if (delta > 8 && chance(0.15)) {
+      Chronicle.add({
+        category: 'relationship', importance: 3,
+        title: `😠 ${(getAgent(agentId) || {}).name || 'ผู้ร้าย'} ถูกประชาชนเกลียดที่${s.name}`,
+        description: reason, agents: [agentId], settlements: [s.id]
+      });
+    }
+  },
+
+  noteFactionSentiment(s, factionId, delta) {
+    if (!s || !factionId) return;
+    this.ensureSettlement(s);
+    if (delta > 0) s.sentiment.lovedFactions[factionId] = clamp((s.sentiment.lovedFactions[factionId] || 0) + delta, 0, 100);
+    else s.sentiment.hatedFactions[factionId] = clamp((s.sentiment.hatedFactions[factionId] || 0) - delta, 0, 100);
+  },
+
+  governorLoyaltyModifier(gov, rulerId) {
+    if (!gov || !rulerId) return 0;
+    const rel = getAgentRelation(gov, rulerId);
+    return rel ? rel.loyalty * 0.15 + rel.trust * 0.08 - rel.grudge * 0.1 : 0;
+  },
+
+  rulerBetrayalModifier(rulerA, rulerB) {
+    if (!rulerA || !rulerB) return 0;
+    const rel = getAgentRelation(rulerA, rulerB);
+    return rel ? rel.grudge * 0.12 - rel.trust * 0.06 : 0;
+  },
+
+  onRobbed(trader, route, robberIds) {
+    if (!trader) return;
+    this.ensureAgent(trader);
+    const p = trader.memory.personal;
+    if (route && !p.avoidedRoutes.includes(route.id)) p.avoidedRoutes.push(route.id);
+    if (route && !p.fears.some(f => f.type === 'route' && f.routeId === route.id)) {
+      p.fears.push({ type: 'route', routeId: route.id, intensity: 20, day: world.day });
+    }
+    for (const rid of (robberIds || [])) addGrudge(trader, rid, 'robbed_by_bandits', 22);
+    this.recordPersonalEvent(trader, 'robbed_by_bandits', 'ถูกโจรปล้นบนเส้นทาง',
+      `${trader.name} ถูกปล้นกลางทาง — จะจำเส้นทางนี้ไว้`, 3, { agents: robberIds || [] });
+  },
+
+  onBattleEnd(units, won, battleName, settlementId) {
+    for (const u of units) {
+      const leader = getAgent(u.leaderId);
+      const survivors = unitMembers(u);
+      for (let i = 0; i < survivors.length; i++) {
+        for (let j = i + 1; j < survivors.length; j++) {
+          changeAgentRelation(survivors[i], survivors[j].id, { trust: 3, score: 4 }, 'battle_brother');
+          changeAgentRelation(survivors[j], survivors[i].id, { trust: 3, score: 4 }, 'battle_brother');
+        }
+        const m = survivors[i];
+        if (won && leader) {
+          changeAgentRelation(m, leader.id, { respect: 5, loyalty: 3, score: 4 }, 'victory_together');
+          this.recordPersonalEvent(m, 'survived_battle', battleName || 'รอดจากศึก',
+            `${m.name} รอดชีวิตจาก${battleName || 'ศึก'}`, 3, { agents: [leader.id], settlements: settlementId ? [settlementId] : [] });
+        } else if (!won && leader) {
+          if (chance(0.35)) addGrudge(m, leader.id, 'commander_abandoned_me', 12);
+          else changeAgentRelation(m, leader.id, { fear: 4, respect: -3 }, 'defeat_together');
+          u.bonds.moraleMemory = clamp((u.bonds.moraleMemory || 0) + 5, 0, 50);
+        }
+      }
+      if (leader && won) changeAgentRelation(leader, survivors[0]?.id, { respect: 2 }, 'led_victory');
+      this.updateUnitBonds(u);
+    }
+  },
+
+  onCityStarved(s) {
+    if (!s) return;
+    for (const a of agentsAt(s.id)) {
+      if (!a.alive) continue;
+      this.ensureAgent(a);
+      const p = a.memory.personal;
+      if (!p.favoritePlaces.includes(s.id) && !p.formerSettlements.includes(s.id)) p.formerSettlements.push(s.id);
+      this.recordPersonalEvent(a, 'city_starved', `อดอยากที่${s.name}`,
+        `ความหิวกระหายทำให้จำ${s.name}เป็นความทรมาน`, 3, { settlements: [s.id] });
+    }
+    this.ensureSettlement(s);
+    if (s.sentiment.rememberedCrises.length < MAX_SENTIMENT_ENTRIES) {
+      s.sentiment.rememberedCrises.push({ day: world.day, type: 'famine', text: `วิกฤตอาหาร Day ${world.day}` });
+    }
+  },
+
+  onReliefArrived(s, helperId) {
+    if (!s || !helperId) return;
+    this.noteSettlementHero(s, helperId, 12, `ช่วยส่งอาหารมายัง${s.name}`);
+    for (const a of agentsAt(s.id)) {
+      if (a.id !== helperId) addGratitude(a, helperId, 'city_saved_by_relief', 10);
+      this.recordPersonalEvent(a, 'city_saved_by_relief', `ได้รับความช่วยเหลือที่${s.name}`,
+        `อาหารมาถึงในยามวิกฤต`, 3, { agents: [helperId], settlements: [s.id] });
+    }
+  },
+
+  onTaxRaised(gov, s, newRate) {
+    if (!s || newRate < 0.18) return;
+    for (const a of agentsAt(s.id).filter(x => x.profession === 'trader')) {
+      if (gov) addGrudge(a, gov.id, 'high_tax', Math.floor((newRate - 0.15) * 80));
+    }
+    if (gov) this.noteSettlementVillain(s, gov.id, Math.floor((newRate - 0.15) * 40), `ขึ้นภาษีหนัก ${fmt(newRate * 100)}%`);
+  },
+
+  onCityCaptured(s, captorLeaderId, oldFactionId) {
+    if (!s) return;
+    for (const a of agentsAt(s.id)) {
+      this.recordPersonalEvent(a, 'lost_home', `${s.name} เปลี่ยนมือ`,
+        `บ้านเกิดถูกยึด`, 4, { settlements: [s.id], factions: [oldFactionId] });
+    }
+    if (captorLeaderId) this.noteSettlementHero(s, captorLeaderId, 8, `ยึด${s.name}`);
+    if (oldFactionId) this.noteFactionSentiment(s, oldFactionId, -15);
+  },
+
+  onGuildJoined(a, guildId) {
+    if (!a) return;
+    const g = getGuild(guildId);
+    this.recordPersonalEvent(a, 'joined_guild', `เข้าร่วม${g ? g.name : 'สมาคมพ่อค้า'}`,
+      `${a.name} เป็นสมาชิกสมาคมพ่อค้า`, 3, { settlements: g ? [g.homeSettlementId] : [] });
+    if (g) {
+      const leaderId = g.members[0];
+      if (leaderId && leaderId !== a.id) addLoyalty(a, leaderId, 'joined_guild', 14);
+      a.memory.personal.formerGuilds.push(guildId);
+    }
+  },
+
+  onTradeSuccess(a, profit) {
+    if (!a || profit < 30) return;
+    this.recordPersonalEvent(a, 'trade_success', 'ค้าขายสำเร็จ',
+      `กำไร ${fmt(profit)} ทองจากการค้า`, 2, {});
+    const s = getSettlement(a.locationId);
+    if (s && profit >= 60) this.noteSettlementHero(s, a.id, 4, 'พ่อค้าที่ทำให้ตลาดคึกคัก');
+  },
+
+  onRevengeCompleted(a, targetId, label) {
+    addGrudge(a, targetId, 'revenge_completed', -20);
+    a.fame = (a.fame || 0) + 3;
+    if (!a.title && chance(0.4)) {
+      a.title = `ผู้ล้างแค้นแห่ง${(getSettlement(a.homeId) || {}).name || 'แผ่นดิน'}`;
+      Chronicle.add({
+        category: 'personal', importance: 4,
+        title: `⚔ ${a.name} ล้างแค้นสำเร็จ`,
+        description: label || `${a.name} ตอบแทนศัตรูที่เคยทำร้าย`,
+        agents: [a.id, targetId]
+      });
+    }
+  },
+
+  topRelations(a, field, n) {
+    this.ensureAgent(a);
+    return Object.entries(a.relationships)
+      .map(([id, r]) => ({ id: +id, agent: getAgent(+id), rel: r, val: r[field] || 0 }))
+      .filter(x => x.agent && x.agent.alive && x.val > 0)
+      .sort((x, y) => y.val - x.val).slice(0, n || 5);
+  },
+
+  relationCount(a) {
+    return Object.keys(a.relationships || {}).length;
+  },
+
+  rankings() {
+    const alive = world.agents.filter(a => a.alive);
+    const loyalFollowers = alive.map(a => {
+      const top = this.topRelations(a, 'loyalty', 1)[0];
+      return { agent: a, loyalty: top ? top.val : 0, leader: top?.agent };
+    }).sort((x, y) => y.loyalty - x.loyalty).slice(0, 10);
+    const feared = alive.map(a => ({
+      agent: a, fear: sum(Object.values(a.relationships || {}), r => r.fear)
+    })).sort((x, y) => y.fear - x.fear).slice(0, 10);
+    const hated = alive.map(a => {
+      let hate = 0;
+      for (const s of world.settlements) hate += (s.sentiment?.villains?.[a.id] || 0);
+      hate += sum(Object.values(a.relationships || {}), r => r.grudge);
+      return { agent: a, hate };
+    }).sort((x, y) => y.hate - x.hate).slice(0, 10);
+    const vengeful = alive.map(a => ({
+      agent: a, revenge: (a.motives?.revenge || 0) + (a.memory.personal?.grudges?.length || 0) * 8
+    })).sort((x, y) => y.revenge - x.revenge).slice(0, 10);
+    const connected = alive.map(a => ({ agent: a, n: this.relationCount(a) }))
+      .sort((x, y) => y.n - x.n).slice(0, 10);
+    return { loyalFollowers, feared, hated, vengeful, connected };
+  },
+
+  validateAll() {
+    for (const a of world.agents) {
+      this.ensureAgent(a);
+      for (const id of Object.keys(a.relationships)) {
+        const other = getAgent(+id);
+        if (!other || (!other.alive && Math.abs(a.relationships[id].grudge) < 10 && a.relationships[id].loyalty < 10)) {
+          delete a.relationships[id];
+        }
+      }
+      this.pruneRelationships(a);
+      if (a.memory.personal.majorEvents.length > MAX_MAJOR_EVENTS) {
+        a.memory.personal.majorEvents = a.memory.personal.majorEvents.slice(-MAX_MAJOR_EVENTS);
+      }
+    }
+    for (const s of world.settlements) {
+      this.ensureSettlement(s);
+      const trim = (obj) => {
+        const keys = Object.keys(obj).sort((a, b) => obj[b] - obj[a]).slice(0, MAX_SENTIMENT_ENTRIES);
+        const keep = new Set(keys);
+        for (const k of Object.keys(obj)) if (!keep.has(k)) delete obj[k];
+      };
+      trim(s.sentiment.heroes);
+      trim(s.sentiment.villains);
+    }
+  }
+};
+
 /* ═══════════════════ 11. TRADER SYSTEM ═══════════════════ */
 
 const TraderSystem = {
@@ -2793,7 +3329,7 @@ const TraderSystem = {
 
       for (const d of marketSettlements()) {
         if (d.id === s.id || d.siege) continue;
-        const path = findPath(s.id, d.id, a.traits.riskTolerance < 0.35);
+        const path = findPath(s.id, d.id, a.traits.riskTolerance < 0.35, a);
         if (!path) continue;
         const sellPrice = d.prices[g];
         // ความเสี่ยงตามเส้นทาง
@@ -2806,9 +3342,10 @@ const TraderSystem = {
           }
         }
         const travelCost = path.length * 3;
-        const expected = (sellPrice * 0.85 * (1 - d.taxRate) - buyPrice) * qty
+        let expected = (sellPrice * 0.85 * (1 - d.taxRate) - buyPrice) * qty
           - travelCost + gapBonus
           - risk * qty * buyPrice * (1.2 - a.traits.riskTolerance);
+        if (typeof AgentMemorySystem !== 'undefined') expected -= AgentMemorySystem.pathAvoidPenalty(a, path);
         if (expected > bestProfit) { bestProfit = expected; best = { good: g, qty, destId: d.id, destName: d.name, buyPrice }; }
       }
     }
@@ -2870,6 +3407,7 @@ const TraderSystem = {
       // สะสมกำไรการค้า → ตำนานพ่อค้า
       if (profit > 0) {
         a.memory.tradeProfit += profit;
+        if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.onTradeSuccess(a, profit);
         if (a.memory.tradeProfit >= 400 && !a._traderTitled) {
           a._traderTitled = true;
           const home = getSettlement(a.homeId) || s;
@@ -3038,6 +3576,10 @@ const BanditSystem = {
         for (const m of unitMembers(ambusher)) { m.skills.fighting += 0.05; m.memory.raidsDone++; }
       }
       EventSystem.add('bandit', `🔥 คาราวานของ ${trader.name} ถูกปล้นกลางทาง! เสีย ${good} ${stolenQty} หน่วยและทอง ${stolenGold}`);
+      if (typeof AgentMemorySystem !== 'undefined') {
+        const robberIds = ambusher ? unitMembers(ambusher).map(m => m.id) : [];
+        AgentMemorySystem.onRobbed(trader, r, robberIds);
+      }
       if (trader.stats.health <= 0) NeedSystem.kill(trader, 'ถูกโจรฆ่าตาย');
       return true;
     }
@@ -3133,12 +3675,18 @@ const MilitarySystem = {
         for (const m of members) {
           if (chance(lossRate)) {
             if (chance(0.65)) { NeedSystem.kill(m, 'ตายในสนามรบ'); dead++; }
-            else { // หนีทัพ
-              m.unitId = null;
-              u.memberIds = u.memberIds.filter(id => id !== m.id);
-              m.profession = 'refugee';
-              m.stats.morale = 20;
-              fled++;
+            else {
+              const leader = getAgent(u.leaderId);
+              const resist = typeof AgentMemorySystem !== 'undefined' ? AgentMemorySystem.desertionResist(m, leader) : 0;
+              if (chance(0.45 - resist)) {
+                m.unitId = null;
+                u.memberIds = u.memberIds.filter(id => id !== m.id);
+                m.profession = 'refugee';
+                m.stats.morale = 20;
+                fled++;
+              } else {
+                m.stats.morale = clamp(m.stats.morale - 12, 0, 100);
+              }
             }
           } else {
             m.memory.survivedBattles++;
@@ -3181,6 +3729,10 @@ const MilitarySystem = {
 
     // ── บันทึกประวัติศาสตร์: ศึกใหญ่ลง chronicle / ศึกในสงครามลง war object ──
     recordWarBattle(context.atkFactionId, context.defFactionId, bName, totalDead, attackerWins);
+    if (typeof AgentMemorySystem !== 'undefined') {
+      AgentMemorySystem.onBattleEnd(attackerUnits, attackerWins, bName, context.settlementId);
+      AgentMemorySystem.onBattleEnd(defenderUnits, !attackerWins, bName, context.settlementId);
+    }
     if (totalMen >= 8) {
       const atkLeader = attackerUnits.length ? getAgent(attackerUnits[0].leaderId) : null;
       const defLeader = defenderUnits.length ? getAgent(defenderUnits[0].leaderId) : null;
@@ -3267,7 +3819,9 @@ const MilitarySystem = {
     const defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 +
       (s.type === 'fort' ? 50 : s.type === 'castle' ? 90 : 0);
     // เมือง unrest สูง loyalty ต่ำ อาจเปิดประตู
-    const gatesOpen = s.unrest > 65 && s.loyalty < 30 && chance(0.5);
+    const oldFaction = getFaction(s.factionId);
+    const hateOpen = oldFaction && (s.sentiment?.hatedFactions?.[oldFaction.id] || 0) > 25;
+    const gatesOpen = (s.unrest > 65 && s.loyalty < 30 || hateOpen) && chance(0.4 + (hateOpen ? 0.25 : 0));
     const result = gatesOpen ? { attackerWins: true, atkResult: { dead: 0 }, defResult: { dead: 0 } }
       : this.battle(attUnits, defUnits, {
           defenseBonus, label: s.name, kind: 'capture', settlementId: s.id,
@@ -3319,6 +3873,7 @@ const MilitarySystem = {
         EventSystem.add('politics', `👑 ${commander.name} สถาปนาตนเป็นเจ้าเมือง${s.name}`);
       }
       if (oldFaction && !oldFaction.isBandit) checkFactionCollapse(oldFaction);
+      if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.onCityCaptured(s, commander.id, oldFaction?.id);
       if (typeof ObserverSystem !== 'undefined') {
         ObserverSystem.onMajorEvent('city_captured', `${s.name} เปลี่ยนมือ — ${attFaction.name}`, {
           settlements: [s.id], agents: [commander.id], factions: [attFaction.id, oldFaction ? oldFaction.id : null].filter(x => x)
@@ -3779,6 +4334,7 @@ const GovernanceSystem = {
         description: `คลังอาหารของ${s.name}เกือบหมดขณะมีประชากร ${pop} คน ราคาอาหารพุ่งเป็น ${fmt(s.prices.food, 1)} ทอง ผู้คนเริ่มหนีออกจากเมือง`,
         settlements: [s.id]
       });
+      if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.onCityStarved(s);
     } else if (s.stock.food > 60 && s._famineFlag) {
       s._famineFlag = false;
       settlementHistory(s, `ผ่านพ้นวิกฤตอาหาร คลังกลับมาอุดมสมบูรณ์`);
@@ -3803,6 +4359,7 @@ const GovernanceSystem = {
   },
 
   governorDecisions(gov, s, garrison, garrisonSize) {
+    const taxBefore = s.taxRate;
     /* ตั้งภาษีตามสถานการณ์ */
     if (s.unrest > 55 && s.taxRate > 0.08) {
       s.taxRate = Math.max(0.05, s.taxRate - 0.02);
@@ -3813,6 +4370,9 @@ const GovernanceSystem = {
       if (s.taxRate >= 0.2 && chance(0.3)) EventSystem.add('politics', `📜 ${gov.name} ขึ้นภาษี${s.name}เป็น ${fmt(s.taxRate * 100)}%`);
     } else if (s.treasury > 600 && s.taxRate > 0.1 && s.unrest > 25) {
       s.taxRate = Math.max(0.08, s.taxRate - 0.01);
+    }
+    if (s.taxRate > taxBefore + 0.008 && typeof AgentMemorySystem !== 'undefined') {
+      AgentMemorySystem.onTaxRaised(gov, s, s.taxRate);
     }
 
     /* จ้างทหารเพิ่ม / mercenary เมื่ออันตราย */
@@ -3879,6 +4439,10 @@ const GovernanceSystem = {
       const faction = getFaction(s.factionId);
       if (faction && faction.rulerId !== gov.id) {
         gov.gov.loyalty = clamp(gov.gov.loyalty + (s.prosperity > 60 ? 0.002 : -0.003) - gov.gov.ambition * 0.002, 0, 1);
+        const ruler = faction.rulerId ? getAgent(faction.rulerId) : null;
+        if (ruler && typeof AgentMemorySystem !== 'undefined') {
+          gov.gov.loyalty = clamp(gov.gov.loyalty + AgentMemorySystem.governorLoyaltyModifier(gov, ruler.id) * 0.002, 0, 1);
+        }
         const militaryReady = garrisonSize >= 5;
         if (gov.gov.loyalty < 0.25 && gov.gov.ambition > 0.6 && militaryReady && s.treasury > 300 && chance(0.08)) {
           this.declareIndependence(gov, s, faction);
@@ -3917,6 +4481,12 @@ const GovernanceSystem = {
         agents: [gov.id], settlements: [s.id], factions: [newF.id, oldFaction.id]
       });
     }
+    const oldRuler = getAgent(oldFaction.rulerId);
+    if (oldRuler && typeof AgentMemorySystem !== 'undefined') {
+      addGrudge(oldRuler, gov.id, 'betrayed_by_faction', 28);
+      AgentMemorySystem.recordPersonalEvent(gov, 'betrayed_by_faction', `ทรยศ${oldFaction.name}`,
+        `${gov.name} แยก${s.name}ออกจาก${oldFaction.name}`, 4, { agents: [oldRuler.id], factions: [oldFaction.id, newF.id] });
+    }
   },
 
   appointGovernor(s) {
@@ -3925,7 +4495,12 @@ const GovernanceSystem = {
     const candidates = agentsAt(s.id).filter(a => a.alive && !a.unitId &&
       (a.skills.governance > 1 || a.skills.leadership > 2 || a.traits.ambition > 0.7));
     if (!candidates.length) return;
-    const best = candidates.reduce((m, x) => (x.skills.governance + x.skills.leadership > m.skills.governance + m.skills.leadership) ? x : m, candidates[0]);
+    const best = candidates.reduce((m, x) => {
+      const hero = (s.sentiment?.heroes?.[x.id] || 0) * 0.04;
+      const score = x.skills.governance + x.skills.leadership + hero;
+      const mScore = m.skills.governance + m.skills.leadership + (s.sentiment?.heroes?.[m.id] || 0) * 0.04;
+      return score > mScore ? x : m;
+    }, candidates[0]);
     s.governorId = best.id;
     best.gov = best.gov || makeGovAttrs();
     if (!RULER_PROFS.has(best.profession)) best.profession = 'mayor';
@@ -4198,7 +4773,7 @@ function checkFactionCollapse(f) {
 
 /* ═══════════════ 14.5 PHASE 11: DIPLOMACY SYSTEM ═══════════════ */
 
-function defaultRelation() {
+function defaultFactionRelation() {
   return {
     score: 0, trust: 50, fear: 0, rivalry: 0, tradeValue: 0, borderTension: 0,
     lastWarDay: null, lastTreatyDay: null,
@@ -4223,10 +4798,10 @@ function ensureFactionDiplomacy(f) {
 }
 
 function getRelation(fA, fB) {
-  if (!fA || !fB || fA.id === fB.id) return defaultRelation();
+  if (!fA || !fB || fA.id === fB.id) return defaultFactionRelation();
   ensureFactionDiplomacy(fA);
   if (!fA.diplomacy.relations[fB.id]) {
-    const r = defaultRelation();
+    const r = defaultFactionRelation();
     if (areAtWar(fA, fB)) { r.score = -60; r.trust = 15; r.rivalry = 40; r.lastWarDay = world.day; }
     else if (fA.allies.includes(fB.id)) { r.score = 55; r.trust = 70; r.allianceUntilDay = world.day + 9999; }
     fA.diplomacy.relations[fB.id] = r;
@@ -4529,13 +5104,18 @@ const DiplomacySystem = {
       - (myPow > theirPow * 1.3 ? 20 : 0);
     const vassalScore = (theirPow > myPow * 1.4 ? 30 : 0) + (this.foodReserve(f) < 60 ? 15 : 0)
       - rs.ambition * 25 - (myPow > 50 ? 10 : 0);
-    const allianceScore = r.trust * 0.3 + r.tradeValue * 0.4 + (r.rivalry > 30 ? -20 : 0)
+    let allianceScore = r.trust * 0.3 + r.tradeValue * 0.4 + (r.rivalry > 30 ? -20 : 0)
       - (r.score < -20 ? 30 : 0);
 
     const warThresh = f.diplomacy.diplomaticPersonality === 'aggressive' ? 35 : f.diplomacy.diplomaticPersonality === 'defensive' ? 55 : 45;
     const tradePen = typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.diplomacyTradeWeight(f) : 0;
     if (f.diplomacy.diplomaticPersonality === 'trader') warScore -= tradePen * 1.5;
     else warScore -= tradePen * 0.6;
+    const rulerA = getAgent(f.rulerId), rulerB = getAgent(other.rulerId);
+    if (typeof AgentMemorySystem !== 'undefined' && rulerA && rulerB) {
+      warScore += AgentMemorySystem.rulerBetrayalModifier(rulerA, rulerB.id);
+      allianceScore += AgentMemorySystem.governorLoyaltyModifier(rulerA, rulerB.id) * 0.25;
+    }
     if (warScore > warThresh && !isVassalOf(f, other) && chance(0.1)) {
       this.declareWar(f, other, 'ความตึงเครียดชายแดนและความทะเยอทะยานของผู้นำ');
       return;
@@ -4791,6 +5371,7 @@ function simulateDay() {
   GovernanceSystem.updateFactions();
   DiplomacySystem.tick();
   MarketTradeSystem.tickDaily();
+  if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
 
   // เติม garrison จากทหารว่าง
   for (const s of world.settlements) {
@@ -5123,6 +5704,28 @@ const ObserverSystem = {
         push('settlement', g.homeSettlementId, g.name, 'guild');
       }
     }
+    if (typeof AgentMemorySystem !== 'undefined') {
+      for (const a of world.agents) {
+        if (!a.alive) continue;
+        AgentMemorySystem.ensureAgent(a);
+        const p = a.memory.personal;
+        if ((q.includes('grudge') || q.includes('แค้น')) && p.grudges?.length) {
+          push('agent', a.id, a.name, `แค้น ${p.grudges.length} ราย`);
+        }
+        if ((q.includes('loyal') || q.includes('ภักดี')) && p.loyalties?.length) {
+          push('agent', a.id, a.name, `ภักดี ${p.loyalties.length} คน`);
+        }
+        if ((q.includes('vengeful') || q.includes('แก้แค้น')) && (a.motives?.revenge || 0) > 25) {
+          push('agent', a.id, a.name, `แรงจูงใจแก้แค้น ${fmt(a.motives.revenge, 0)}`);
+        }
+        if ((q.includes('hero') || q.includes('วีรบุรุษ')) && world.settlements.some(s => (s.sentiment?.heroes?.[a.id] || 0) > 10)) {
+          push('agent', a.id, a.name, 'วีรบุรุษท้องถิ่น');
+        }
+        if ((q.includes('villain') || q.includes('วายร้าย') || q.includes('enemy')) && world.settlements.some(s => (s.sentiment?.villains?.[a.id] || 0) > 8)) {
+          push('agent', a.id, a.name, 'ถูกเกลียดในเมือง');
+        }
+      }
+    }
     return results.slice(0, 25);
   },
 
@@ -5444,6 +6047,18 @@ const ObserverSystem = {
           <span class="obs-sub">${o ? o.name : '?'} → ${d ? d.name : '?'} · ${fmt(c.reward)} ทอง</span>
         </div>`;
       }).join('') || '<p class="hint">ไม่มีสัญญาที่เปิดอยู่</p>';
+    } else if (tab === 'personalities' && typeof AgentMemorySystem !== 'undefined') {
+      const pr = AgentMemorySystem.rankings();
+      html = '<div class="obs-section-head">Most Loyal Followers</div>';
+      html += pr.loyalFollowers.filter(x => x.loyalty > 0).map(x =>
+        row(x.agent.name, `loyalty ${fmt(x.loyalty)} → ${x.leader ? x.leader.name.split(' ')[0] : '?'}`, 'agent', x.agent.id)).join('')
+        || '<p class="hint">ยังไม่มีความภักดีเด่น</p>';
+      html += '<div class="obs-section-head">Most Vengeful</div>';
+      html += pr.vengeful.filter(x => x.revenge > 15).map(x => row(x.agent.name, `revenge ${fmt(x.revenge, 0)}`, 'agent', x.agent.id)).join('');
+      html += '<div class="obs-section-head">Most Connected</div>';
+      html += pr.connected.filter(x => x.n > 0).map(x => row(x.agent.name, `${x.n} relations`, 'agent', x.agent.id)).join('');
+      html += '<div class="obs-section-head">Most Hated</div>';
+      html += pr.hated.filter(x => x.hate > 5).map(x => row(x.agent.name, `hate ${fmt(x.hate, 0)}`, 'agent', x.agent.id)).join('');
     }
     body.innerHTML = html;
     for (const rowEl of body.querySelectorAll('.obs-row')) {
@@ -5632,6 +6247,7 @@ const Renderer = {
 
     // agents (จุดรอบถิ่นฐาน + ผู้เดินทาง)
     this.drawAgents(ctx);
+    if (UI.showRelationLines) this.drawRelationLines(ctx);
 
     // units/armies เดินทาง (จุดใหญ่)
     this.drawMilitaryDots(ctx);
@@ -5717,6 +6333,40 @@ const Renderer = {
     }
   },
 
+  drawRelationLines(ctx) {
+    if (!UI.showRelationLines || !UI.selected || UI.selected.kind !== 'agent' || typeof AgentMemorySystem === 'undefined') return;
+    const a = getAgent(UI.selected.id);
+    if (!a || !a.alive) return;
+    let ax = a._px, ay = a._py;
+    if (ax == null) {
+      const s = getSettlement(a.locationId);
+      if (!s) return;
+      ax = this.sx(s.x); ay = this.sy(s.y);
+    }
+    AgentMemorySystem.ensureAgent(a);
+    for (const [id, rel] of Object.entries(a.relationships)) {
+      const other = getAgent(+id);
+      if (!other || !other.alive) continue;
+      const strength = Math.abs(rel.score) + rel.grudge + rel.loyalty + rel.gratitude;
+      if (strength < 8) continue;
+      let ox = other._px, oy = other._py;
+      if (ox == null) {
+        const s = getSettlement(other.locationId);
+        if (!s) continue;
+        ox = this.sx(s.x); oy = this.sy(s.y);
+      }
+      const positive = (rel.loyalty + rel.gratitude + rel.trust) > (rel.grudge + rel.fear);
+      ctx.strokeStyle = positive ? 'rgba(100,200,255,0.4)' : 'rgba(255,100,100,0.4)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ox, oy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  },
+
   drawMilitaryDots(ctx) {
     const rMin = Math.min(this.scaleX, this.scaleY);
     for (const u of world.units) {
@@ -5727,7 +6377,6 @@ const Renderer = {
       else {
         const s = getSettlement(u.locationId);
         if (!s) continue;
-        // guard วางชิดมุมล่างซ้ายของถิ่นฐาน หน่วยอื่นลอยมุมบนขวา
         const base = SETTLEMENT_RADIUS[s.type] * 1.4 + 6;
         const off = u.kind === 'guard' ? -base : base + 6;
         px = this.sx(s.x) + off * rMin; py = this.sy(s.y) - Math.abs(off) * rMin;
@@ -5910,6 +6559,7 @@ const UI = {
   chronicleFilter: 'all',
   chronicleOpen: false,
   marketOpen: false,
+  showRelationLines: false,
   dashboardDirty: true,
   _lastTickTime: 0,
 
@@ -6309,6 +6959,8 @@ const UI = {
         this.inspectorDirty = true;
       });
     }
+    const relCb = body.querySelector('#showRelLines');
+    if (relCb) relCb.addEventListener('change', () => { UI.showRelationLines = relCb.checked; });
   },
 
   kv(k, v, cls) { return `<div class="kv"><span class="k">${k}</span><span class="v ${cls || ''}">${v}</span></div>`; },
@@ -6390,6 +7042,50 @@ const UI = {
     if (a.lastMigrationDay > 0) html += this.kv('ย้ายล่าสุด', `Day ${a.lastMigrationDay}`);
     if (a.wantedLevel > 0) html += this.kv('ค่าหัว', fmt(a.wantedLevel), 'bad');
     html += `</div>`;
+    if (typeof AgentMemorySystem !== 'undefined') {
+      AgentMemorySystem.ensureAgent(a);
+      if (a._motiveDay !== world.day) AgentMemorySystem.updateMotives(a);
+      const m = a.motives || {};
+      html += `<div class="insp-section"><h4>Core Motives (Phase 17)</h4>`;
+      const motiveKeys = ['survival', 'wealth', 'safety', 'loyalty', 'revenge', 'ambition', 'duty', 'trade', 'power', 'fear'];
+      for (const k of motiveKeys) html += this.kv(k, fmt(m[k] || 0, 0)) + this.bar(m[k] || 0, k === 'revenge' || k === 'fear' ? '#ef5350' : '#42a5f5');
+      html += `</div>`;
+      const allies = AgentMemorySystem.topRelations(a, 'trust', 3);
+      const enemies = AgentMemorySystem.topRelations(a, 'grudge', 3);
+      const loyal = AgentMemorySystem.topRelations(a, 'loyalty', 3);
+      if (allies.length || enemies.length || loyal.length) {
+        html += `<div class="insp-section"><h4>Relationships</h4>`;
+        if (loyal.length) html += loyal.map(x => this.kv('ภักดีต่อ', this.link('agent', x.id, x.agent.name), 'good')).join('');
+        if (allies.length) html += allies.map(x => this.kv('ไว้ใจ', this.link('agent', x.id, x.agent.name))).join('');
+        if (enemies.length) html += enemies.map(x => this.kv('แค้น', this.link('agent', x.id, x.agent.name), 'bad')).join('');
+        html += `<label class="rel-lines-toggle"><input type="checkbox" id="showRelLines" ${UI.showRelationLines ? 'checked' : ''}> แสดงเส้นความสัมพันธ์บนแผนที่</label>`;
+        html += `</div>`;
+      }
+      const p = a.memory.personal;
+      if (p.grudges?.length) {
+        html += `<div class="insp-section"><h4>Grudges</h4>`;
+        html += p.grudges.slice(-5).reverse().map(g => {
+          const t = getAgent(g.targetId);
+          return `<div class="timeline-entry"><span class="tl-day">Day ${g.day}</span><span class="tl-text">${t ? this.link('agent', t.id, t.name) : '?'} — ${g.reason}</span></div>`;
+        }).join('');
+        html += `</div>`;
+      }
+      if (p.majorEvents?.filter(e => e.importance >= 3).length) {
+        html += `<div class="insp-section"><h4>Life Turning Points</h4>`;
+        html += p.majorEvents.filter(e => e.importance >= 3).slice(-6).reverse().map(e =>
+          `<div class="timeline-entry"><span class="tl-day">Day ${e.day}</span><span class="tl-text">${e.title}</span></div>`).join('');
+        html += `</div>`;
+      }
+      if (p.avoidedRoutes?.length) {
+        const routeNames = p.avoidedRoutes.map(rid => {
+          const r = world.routes.find(rt => rt.id === rid);
+          if (!r) return null;
+          const sa = getSettlement(r.a), sb = getSettlement(r.b);
+          return `${sa ? sa.name : '?'}↔${sb ? sb.name : '?'}`;
+        }).filter(Boolean);
+        if (routeNames.length) html += `<div class="insp-section"><h4>Feared Routes</h4><div class="ce-desc">${routeNames.join(' · ')}</div></div>`;
+      }
+    }
     // ── Phase 10.5: Combat stats ──
     const ds = CombatSystem.deriveStats(a);
     html += `<div class="insp-section"><h4>Combat Stats</h4>`;
@@ -6522,6 +7218,31 @@ const UI = {
     if (s.drought > 0) html += this.kv('☀ ภัยแล้ง', `อีก ${s.drought} วัน`, 'bad');
     if (s.plague > 0) html += this.kv('☠ โรคระบาด', `ระดับ ${fmt(s.plague, 1)}`, 'bad');
     html += `</div>`;
+    if (s.sentiment && typeof AgentMemorySystem !== 'undefined') {
+      const heroes = Object.entries(s.sentiment.heroes || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const villains = Object.entries(s.sentiment.villains || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const hated = Object.entries(s.sentiment.hatedFactions || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      if (heroes.length || villains.length || hated.length || s.sentiment.rememberedCrises?.length) {
+        html += `<div class="insp-section"><h4>Citizen Memory (Phase 17)</h4>`;
+        for (const [id, sc] of heroes) {
+          const ag = getAgent(+id);
+          if (ag) html += this.kv('Hero', `${this.link('agent', ag.id, ag.name)} (${fmt(sc)})`, 'good');
+        }
+        for (const [id, sc] of villains) {
+          const ag = getAgent(+id);
+          if (ag) html += this.kv('Villain', `${this.link('agent', ag.id, ag.name)} (${fmt(sc)})`, 'bad');
+        }
+        for (const [fid] of hated) {
+          const fac = getFaction(+fid);
+          if (fac) html += this.kv('Hated faction', this.link('faction', fac.id, fac.name), 'bad');
+        }
+        if (s.sentiment.rememberedCrises?.length) {
+          html += s.sentiment.rememberedCrises.slice(-4).reverse().map(c =>
+            `<div class="timeline-entry"><span class="tl-day">Day ${c.day}</span><span class="tl-text">${c.text || c.type}</span></div>`).join('');
+        }
+        html += `</div>`;
+      }
+    }
     html += `<div class="insp-section"><h4>คลัง / ราคา (stock · demand · price)</h4>`;
     for (const g of GOODS) {
       const priceRatio = s.prices[g] / BASE_PRICE[g];
@@ -7042,7 +7763,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '15.1';
+const SAVE_SCHEMA_VERSION = '17.0';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -7266,6 +7987,8 @@ const SaveSystem = {
     else s.marketRole = Object.assign(defaultMarketRole(), s.marketRole);
     if (s.tradeVolume == null) s.tradeVolume = 0;
     if (s.priceVolatility == null) s.priceVolatility = 0;
+    if (!s.sentiment) s.sentiment = defaultSettlementSentiment();
+    else s.sentiment = Object.assign(defaultSettlementSentiment(), s.sentiment);
   },
 
   migrateRoute(r) {
@@ -7293,6 +8016,10 @@ const SaveSystem = {
     a.skills = Object.assign(DEFAULT_SKILLS(), a.skills || {});
     a.traits = Object.assign({ bravery: 0.5, greed: 0.5, loyalty: 0.5, ambition: 0.5, riskTolerance: 0.5, discipline: 0.5 }, a.traits || {});
     a.memory = Object.assign({ battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 }, a.memory || {});
+    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(a.birthplaceId || a.locationId);
+    else a.memory.personal = Object.assign(defaultPersonalMemory(a.birthplaceId || a.locationId), a.memory.personal);
+    if (!a.relationships) a.relationships = {};
+    if (!a.motives) a.motives = defaultMotives();
     a.deeds = a.deeds || [];
     a.career = a.career || [{ day: 0, profession: a.profession || 'unemployed' }];
     a.fame = a.fame || 0;
@@ -7325,6 +8052,8 @@ const SaveSystem = {
     u.recentVictories = u.recentVictories || 0;
     u.equipmentPower = u.equipmentPower || 0;
     u.combatPower = u.combatPower || 0;
+    if (!u.bonds) u.bonds = defaultUnitBonds();
+    else u.bonds = Object.assign(defaultUnitBonds(), u.bonds);
   },
 
   migrateArmy(ar) {
@@ -7389,6 +8118,7 @@ const SaveSystem = {
     }
     DiplomacySystem.syncFromLegacy();
     if (typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.initWorld();
+    if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.initWorld();
   },
 
   applyUiPrefs(prefs) {
