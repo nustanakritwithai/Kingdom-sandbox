@@ -590,6 +590,9 @@ body { display: flex; flex-direction: column; }
 .dash-item.trade { color: #81c784; }
 .dash-item.guild { color: #ffd54f; }
 
+.rel-lines-toggle { display: block; margin-top: 8px; font-size: 11px; color: var(--muted); cursor: pointer; }
+.rel-lines-toggle input { margin-right: 6px; }
+
 .obs-tabs {
   display: flex;
   flex-wrap: wrap;
