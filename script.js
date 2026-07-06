@@ -24,6 +24,7 @@
     18. INIT
    Phase 10.5: Simulation Stability + Ambition + Combat Depth
    Phase 10.6: Logistics Cleanup + Local Consumption Fix
+   Phase 13: Save / Load / Export World
    ═══════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -550,6 +551,9 @@ function generateWorld() {
   nextId = 1;
   world = {
     day: 0,
+    seed: ((Date.now() ^ (Math.random() * 0x7fffffff | 0)) >>> 0),
+    worldName: 'ราชอาณาจักรสุวรรณ',
+    _createdAt: new Date().toISOString(),
     settlements: [], routes: [], agents: [], units: [], armies: [], factions: [],
     events: [],
     chronicle: [], wars: [], eras: [],
@@ -558,6 +562,7 @@ function generateWorld() {
 
   // ── Factions ──
   const kingdom = createFaction({ name: 'ราชอาณาจักรสุวรรณ', color: '#42a5f5', treasury: 1500 });
+  world.worldName = kingdom.name;
   const banditF = createFaction({ name: 'พวกโจรป่าแดง', color: '#ef5350', isBandit: true, treasury: 50 });
 
   // ── Settlements: 1 castle, 2 towns, 1 fort, 4 villages, 1 bandit camp ──
@@ -3491,6 +3496,7 @@ function simulateDay() {
   }
 
   UI.inspectorDirty = true;
+  if (typeof SaveSystem !== 'undefined') SaveSystem.tickAutoSave();
 }
 
 /* ── สร้างข้อความสรุปยุคสมัย 50 วันเป็นภาษาไทย ── */
@@ -3577,6 +3583,11 @@ const Renderer = {
   draw() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
+    if (!world) {
+      ctx.fillStyle = '#141b14';
+      ctx.fillRect(0, 0, this.w, this.h);
+      return;
+    }
 
     // พื้นหลัง
     ctx.fillStyle = '#141b14';
@@ -3891,7 +3902,14 @@ const UI = {
     });
     document.getElementById('btnStep').addEventListener('click', () => { simulateDay(); });
     document.getElementById('btnReset').addEventListener('click', () => {
-      if (confirm('สร้างโลกใหม่ทั้งหมด?')) { generateWorld(); this.selected = null; this.logDirty = true; }
+      if (!confirm('สร้างโลกใหม่ทั้งหมด? (การบันทึกในเครื่องจะไม่ถูกลบ)')) return;
+      generateWorld();
+      this.selected = null;
+      this.logDirty = true;
+      if (typeof SaveSystem !== 'undefined') {
+        SaveSystem.lastSaveKind = null;
+        SaveSystem.updateStatusUI();
+      }
     });
     for (const btn of document.querySelectorAll('.speed-btn')) {
       btn.addEventListener('click', () => {
@@ -3963,7 +3981,7 @@ const UI = {
       simulateDay();
     }
     Renderer.draw();
-    document.getElementById('dayCounter').textContent = `Day ${world.day}`;
+    document.getElementById('dayCounter').textContent = world ? `Day ${world.day}` : 'Day —';
     if (this.logDirty) { this.renderLog(); this.logDirty = false; }
     if (this.inspectorDirty) { this.renderInspector(); this.inspectorDirty = false; }
     if (this.chronicleOpen && this.chronicleDirty) { this.renderChronicle(); this.chronicleDirty = false; }
@@ -4695,9 +4713,562 @@ const SandboxTools = {
   }
 };
 
+/* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
+
+const SAVE_SCHEMA_VERSION = '13.0';
+const SAVE_GAME_ID = 'living-kingdom-sandbox';
+const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
+const AUTOSAVE_EVERY_DAYS = 50;
+
+const SaveSystem = {
+  lastSaveDay: null,
+  lastSaveKind: null,
+  _lastAutoDay: -1,
+
+  init() {
+    const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+    bind('btnSavePanel', () => this.togglePanel());
+    bind('btnSaveWorld', () => this.saveWorld(false));
+    bind('btnLoadWorld', () => this.loadWorld());
+    bind('btnContinueWorld', () => this.continueWorld());
+    bind('btnExportSave', () => this.exportSaveJSON());
+    bind('btnExportChronicle', () => this.exportChronicleMD());
+    bind('btnCopySummary', () => this.copySummary());
+    bind('btnContinueOverlay', () => this.continueWorld());
+    bind('btnNewWorldOverlay', () => this.startNewWorldFromOverlay());
+    const imp = document.getElementById('importSaveInput');
+    if (imp) imp.addEventListener('change', e => this.handleImportFile(e));
+    const close = document.getElementById('savePanelClose');
+    if (close) close.addEventListener('click', () => document.getElementById('savePanel')?.classList.add('hidden'));
+    this.refreshContinueUI();
+    this.updateStatusUI();
+  },
+
+  togglePanel() {
+    const p = document.getElementById('savePanel');
+    if (!p) return;
+    p.classList.toggle('hidden');
+    document.getElementById('toolPanel')?.classList.add('hidden');
+    document.getElementById('chroniclePanel')?.classList.add('hidden');
+    document.getElementById('summaryModal')?.classList.add('hidden');
+    this.refreshContinueUI();
+    this.updateStatusUI();
+  },
+
+  hasSave() {
+    try { return !!localStorage.getItem(SAVE_STORAGE_KEY); } catch { return false; }
+  },
+
+  getSaveMeta() {
+    try {
+      const raw = localStorage.getItem(SAVE_STORAGE_KEY);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return p && p.gameId === SAVE_GAME_ID ? p : null;
+    } catch { return null; }
+  },
+
+  buildSavePayload(kind) {
+    return {
+      schemaVersion: SAVE_SCHEMA_VERSION,
+      gameId: SAVE_GAME_ID,
+      createdAt: world._createdAt || new Date().toISOString(),
+      savedAt: new Date().toISOString(),
+      worldName: world.worldName || 'Living Kingdom',
+      seed: world.seed || 0,
+      day: world.day,
+      nextId,
+      saveKind: kind,
+      uiPrefs: {
+        speed: UI.speed,
+        heatmapMode: UI.heatmapMode,
+        paused: UI.paused
+      },
+      world: this.serializeWorld()
+    };
+  },
+
+  serializeWorld() {
+    const clone = JSON.parse(JSON.stringify(world, (k, v) => (typeof v === 'function' ? undefined : v)));
+    delete clone._eraSnapshot;
+    return clone;
+  },
+
+  saveToLocalStorage(kind, silent) {
+    if (!world) return null;
+    try {
+      const payload = this.buildSavePayload(kind);
+      localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(payload));
+      this.lastSaveDay = world.day;
+      this.lastSaveKind = kind;
+      this.updateStatusUI();
+      if (!silent) {
+        EventSystem.add('system', kind === 'auto'
+          ? `💾 Autosaved Day ${world.day}`
+          : `💾 บันทึกโลก "${world.worldName}" Day ${world.day}`);
+      }
+      return payload;
+    } catch (e) {
+      alert('บันทึกไม่สำเร็จ: ' + e.message);
+      return null;
+    }
+  },
+
+  saveWorld(force) {
+    if (!world) return;
+    if (!force && this.hasSave()) {
+      const meta = this.getSaveMeta();
+      if (!confirm(`เขียนทับการบันทึกเดิม (Day ${meta?.day ?? '?'}) ด้วยโลกปัจจุบัน Day ${world.day}?`)) return;
+    }
+    this.saveToLocalStorage('manual');
+  },
+
+  loadWorld() {
+    const meta = this.getSaveMeta();
+    if (!meta) { alert('ไม่พบการบันทึกในเครื่อง'); return; }
+    if (world && !confirm(`โหลดการบันทึก Day ${meta.day} แทนโลกปัจจุบัน Day ${world.day}?`)) return;
+    try {
+      this.loadFromPayload(meta);
+      EventSystem.add('system', `📂 โหลดโลก "${world.worldName}" Day ${world.day} จากการบันทึกในเครื่อง`);
+    } catch (e) {
+      alert('โหลดไม่สำเร็จ: ' + e.message);
+    }
+  },
+
+  continueWorld() {
+    const meta = this.getSaveMeta();
+    if (!meta) { alert('ไม่พบการบันทึก'); return; }
+    try {
+      this.loadFromPayload(meta);
+      this.hideContinueOverlay();
+      EventSystem.add('system', `▶ เล่นต่อโลก "${world.worldName}" Day ${world.day}`);
+    } catch (e) {
+      alert('โหลดไม่สำเร็จ: ' + e.message);
+    }
+  },
+
+  loadFromPayload(payload) {
+    if (!payload || payload.gameId !== SAVE_GAME_ID) throw new Error('ไฟล์ไม่ใช่ save ของ Living Kingdom Sandbox');
+    const migrated = this.migrate(payload);
+    nextId = Math.max(1, migrated.nextId || 1);
+    world = migrated.world;
+    world._createdAt = migrated.createdAt || world._createdAt || new Date().toISOString();
+    world.worldName = migrated.worldName || world.worldName || 'Living Kingdom';
+    world.seed = migrated.seed != null ? migrated.seed : (world.seed || 0);
+    this.applyPostLoad();
+    if (migrated.uiPrefs) this.applyUiPrefs(migrated.uiPrefs);
+    this.lastSaveDay = world.day;
+    this.lastSaveKind = 'loaded';
+    UI.selected = null;
+    UI.logDirty = true;
+    UI.inspectorDirty = true;
+    UI.chronicleDirty = true;
+    this.updateStatusUI();
+    this.refreshContinueUI();
+  },
+
+  migrate(payload) {
+    const data = JSON.parse(JSON.stringify(payload));
+    if (!data.world || typeof data.world !== 'object') throw new Error('save ไม่มีข้อมูล world');
+    const w = data.world;
+    w.day = w.day || 0;
+    w.settlements = w.settlements || [];
+    w.routes = w.routes || [];
+    w.agents = w.agents || [];
+    w.units = w.units || [];
+    w.armies = w.armies || [];
+    w.factions = w.factions || [];
+    w.events = w.events || [];
+    w.chronicle = w.chronicle || [];
+    w.wars = w.wars || [];
+    w.eras = w.eras || [];
+    w.stats = Object.assign({
+      deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
+      bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0,
+      townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0
+    }, w.stats || {});
+    if (!w.worldName) w.worldName = data.worldName || 'Living Kingdom';
+    if (w.seed == null) w.seed = data.seed || 0;
+    if (!w._createdAt) w._createdAt = data.createdAt || new Date().toISOString();
+    for (const s of w.settlements) this.migrateSettlement(s);
+    for (const r of w.routes) this.migrateRoute(r);
+    for (const a of w.agents) this.migrateAgent(a);
+    for (const u of w.units) this.migrateUnit(u);
+    for (const ar of w.armies) this.migrateArmy(ar);
+    for (const f of w.factions) this.migrateFaction(f);
+    data.schemaVersion = SAVE_SCHEMA_VERSION;
+    data.world = w;
+    return data;
+  },
+
+  migrateSettlement(s) {
+    s.stock = Object.assign(newStock(), s.stock || {});
+    s.demand = Object.assign(newStock(), s.demand || {});
+    s.prices = Object.assign({}, BASE_PRICE, s.prices || {});
+    s.buildings = s.buildings || [];
+    s.history = s.history || [];
+    s.housingCapacity = s.housingCapacity != null ? s.housingCapacity : 15;
+    s.jobSlots = s.jobSlots != null ? s.jobSlots : 12;
+    s.foodReserveTargetDays = s.foodReserveTargetDays != null ? s.foodReserveTargetDays : 4;
+    s.maxFoodExportRatio = s.maxFoodExportRatio != null ? s.maxFoodExportRatio : 0.5;
+    if (s.townCaravanId == null) s.townCaravanId = null;
+    if (s.emergencyCaravanId == null) s.emergencyCaravanId = null;
+    s.caravanSubsidy = s.caravanSubsidy || 0;
+    s.crowding = s.crowding || 0;
+    s.foodPerCapita = s.foodPerCapita || 0;
+    s.recentInbound = s.recentInbound || 0;
+    s.prodPotential = s.prodPotential || { food: 0, wood: 0, ore: 0 };
+  },
+
+  migrateRoute(r) {
+    r.threat = r.threat != null ? r.threat : (r.danger || 0);
+    r.recentRaids = r.recentRaids || 0;
+    r.caravanLosses = r.caravanLosses || 0;
+    r.bounty = r.bounty || 0;
+    r.lifetimeBounty = r.lifetimeBounty || 0;
+    r.patrolLevel = r.patrolLevel || 0;
+    r.priceGapFood = r.priceGapFood || 0;
+    r._peakThreat = r._peakThreat || r.threat || 0;
+    if (r.patrolMissionId == null) r.patrolMissionId = null;
+    r.destroyed = !!r.destroyed;
+  },
+
+  migrateAgent(a) {
+    a.stats = Object.assign({ hunger: 70, energy: 80, health: 100, morale: 60, wealth: 0 }, a.stats || {});
+    a.inventory = Object.assign({ food: 0, wood: 0, ore: 0, tools: 0, weapon: 0, bow: 0, horse: 0, cart: 0 }, a.inventory || {});
+    a.durability = a.durability || { tools: 0, weapon: 0, cart: 0 };
+    a.equipment = a.equipment || emptyEquipment();
+    a.combatStats = Object.assign({
+      strength: 6, agility: 6, endurance: 6, perception: 6,
+      intelligence: 6, charisma: 6, discipline: 6, courage: 6
+    }, a.combatStats || {});
+    a.skills = Object.assign(DEFAULT_SKILLS(), a.skills || {});
+    a.traits = Object.assign({ bravery: 0.5, greed: 0.5, loyalty: 0.5, ambition: 0.5, riskTolerance: 0.5, discipline: 0.5 }, a.traits || {});
+    a.memory = Object.assign({ battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 }, a.memory || {});
+    a.deeds = a.deeds || [];
+    a.career = a.career || [{ day: 0, profession: a.profession || 'unemployed' }];
+    a.fame = a.fame || 0;
+    a.legacyScore = a.legacyScore || 0;
+    a.ambitionPlan = a.ambitionPlan || 'survive';
+    a.savingGoal = a.savingGoal || 0;
+    a.lastMigrationDay = a.lastMigrationDay != null ? a.lastMigrationDay : -99;
+    a.isTownCaravan = !!a.isTownCaravan;
+    a.isEmergencyCaravan = !!a.isEmergencyCaravan;
+    a.wantedLevel = a.wantedLevel || 0;
+    a.derivedStats = null;
+    if (a._jitterA == null) { a._jitterA = Math.random() * Math.PI * 2; a._jitterR = rand(0.3, 1); }
+    a.currentGoal = a.currentGoal || 'ตั้งตัว';
+    a.currentThought = a.currentThought || '...';
+  },
+
+  migrateUnit(u) {
+    u.memberIds = u.memberIds || [];
+    u.objective = u.objective || { type: 'idle' };
+    u.supply = Object.assign({ food: 20, arrows: 20, weapons: 5 }, u.supply || {});
+    u.battleHistory = u.battleHistory || [];
+    u.recentVictories = u.recentVictories || 0;
+    u.equipmentPower = u.equipmentPower || 0;
+    u.combatPower = u.combatPower || 0;
+  },
+
+  migrateArmy(ar) {
+    ar.unitIds = ar.unitIds || [];
+    ar.objective = ar.objective || { type: 'idle' };
+    ar.supply = Object.assign({ food: 200, arrows: 100, weapons: 30, horses: 5 }, ar.supply || {});
+  },
+
+  migrateFaction(f) {
+    f.enemies = f.enemies || [];
+    f.allies = f.allies || [];
+    f.vassalIds = f.vassalIds || [];
+    f.timeline = f.timeline || [];
+    f.warState = !!f.warState;
+    f.isBandit = !!f.isBandit;
+  },
+
+  applyPostLoad() {
+    for (const a of world.agents) syncLegacyInventory(a);
+    for (const s of world.settlements) {
+      if (s.type !== 'camp') LogisticsSystem.validateCaravanSlots(s);
+    }
+    for (const u of world.units) {
+      for (const id of u.memberIds) {
+        const m = getAgent(id);
+        if (m) m.unitId = u.id;
+      }
+    }
+    for (const ar of world.armies) {
+      for (const uid of ar.unitIds) {
+        const u = getUnit(uid);
+        if (u) u.armyId = ar.id;
+      }
+    }
+  },
+
+  applyUiPrefs(prefs) {
+    if (prefs.speed) {
+      UI.speed = prefs.speed;
+      document.querySelectorAll('.speed-btn').forEach(b => {
+        b.classList.toggle('active', +b.dataset.speed === UI.speed);
+      });
+    }
+    if (prefs.heatmapMode != null) {
+      UI.heatmapMode = prefs.heatmapMode;
+      const sel = document.getElementById('heatmapSelect');
+      if (sel) sel.value = prefs.heatmapMode;
+    }
+    if (prefs.paused != null) {
+      UI.paused = prefs.paused;
+      const bp = document.getElementById('btnPause');
+      if (bp) bp.textContent = UI.paused ? '▶ Resume' : '⏸ Pause';
+    }
+  },
+
+  tickAutoSave() {
+    if (!world || world.day <= 0) return;
+    if (world.day % AUTOSAVE_EVERY_DAYS !== 0) return;
+    if (this._lastAutoDay === world.day) return;
+    this._lastAutoDay = world.day;
+    this.saveToLocalStorage('auto', true);
+    EventSystem.add('system', `💾 Autosaved Day ${world.day}`);
+    this.updateStatusUI();
+  },
+
+  refreshContinueUI() {
+    const meta = this.getSaveMeta();
+    const btn = document.getElementById('btnContinueWorld');
+    if (btn) {
+      btn.classList.toggle('hidden', !meta);
+      if (meta) btn.title = `โหลด Day ${meta.day}`;
+    }
+    const overlay = document.getElementById('continueOverlay');
+    if (overlay && overlay.classList && !overlay.classList.contains('hidden') && meta) {
+      const txt = document.getElementById('continueOverlayText');
+      if (txt) txt.textContent = `พบการบันทึก "${meta.worldName}" — Day ${meta.day}`;
+    }
+  },
+
+  showContinueOverlay() {
+    const meta = this.getSaveMeta();
+    if (!meta) return false;
+    const ov = document.getElementById('continueOverlay');
+    const txt = document.getElementById('continueOverlayText');
+    if (ov) ov.classList.remove('hidden');
+    if (txt) txt.textContent = `พบการบันทึก "${meta.worldName}" — Day ${meta.day}`;
+    return true;
+  },
+
+  hideContinueOverlay() {
+    document.getElementById('continueOverlay')?.classList.add('hidden');
+  },
+
+  startNewWorldFromOverlay() {
+    if (!confirm('สร้างโลกใหม่และเล่นต่อจาก Day 0? (การบันทึกเดิมยังอยู่ในเครื่อง)')) return;
+    this.hideContinueOverlay();
+    generateWorld();
+    UI.selected = null;
+    UI.logDirty = true;
+    this.lastSaveKind = null;
+    this.updateStatusUI();
+  },
+
+  updateStatusUI() {
+    const el = document.getElementById('saveStatus');
+    if (!el) return;
+    if (!world) { el.textContent = 'No save loaded'; el.className = 'save-status'; return; }
+    let text = 'No save';
+    let cls = 'save-status';
+    if (this.lastSaveKind === 'loaded') {
+      text = `Loaded Day ${world.day}`;
+      cls += ' loaded';
+    } else if (this.lastSaveKind === 'auto' && this.lastSaveDay === world.day) {
+      text = `Autosaved Day ${world.day}`;
+      cls += ' auto';
+    } else if (this.lastSaveKind === 'manual' && this.lastSaveDay === world.day) {
+      text = `Saved Day ${world.day}`;
+      cls += ' saved';
+    } else if (this.hasSave()) {
+      const meta = this.getSaveMeta();
+      text = meta ? `Saved Day ${meta.day} (disk)` : 'No save';
+    }
+    el.textContent = text;
+    el.className = cls;
+  },
+
+  downloadText(filename, content, mime) {
+    const blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+
+  exportSaveJSON() {
+    if (!world) return;
+    const payload = this.buildSavePayload('export');
+    const fname = `living-kingdom-day-${world.day}.json`;
+    this.downloadText(fname, JSON.stringify(payload, null, 2), 'application/json');
+    EventSystem.add('system', `📤 Export save ${fname}`);
+  },
+
+  handleImportFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const payload = JSON.parse(reader.result);
+        if (world && !confirm(`นำเข้า save Day ${payload.day ?? '?'} แทนโลกปัจจุบัน?`)) return;
+        this.loadFromPayload(payload);
+        try { localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(this.buildSavePayload('import'))); } catch {}
+        EventSystem.add('system', `📥 นำเข้าโลก "${world.worldName}" Day ${world.day}`);
+      } catch (err) {
+        alert('นำเข้าไม่สำเร็จ: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  },
+
+  buildChronicleMarkdown() {
+    if (!world) return '';
+    const lines = [];
+    lines.push(`# ตำนานแห่ง ${world.worldName}`);
+    lines.push('');
+    lines.push(`- วันปัจจุบัน: **Day ${world.day}**`);
+    lines.push(`- Seed: ${world.seed}`);
+    lines.push(`- สร้างเมื่อ: ${world._createdAt || '—'}`);
+    lines.push(`- ส่งออกเมื่อ: ${new Date().toISOString()}`);
+    lines.push('');
+    lines.push('## สรุปโลก');
+    lines.push('');
+    lines.push(this.buildSummaryText());
+    lines.push('');
+    lines.push('## ตัวละครสำคัญ');
+    lines.push('');
+    const heroes = world.agents.filter(a => a.notable || a.fame >= 15).sort((a, b) => (b.fame || 0) - (a.fame || 0)).slice(0, 12);
+    if (heroes.length) {
+      for (const a of heroes) {
+        lines.push(`### ${a.name}${a.title ? ` "${a.title}"` : ''} (fame ${fmt(a.fame)})`);
+        lines.push(lifeSummary(a));
+        lines.push('');
+      }
+    } else lines.push('_ยังไม่มีตัวละครที่โดดเด่นมากนัก_');
+    lines.push('## Timeline ฝ่าย');
+    lines.push('');
+    for (const f of world.factions) {
+      if (!f.timeline.length) continue;
+      lines.push(`### ${f.name}`);
+      for (const t of f.timeline.slice(-15)) lines.push(`- Day ${t.day}: ${t.text}`);
+      lines.push('');
+    }
+    lines.push('## ประวัติเมือง');
+    lines.push('');
+    for (const s of world.settlements.filter(x => x.type !== 'camp')) {
+      if (!s.history.length) continue;
+      lines.push(`### ${s.name} (${s.type})`);
+      for (const h of s.history.slice(-8)) lines.push(`- ${h}`);
+      lines.push('');
+    }
+    lines.push('## สงคราม');
+    lines.push('');
+    for (const w of world.wars) {
+      lines.push(`### ${w.name} (Day ${w.startDay}${w.endDay ? '–' + w.endDay : '+'})`);
+      if (w.summary) lines.push(w.summary);
+      else lines.push(w.cause || '—');
+      lines.push('');
+    }
+    lines.push('## Chronicle (เรียงตามวัน)');
+    lines.push('');
+    const sorted = world.chronicle.slice().sort((a, b) => a.day - b.day || a.id - b.id);
+    for (const c of sorted) {
+      lines.push(`### Day ${c.day} — ${c.title}`);
+      if (c.description) lines.push(c.description);
+      lines.push('');
+    }
+    return lines.join('\n');
+  },
+
+  exportChronicleMD() {
+    if (!world) return;
+    const md = this.buildChronicleMarkdown();
+    this.downloadText(`living-kingdom-chronicle-day-${world.day}.md`, md, 'text/markdown;charset=utf-8');
+    EventSystem.add('system', `📜 Export Chronicle Day ${world.day}`);
+  },
+
+  buildSummaryText() {
+    if (!world) return '';
+    const alive = world.agents.filter(a => a.alive);
+    const mkts = marketSettlements();
+    const liveFactions = world.factions.filter(fc => world.settlements.some(s => s.factionId === fc.id));
+    const strongest = liveFactions.reduce((m, fc) => {
+      const power = world.settlements.filter(s => s.factionId === fc.id).length * 100
+        + alive.filter(a => a.factionId === fc.id && MILITARY_PROFS.has(a.profession)).length * 10
+        + fc.treasury * 0.1;
+      return power > m.power ? { f: fc, power } : m;
+    }, { f: null, power: -1 }).f;
+    const richest = mkts.reduce((m, s) => s.treasury > m.treasury ? s : m, mkts[0]);
+    const famous = alive.filter(a => a.fame > 0).sort((a, b) => b.fame - a.fame)[0];
+    const activeWars = world.wars.filter(w => !w.endDay);
+    let txt = `สรุปโลก "${world.worldName}" ณ Day ${world.day}\n`;
+    txt += `ประชากร ${alive.length} ชีวิต | ${world.settlements.length} ถิ่นฐาน | ${liveFactions.length} ฝ่าย\n`;
+    txt += `ศึก ${world.stats.battles} | ปล้น ${world.stats.raids + world.stats.caravansRobbed} | ตาย ${world.stats.deaths}\n`;
+    if (strongest) {
+      const ruler = getAgent(strongest.rulerId);
+      txt += `มหาอำนาจ: ${strongest.name}${ruler ? ` (${ruler.name})` : ''}\n`;
+    }
+    if (richest) txt += `เมืองมั่งคั่ง: ${richest.name} (${fmt(richest.treasury)} ทอง)\n`;
+    if (famous) txt += `บุคคลแห่งยุค: ${famous.name} (fame ${fmt(famous.fame)}) — ${lifeSummary(famous)}\n`;
+    if (activeWars.length) txt += `สงครามดำเนินอยู่: ${activeWars.map(w => w.name).join(', ')}\n`;
+    if (world.eras.length) txt += `ยุคล่าสุด: ${world.eras[world.eras.length - 1].text}\n`;
+    return txt.trim();
+  },
+
+  copySummary() {
+    if (!world) return;
+    const text = this.buildSummaryText();
+    const showFallback = () => {
+      const box = document.getElementById('copySummaryFallback');
+      const ta = document.getElementById('copySummaryText');
+      if (box && ta) { ta.value = text; box.classList.remove('hidden'); ta.select(); }
+      else alert(text);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        EventSystem.add('system', '📋 คัดลอกสรุปโลกไป clipboard แล้ว');
+      }).catch(showFallback);
+    } else showFallback();
+  },
+
+  validateCaravanSlots() {
+    const bad = [];
+    if (!world) return bad;
+    for (const s of world.settlements) {
+      if (s.townCaravanId) {
+        const ag = getAgent(s.townCaravanId);
+        if (!ag || !ag.alive || !ag.isTownCaravan || (!ag.cargo && !ag.travel)) bad.push(s.townCaravanId);
+      }
+    }
+    return bad;
+  }
+};
+
+function buildWorldSummaryText() { return SaveSystem.buildSummaryText(); }
+
 /* ═══════════════════ 18. INIT ═══════════════════ */
 
-generateWorld();
-Renderer.init();
-UI.init();
-requestAnimationFrame(t => UI.loop(t));
+function bootGame() {
+  Renderer.init();
+  UI.init();
+  SaveSystem.init();
+  if (SaveSystem.hasSave()) {
+    SaveSystem.showContinueOverlay();
+  } else {
+    generateWorld();
+    SaveSystem.updateStatusUI();
+  }
+  requestAnimationFrame(t => UI.loop(t));
+}
+
+bootGame();

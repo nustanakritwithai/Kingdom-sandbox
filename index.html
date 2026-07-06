@@ -15,10 +15,12 @@
     <span class="logo">⬢</span>
     <span>Living Kingdom Sandbox</span>
     <span id="dayCounter" class="day-counter">Day 0</span>
-    <span class="version-badge" title="Phase 10.6 — Logistics Cleanup">v10.6</span>
+    <span class="version-badge" title="Phase 13 — Save / Load / Export">v13</span>
   </div>
 
   <div class="tb-group">
+    <button id="btnSavePanel" class="tb-btn accent" title="บันทึก / โหลดโลก">💾 Save</button>
+    <span id="saveStatus" class="save-status">No save</span>
     <button id="btnPause" class="tb-btn" title="หยุด/เล่นต่อ">⏸ Pause</button>
     <button id="btnStep"  class="tb-btn" title="เดินหน้า 1 วัน">⏭ +1 วัน</button>
     <button class="tb-btn speed-btn active" data-speed="1">x1</button>
@@ -50,6 +52,41 @@
 <main id="main">
   <div id="mapWrap">
     <canvas id="mapCanvas"></canvas>
+
+    <!-- Save / Load panel (Phase 13) -->
+    <div id="savePanel" class="hidden">
+      <div class="chron-header">
+        <h3>💾 บันทึก / โหลดโลก</h3>
+        <button id="savePanelClose" class="tb-btn">✕</button>
+      </div>
+      <div class="save-panel-body">
+        <button id="btnContinueWorld" class="save-btn primary hidden">▶ Continue World</button>
+        <button id="btnSaveWorld" class="save-btn">💾 Save World</button>
+        <button id="btnLoadWorld" class="save-btn">📂 Load World</button>
+        <button id="btnExportSave" class="save-btn">📤 Export Save (.json)</button>
+        <label class="save-btn file-label">📥 Import Save (.json)
+          <input type="file" id="importSaveInput" accept=".json,application/json" hidden>
+        </label>
+        <button id="btnExportChronicle" class="save-btn">📜 Export Chronicle (.md)</button>
+        <button id="btnCopySummary" class="save-btn">📋 Copy Summary</button>
+        <div id="copySummaryFallback" class="hidden">
+          <p class="hint">คัดลอกข้อความด้านล่าง:</p>
+          <textarea id="copySummaryText" rows="6" readonly></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Continue overlay on boot (Phase 13) -->
+    <div id="continueOverlay" class="hidden">
+      <div class="continue-card">
+        <h3>Living Kingdom Sandbox</h3>
+        <p id="continueOverlayText">พบการบันทึก</p>
+        <div class="continue-actions">
+          <button id="btnContinueOverlay" class="save-btn primary">▶ Continue World</button>
+          <button id="btnNewWorldOverlay" class="save-btn">↺ New World</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Sandbox tools floating panel -->
     <div id="toolPanel" class="hidden">

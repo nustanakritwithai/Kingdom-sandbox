@@ -69,6 +69,100 @@ body { display: flex; flex-direction: column; }
   letter-spacing: 0.03em;
 }
 
+.save-status {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.save-status.saved { color: var(--good); border-color: rgba(93, 187, 99, 0.4); }
+.save-status.auto { color: #80deea; border-color: rgba(128, 222, 234, 0.4); }
+.save-status.loaded { color: var(--accent); border-color: rgba(255, 213, 79, 0.45); }
+
+#savePanel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 280px;
+  max-width: calc(100% - 20px);
+  background: rgba(22, 28, 37, .97);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 22;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
+}
+#savePanel.hidden { display: none; }
+
+.save-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+
+.save-btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.save-btn:hover { border-color: var(--accent); color: var(--accent); }
+.save-btn.primary {
+  background: rgba(255, 213, 79, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.save-btn.hidden { display: none; }
+.file-label { display: block; cursor: pointer; }
+
+#copySummaryFallback textarea {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 6px;
+  resize: vertical;
+}
+
+#continueOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 18, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+#continueOverlay.hidden { display: none; }
+
+.continue-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 28px;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
+}
+.continue-card h3 { color: var(--accent); margin-bottom: 10px; }
+.continue-card p { color: var(--muted); margin-bottom: 16px; font-size: 13px; }
+.continue-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.continue-actions .save-btn { min-width: 140px; text-align: center; }
+
 .tb-btn {
   background: var(--panel-2);
   color: var(--text);
