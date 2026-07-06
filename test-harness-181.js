@@ -1,4 +1,4 @@
-/* Phase 18.1 headless test — run: node test-harness-181.js */
+/* Phase 18.2 headless test — run: node test-harness-181.js */
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
@@ -69,7 +69,7 @@ let failed = false;
 function ok(m) { console.log('OK:', m); }
 function fail(m) { console.log('FAIL:', m); failed = true; }
 
-console.log('=== Phase 18.1 Text Combat Core Tests ===\n');
+console.log('=== Phase 18.2 Text Combat Core Tests ===\n');
 
 genWorld(181);
 const t0 = Date.now();
@@ -242,10 +242,10 @@ const brOk = run(`
 if (brOk) ok('battleReport created in large battle');
 else fail('no battleReport from phased battle');
 
-// 10. save/load schema 18.1
+// 10. save/load schema 18.2
 const payload = run(`SaveSystem.buildSavePayload('test')`);
-if (payload.schemaVersion === '18.1') ok('save schema 18.1');
-else fail('schema not 18.1: ' + payload.schemaVersion);
+if (payload.schemaVersion === '18.2') ok('save schema 18.2');
+else fail('schema not 18.2: ' + payload.schemaVersion);
 
 run(`SaveSystem.saveToLocalStorage('test', true)`);
 const agentId = run(`world.agents.find(a => a.alive).id`);

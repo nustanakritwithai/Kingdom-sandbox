@@ -138,8 +138,8 @@ if (summary && summary.length > 20) ok('lifeSummary uses expanded memory');
 else fail('lifeSummary too short');
 
 const payload = run(`SaveSystem.buildSavePayload('test')`);
-if (payload.schemaVersion !== '18.1') fail('schema should be 18.1');
-else ok('save schema 18.1');
+if (payload.schemaVersion !== '18.2') fail('schema should be 18.2');
+else ok('save schema 18.2');
 const relCount = Object.keys(w.agents[0].relationships || {}).length;
 run(`SaveSystem.loadFromPayload(${JSON.stringify(payload)})`);
 const w2 = getWorld();
