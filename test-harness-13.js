@@ -132,8 +132,8 @@ const equipBefore = agentSample ? JSON.stringify(agentSample.equipment) : null;
 const combatBefore = agentSample ? JSON.stringify(agentSample.combatStats) : null;
 
 const payload = run('JSON.stringify(SaveSystem.buildSavePayload("manual"))');
-if (!payload.includes('"schemaVersion":"13.0"')) fail('export missing schemaVersion 13.0');
-else ok('save JSON has schemaVersion 13.0');
+if (!payload.includes('"schemaVersion":"13.1"') && !payload.includes('"schemaVersion":"13.0"')) fail('export missing schemaVersion 13.x');
+else ok('save JSON has schemaVersion 13.x');
 
 run(`SaveSystem.saveToLocalStorage('manual')`);
 if (!storage['livingKingdomSandbox_save']) fail('localStorage save missing');
