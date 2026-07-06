@@ -148,7 +148,7 @@ if (run('ObserverSystem.follow')) fail('invalid follow should clear');
 else ok('safe fallback when follow target missing after load');
 
 const payload = run(`SaveSystem.buildSavePayload('test')`);
-if (payload.schemaVersion !== '17.0') fail('schema should be 17.0');
+if (payload.schemaVersion !== '18.0') fail('schema should be 18.0');
 else ok('save schema 15.1 with observer prefs');
 if (!payload.uiPrefs.observer) fail('observer prefs missing in save');
 else ok('observer prefs in save payload');
