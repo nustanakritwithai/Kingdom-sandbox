@@ -1,9 +1,11 @@
 # Render Blueprint — deploy Living Kingdom Sandbox เป็น static site
 # ใช้กับ Render Dashboard: New + > Blueprint > เลือก repo นี้
+# สำคัญ: ต้อง deploy จาก branch `main` (มี Phase 10.x ล่าสุด)
 services:
   - type: web
     name: living-kingdom-sandbox
     runtime: static
+    branch: main
     buildCommand: ""
     staticPublishPath: .
     autoDeploy: true

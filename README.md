@@ -41,3 +41,10 @@ index.html   — โครงหน้า UI (toolbar / map / inspector / event 
 style.css    — ธีมและ layout
 script.js    — เอนจินจำลองทั้งหมด แบ่งเป็น 18 section (world gen, economy, AI, military, governance, renderer, UI)
 ```
+
+## Deploy บน Render
+
+- **Branch ที่ถูกต้อง:** `main` (ไม่ใช่ `cursor/living-kingdom-sandbox-*`)
+- ใน Render Dashboard → **Settings → Build & Deploy → Branch** เลือก `main` แล้วกด **Manual Deploy**
+- `render.yaml` กำหนด `branch: main` แล้ว — ถ้า Blueprint sync ไม่เปลี่ยน branch ให้แก้ใน Dashboard ด้วยมือ
+- ตรวจว่า deploy ถูก: หน้าเว็บควรมีปุ่ม **Chronicle**, badge **v10.6** ใน toolbar
