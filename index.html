@@ -15,12 +15,20 @@
     <span class="logo">⬢</span>
     <span>Living Kingdom Sandbox</span>
     <span id="dayCounter" class="day-counter">Day 0</span>
-    <span class="version-badge" title="Phase 18.3 Organizations & Warbands">v18.3</span>
+    <span class="version-badge" title="Phase 18.4 Detail Pages">v18.4</span>
   </div>
 
   <div class="tb-group tb-search">
     <input type="search" id="globalSearch" placeholder="🔍 ค้นหา agent / veteran / duelist / legendary weapon..." autocomplete="off">
     <div id="searchResults" class="search-results"></div>
+  </div>
+
+  <div class="tb-group tb-nav">
+    <button id="btnMap" class="tb-btn nav-btn active" title="แผนที่โลก">🗺 Map</button>
+    <button id="btnCharacters" class="tb-btn nav-btn" title="ตัวละคร">👤 Characters</button>
+    <button id="btnOrganizationsPage" class="tb-btn nav-btn" title="องค์กรและ Warband">👥 Organizations</button>
+    <button id="btnCombat" class="tb-btn nav-btn" title="ศึกและการต่อสู้">⚔ Combat</button>
+    <button id="btnChroniclePage" class="tb-btn nav-btn" title="ตำนานแห่งแผ่นดิน">📖 Chronicle</button>
   </div>
 
   <div class="tb-group">
@@ -50,8 +58,8 @@
     <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
     <button id="btnMarket" class="tb-btn accent">🏦 Market</button>
     <button id="btnObserver" class="tb-btn accent">🧭 Observer</button>
-    <button id="btnOrganizations" class="tb-btn accent" title="Organizations & Warbands">👥 Orgs</button>
-    <button id="btnChronicle" class="tb-btn accent">📖 Chronicle</button>
+    <button id="btnOrganizations" class="tb-btn accent" title="Observer: Organizations">👥 Orgs</button>
+    <button id="btnChronicle" class="tb-btn accent" title="Chronicle overlay">📖 Chronicle</button>
     <button id="btnDiplomacy" class="tb-btn accent">🌐 Diplomacy</button>
     <button id="btnWorldSummary" class="tb-btn">🌍 สรุปโลก</button>
   </div>
@@ -206,6 +214,12 @@
         <button class="tool-btn" data-tool="starveWarband">🍞 Starve Warband</button>
         <button class="tool-btn" data-tool="triggerMutinyCheck">💥 Trigger Mutiny</button>
         <button class="tool-btn" data-tool="createBanditWarbandFromDeserters">☠ Bandit Warband (deserters)</button>
+        <button class="tool-btn" data-tool="openRandomFamousCharacter">👤 Random Famous</button>
+        <button class="tool-btn" data-tool="openRandomWarband">⚔ Random Warband</button>
+        <button class="tool-btn" data-tool="openLatestBattleReport">📜 Latest Battle</button>
+        <button class="tool-btn" data-tool="openLargestOrganization">👥 Largest Org</button>
+        <button class="tool-btn" data-tool="generateTestBattleReport">🧪 Test Battle Report</button>
+        <button class="tool-btn" data-tool="rebuildUIIndexes">🔄 Rebuild UI Indexes</button>
       </div>
       <p class="tool-note">เครื่องมือที่ต้องคลิกเป้าหมาย: เลือกเครื่องมือแล้วคลิกบนแผนที่ (คลิกขวาเพื่อยกเลิก)</p>
     </div>
@@ -285,6 +299,9 @@
       <div><span class="lg-dot" style="background:#eceff1"></span> ว่างงาน/อพยพ</div>
     </div>
   </div>
+
+  <!-- Phase 18.4: Detail page views -->
+  <div id="pageContainer" class="page-container hidden" aria-label="Detail pages"></div>
 
   <!-- ══════════════ INSPECTOR PANEL ══════════════ -->
   <aside id="inspector">

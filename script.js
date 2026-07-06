@@ -8934,6 +8934,7 @@ function simulateDay() {
 
   UI.inspectorDirty = true;
   UI.dashboardDirty = true;
+  if (world.day % 10 === 0 && typeof UIIndexes !== 'undefined') UIIndexes.markDirty();
   if (typeof SaveSystem !== 'undefined') SaveSystem.tickAutoSave();
 }
 
@@ -9410,8 +9411,10 @@ const ObserverSystem = {
   showToast(title, body) {
     const el = document.getElementById('observerToast');
     if (!el) return;
-    el.querySelector('.toast-title').textContent = title;
-    el.querySelector('.toast-body').textContent = body || '';
+    const t = el.querySelector('.toast-title');
+    const b = el.querySelector('.toast-body');
+    if (t) t.textContent = title;
+    if (b) b.textContent = body || '';
     el.classList.remove('hidden');
     clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => el.classList.add('hidden'), 4500);
@@ -10270,12 +10273,729 @@ const Renderer = {
   }
 };
 
+/* ═══════════ Phase 18.4: Detail Pages / Readability UI ═══════════ */
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+const FORMATION_INFO = {
+  shield_wall: { label: 'กำแพงโล่', strengths: 'ต้านธนู/หอก', weaknesses: 'ม้า/เว้นระยะ', terrain: 'road/hill', counters: 'archers' },
+  spear_line: { label: 'แนวหอก', strengths: 'ต้านม้า', weaknesses: 'ธนู/เว้นระยะ', terrain: 'plain', counters: 'cavalry' },
+  skirmish: { label: 'ซุ่มยิง', strengths: 'ยืดหยุ่น', weaknesses: 'ชาร์จตรง', terrain: 'forest', counters: 'shield_wall' },
+  charge: { label: 'ชาร์จม้า', strengths: 'ทะลวงแนว', weaknesses: 'หอก/พื้นแคบ', terrain: 'plain', counters: 'spear_line' },
+  reserve: { label: 'กองหนุน', strengths: 'เสริมจังหวะ', weaknesses: 'มาช้า', terrain: 'any', counters: 'rout' },
+  retreat: { label: 'ถอย', strengths: 'รักษากำลัง', weaknesses: 'ถูกไล่', terrain: 'road', counters: '—' },
+  rout: { label: 'แตก', strengths: '—', weaknesses: 'ทุกอย่าง', terrain: '—', counters: '—' },
+  loose: { label: 'กระจาย', strengths: 'ยืดหยุ่น', weaknesses: 'ไม่แข็งแรง', terrain: 'any', counters: '—' },
+  defensive: { label: 'ป้องกัน', strengths: 'คงแนว', weaknesses: 'เสียเปรียบเชิงรุก', terrain: 'hill/fort', counters: 'charge' },
+  advance: { label: 'เดินหน้า', strengths: 'กดดัน', weaknesses: 'เสียขวัญถ้าแพ้', terrain: 'plain', counters: '—' }
+};
+
+let uiIndexes = null;
+
+const UIIndexes = {
+  lastDay: -1,
+  markDirty() { this.lastDay = -1; UI.pageDirty = true; },
+  rebuild(force) {
+    if (!world) return null;
+    if (!force && uiIndexes && this.lastDay === world.day) return uiIndexes;
+    const alive = world.agents.filter(a => a.alive);
+    const dead = world.agents.filter(a => !a.alive);
+    const orgs = world.organizations || [];
+    const wbs = world.warbands || [];
+    const reports = world.battleReports || [];
+    const searchIndex = [];
+    const pushSearch = (type, id, text, score) => searchIndex.push({ type, id, text: (text || '').toLowerCase(), score: score || 0 });
+
+    for (const a of world.agents) {
+      const loc = getSettlement(a.locationId);
+      const mems = (a.memberships || []).filter(m => ['active', 'traveling_to_muster', 'probation'].includes(m.status));
+      const orgNames = mems.map(m => getOrganization(m.organizationId)?.name).filter(Boolean).join(' ');
+      const txt = [a.name, a.profession, a.rank, a.title, a.career?.map(c => c.profession).join(' '), orgNames, loc?.name].join(' ');
+      pushSearch('agent', a.id, txt, a.fame + (a.alive ? 10 : 0));
+    }
+    for (const o of orgs) pushSearch('organization', o.id, [o.name, o.type, o.purpose].join(' '), o.reputation || 0);
+    for (const wb of wbs) pushSearch('warband', wb.id, [wb.name, wb.type, wb.status].join(' '), warbandMembers(wb).length);
+    for (const br of reports) pushSearch('battle', br.id, [br.title, br.summaryText, br.location].join(' '), br.casualties || 0);
+
+    const agentsByFame = alive.slice().sort((a, b) => (b.fame || 0) - (a.fame || 0));
+    const agentsByCombat = alive.slice().sort((a, b) => ((b.duelRecord?.kills || 0) + (b.memory?.survivedBattles || 0)) - ((a.duelRecord?.kills || 0) + (a.memory?.survivedBattles || 0)));
+    const agentsByWealth = alive.slice().sort((a, b) => (b.stats?.wealth || 0) - (a.stats?.wealth || 0));
+    const agentsByConnections = alive.slice().sort((a, b) => Object.keys(b.relationships || {}).length - Object.keys(a.relationships || {}).length);
+
+    const orgMap = {};
+    for (const o of orgs) {
+      if (!orgMap[o.type]) orgMap[o.type] = [];
+      orgMap[o.type].push(o);
+    }
+
+    const wbByStatus = {};
+    for (const wb of wbs) {
+      const st = wb.status || 'idle';
+      if (!wbByStatus[st]) wbByStatus[st] = [];
+      wbByStatus[st].push(wb);
+    }
+
+    const battlesByDay = reports.slice().sort((a, b) => (b.day || 0) - (a.day || 0));
+    const battlesByImportance = reports.slice().sort((a, b) => (b.casualties || 0) - (a.casualties || 0));
+
+    const weaponsByFame = [];
+    for (const a of alive) {
+      for (const slot of ['mainHand', 'offHand']) {
+        const it = a.equipment?.[slot];
+        if (it && it.type) weaponsByFame.push({ item: it, ownerId: a.id, fame: (it.fame || 0) + (it.kills || 0) });
+      }
+    }
+    weaponsByFame.sort((a, b) => b.fame - a.fame);
+    for (const lw of (world.legendaryWeapons || [])) {
+      const owner = world.agents.find(a => a.equipment?.mainHand?.id === lw.itemId || a.equipment?.offHand?.id === lw.itemId);
+      weaponsByFame.push({ item: { id: lw.itemId, name: lw.name, fame: lw.fame, kills: lw.fame, legendary: true }, ownerId: owner?.id, fame: lw.fame + 50 });
+    }
+    weaponsByFame.sort((a, b) => b.fame - a.fame);
+
+    const injuriesActive = [];
+    for (const a of alive) {
+      for (const inj of (a.injuries || []).filter(i => !i.healed)) injuriesActive.push({ agentId: a.id, injury: inj });
+    }
+
+    const agentsByOrganization = {};
+    for (const o of orgs) agentsByOrganization[o.id] = o.memberIds.map(getAgent).filter(a => a && a.alive);
+
+    uiIndexes = {
+      agentsByFame, agentsByCombat, agentsByWealth, agentsByConnections, agentsByOrganization,
+      organizationsByType: orgMap, warbandsByStatus: wbByStatus,
+      battlesByDay, battlesByImportance, weaponsByFame, injuriesActive, searchIndex,
+      alive, dead, orgs, wbs, reports
+    };
+    this.lastDay = world.day;
+    return uiIndexes;
+  }
+};
+
+function generateAgentSummary(agent) {
+  if (!agent) return '—';
+  const parts = [];
+  const birth = agent.memory?.personal?.birthplaceId ? getSettlement(agent.memory.personal.birthplaceId) : null;
+  const loc = getSettlement(agent.locationId);
+  const startProf = agent.career?.[0]?.profession || agent.profession;
+  parts.push(`${agent.name}${birth ? ` เกิดที่${birth.name}` : ''} เริ่มชีวิตเป็น${startProf}`);
+  const trauma = (agent.memory?.personal?.trauma || [])[0];
+  if (trauma) parts.push(`เหตุการณ์สำคัญ: ${trauma.text || trauma.kind || 'บาดแผลในใจ'}`);
+  const mem = (agent.memberships || []).find(m => ['active', 'traveling_to_muster'].includes(m.status));
+  if (mem) {
+    const org = getOrganization(mem.organizationId);
+    if (mem.status === 'traveling_to_muster') parts.push(`กำลังเดินทางไปรวมพลกับ${org?.name || 'องค์กร'}`);
+    else parts.push(`อยู่ใน${org?.name || 'องค์กร'} ในฐานะ${mem.role || mem.rank || 'สมาชิก'}`);
+  }
+  const wb = (world.warbands || []).find(w => w.memberIds?.includes(agent.id));
+  if (wb) parts.push(`อยู่ใน warband ${wb.name}${wb.travel ? ' กำลังเดินทาง' : ''}`);
+  const wounds = (agent.injuries || []).filter(i => !i.healed).length;
+  if (wounds) parts.push(`มีบาดแผล ${wounds} แห่ง`);
+  if (agent.fame >= 5) parts.push(`มีชื่อเสียงระดับ ${fmt(agent.fame)}`);
+  parts.push(`ปัจจุบันอยู่ที่${loc?.name || 'ระหว่างเดินทาง'} — ${agent.currentThought || agent.currentGoal || 'ดำเนินชีวิต'}`);
+  return parts.join(' ') + '.';
+}
+
+function generateOrganizationSummary(org) {
+  if (!org) return '—';
+  const leader = getAgent(org.leaderId);
+  const home = getSettlement(org.homeSettlementId);
+  const active = (org.memberIds || []).map(getAgent).filter(a => a && a.alive).length;
+  const wbs = (world.warbands || []).filter(w => w.organizationId === org.id && warbandMembers(w).length > 0);
+  const unpaid = (org.memberIds || []).map(getAgent).filter(a => {
+    const m = (a?.memberships || []).find(x => x.organizationId === org.id);
+    return m && world.day - (m.lastPaidDay || 0) > 7;
+  }).length;
+  let s = `${org.name} (${org.type}) มีสมาชิกจริง ${active} คน`;
+  if (leader) s += ` นำโดย ${leader.name}`;
+  if (home) s += ` ฐานที่${home.name}`;
+  s += ` ชื่อเสียง ${fmt(org.reputation || 0)} คลังอาหาร ${fmt(org.foodReserve || 0)}`;
+  if (unpaid > 2) s += ` มีความเสี่ยงค่าจ้างค้าง ${unpaid} คน`;
+  if (wbs.length) s += ` มี warband ปฏิบัติการ ${wbs.length} กอง`;
+  return s + '.';
+}
+
+function generateWarbandSummary(wb) {
+  if (!wb) return '—';
+  const n = warbandMembers(wb).length;
+  const from = getSettlement(wb.locationId);
+  const dest = wb.destinationId ? getSettlement(wb.destinationId) : (wb.travel?.path?.length ? getSettlement(wb.travel.path[wb.travel.path.length - 1]) : null);
+  const supply = wb.supplyDays != null ? wb.supplyDays : (n ? Math.floor((wb.food || 0) / Math.max(n * 0.8, 1)) : 0);
+  let s = `${wb.name} มีสมาชิกจริง ${n} คน สถานะ ${wb.status || 'idle'}`;
+  if (from && dest && from.id !== dest.id) s += ` กำลังเดินทางจาก${from.name}ไป${dest.name}`;
+  else if (from) s += ` อยู่ที่${from.name}`;
+  s += ` เสบียงเหลือประมาณ ${supply} วัน morale ${fmt(wb.morale || 50)}`;
+  if ((wb.morale || 50) < 40) s += ' ขวัญต่ำ';
+  if (supply < 3) s += ' เสี่ยงอดอาหาร';
+  return s + '.';
+}
+
+function generateBattleSummary(br) {
+  if (!br) return '—';
+  if (br.chronicleText) return br.chronicleText;
+  if (br.summaryText) return br.summaryText;
+  const loc = br.location || (br.locationId ? getSettlement(br.locationId)?.name : 'สนามรบ');
+  return `ศึก${br.title || loc} วันที่ ${br.day} เสียชีวิต ${br.casualties || 0} — ฝ่าย${br.winner === 'attacker' ? 'บุก' : 'รับ'}ได้ชัย`;
+}
+
+function generateWeaponSummary(item) {
+  if (!item) return '—';
+  return `${item.name || item.type || 'อาวุธ'} คุณภาพ ${item.quality || 'common'} สังหาร ${item.kills || 0} fame ${fmt(item.fame || 0)}${item.legendary ? ' (ตำนาน)' : ''}`;
+}
+
+function generateFormationSummary(formation) {
+  const f = FORMATION_INFO[formation] || { label: formation, strengths: '—', weaknesses: '—', terrain: '—', counters: '—' };
+  return `แนว${f.label}: จุดแข็ง ${f.strengths} จุดอ่อน ${f.weaknesses} เหมาะ ${f.terrain}`;
+}
+
+function getEntityDisplayName(type, id) {
+  if (type === 'agent') return getAgent(id)?.name || `Agent #${id}`;
+  if (type === 'organization') return getOrganization(id)?.name || `Org #${id}`;
+  if (type === 'warband') return getWarband(id)?.name || `Warband #${id}`;
+  if (type === 'unit') return getUnit(id)?.name || `Unit #${id}`;
+  if (type === 'army') return getArmy(id)?.name || `Army #${id}`;
+  if (type === 'settlement') return getSettlement(id)?.name || `Settlement #${id}`;
+  if (type === 'battle') return (world.battleReports || []).find(b => b.id === id)?.title || `Battle #${id}`;
+  if (type === 'recruitmentOffer') return `Offer #${id}`;
+  if (type === 'musterPoint') return `Muster #${id}`;
+  return `${type} #${id}`;
+}
+
+function openEntityDetail(type, id, opts) {
+  opts = opts || {};
+  if (type === 'battle') {
+    PageViewSystem.prefs.combat.selectedId = id;
+    PageViewSystem.prefs.combat.tab = 'battles';
+    UI.setView('combat');
+  } else if (type === 'agent') {
+    PageViewSystem.prefs.characters.selectedId = id;
+    UI.setView(opts.view || 'characters');
+  } else if (type === 'organization' || type === 'warband' || type === 'recruitmentOffer' || type === 'musterPoint' || type === 'army') {
+    PageViewSystem.prefs.organizations.selectedId = type === 'warband' ? 'wb:' + id : id;
+    if (type === 'warband') PageViewSystem.prefs.organizations.tab = 'warbands';
+    else PageViewSystem.prefs.organizations.tab = 'organizations';
+    UI.setView('organizations');
+  } else if (type === 'settlement' || type === 'route') {
+    UI.setView('map');
+    UI.selected = { kind: type, id };
+    UI.inspectorDirty = true;
+    if (!opts.noCenter) centerEntityOnMap(type, id);
+    return;
+  } else if (type === 'weapon' || type === 'unit') {
+    PageViewSystem.prefs.combat.tab = type === 'weapon' ? 'weapons' : 'battles';
+    UI.setView('combat');
+  } else {
+    UI.setView('map');
+    UI.selected = { kind: type, id };
+    UI.inspectorDirty = true;
+  }
+  if (!opts.noCenter && type !== 'battle' && type !== 'weapon') centerEntityOnMap(type, id);
+}
+
+function centerEntityOnMap(type, id) {
+  if (type === 'battle') {
+    const br = (world.battleReports || []).find(b => b.id === id);
+    if (br?.locationId && typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.centerOn('settlement', br.locationId);
+      return;
+    }
+  }
+  if (typeof ObserverSystem !== 'undefined') ObserverSystem.centerOn(type, id);
+}
+
+function followEntity(type, id) {
+  if (typeof ObserverSystem !== 'undefined') ObserverSystem.startFollow(type, id);
+}
+
+const PageViewSystem = {
+  LIST_LIMIT: 50,
+  prefs: {
+    characters: { filter: 'all', search: '', selectedId: null, listPage: 0 },
+    organizations: { tab: 'organizations', filter: 'all', search: '', selectedId: null, listPage: 0 },
+    combat: { tab: 'battles', filter: 'recent', search: '', selectedId: null, listPage: 0 },
+    chronicle: { filter: 'all', search: '', selectedId: null },
+    world: {}
+  },
+
+  init() {
+    const bind = (id, view) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', () => UI.setView(view));
+    };
+    bind('btnMap', 'map');
+    bind('btnCharacters', 'characters');
+    bind('btnOrganizationsPage', 'organizations');
+    bind('btnCombat', 'combat');
+    bind('btnChroniclePage', 'chronicle');
+    const wc = document.getElementById('btnWorldSummary');
+    if (wc) wc.addEventListener('click', () => UI.setView('world'));
+  },
+
+  defaultPrefs() {
+    return JSON.parse(JSON.stringify(this.prefs));
+  },
+
+  applyPrefs(p) {
+    if (!p) return;
+    this.prefs = Object.assign(this.defaultPrefs(), p);
+  },
+
+  getPrefs() {
+    return JSON.parse(JSON.stringify(this.prefs));
+  },
+
+  isMobile() {
+    return window.innerWidth < 768;
+  },
+
+  linkChip(type, id, label) {
+    if (id == null) return escHtml(label || '—');
+    return `<button type="button" class="link-chip" data-open-type="${type}" data-open-id="${id}">${escHtml(label || getEntityDisplayName(type, id))}</button>`;
+  },
+
+  section(title, body, collapsed) {
+    return `<div class="detail-section${collapsed ? ' collapsed' : ''}"><h4 class="ds-toggle">${escHtml(title)}</h4><div class="ds-body">${body}</div></div>`;
+  },
+
+  wirePage(root) {
+    if (!root) return;
+    for (const btn of root.querySelectorAll('[data-open-type]')) {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        openEntityDetail(btn.dataset.openType, isNaN(+btn.dataset.openId) ? btn.dataset.openId : +btn.dataset.openId);
+      });
+    }
+    for (const card of root.querySelectorAll('.entity-card')) {
+      card.addEventListener('click', () => {
+        const view = UI.currentView;
+        const id = card.dataset.id;
+        const kind = card.dataset.kind;
+        if (view === 'characters') this.prefs.characters.selectedId = +id;
+        else if (view === 'organizations') this.prefs.organizations.selectedId = kind === 'warband' ? 'wb:' + id : +id;
+        else if (view === 'combat') this.prefs.combat.selectedId = id;
+        else if (view === 'chronicle') this.prefs.chronicle.selectedId = +id;
+        UI.pageDirty = true;
+        PageViewSystem.renderCurrent();
+      });
+    }
+    for (const fl of root.querySelectorAll('.page-filter')) {
+      fl.addEventListener('click', () => {
+        const view = UI.currentView;
+        const f = fl.dataset.filter;
+        if (view === 'characters') this.prefs.characters.filter = f;
+        else if (view === 'organizations') this.prefs.organizations.filter = f;
+        else if (view === 'combat') this.prefs.combat.filter = f;
+        else if (view === 'chronicle') this.prefs.chronicle.filter = f;
+        UI.pageDirty = true;
+        PageViewSystem.renderCurrent();
+      });
+    }
+    for (const tab of root.querySelectorAll('.page-tab')) {
+      tab.addEventListener('click', () => {
+        const view = UI.currentView;
+        const t = tab.dataset.tab;
+        if (view === 'organizations') this.prefs.organizations.tab = t;
+        else if (view === 'combat') this.prefs.combat.tab = t;
+        UI.pageDirty = true;
+        PageViewSystem.renderCurrent();
+      });
+    }
+    const search = root.querySelector('.page-search');
+    if (search) {
+      search.addEventListener('input', () => {
+        const view = UI.currentView;
+        const q = search.value;
+        if (view === 'characters') this.prefs.characters.search = q;
+        else if (view === 'organizations') this.prefs.organizations.search = q;
+        else if (view === 'combat') this.prefs.combat.search = q;
+        else if (view === 'chronicle') this.prefs.chronicle.search = q;
+        UI.pageDirty = true;
+        PageViewSystem.renderCurrent();
+      });
+    }
+    for (const btn of root.querySelectorAll('[data-page-action]')) {
+      btn.addEventListener('click', () => {
+        const act = btn.dataset.pageAction;
+        const type = btn.dataset.entityType;
+        const id = +btn.dataset.entityId;
+        if (act === 'center') { UI.setView('map'); centerEntityOnMap(type, id); UI.selected = { kind: type, id }; UI.inspectorDirty = true; }
+        else if (act === 'follow') { UI.setView('map'); followEntity(type, id); UI.selected = { kind: type, id }; UI.inspectorDirty = true; }
+        else if (act === 'map') UI.setView('map');
+      });
+    }
+    for (const sm of root.querySelectorAll('.show-more-btn')) {
+      sm.addEventListener('click', () => {
+        const view = UI.currentView;
+        if (view === 'characters') this.prefs.characters.listPage++;
+        else if (view === 'organizations') this.prefs.organizations.listPage++;
+        else if (view === 'combat') this.prefs.combat.listPage++;
+        UI.pageDirty = true;
+        PageViewSystem.renderCurrent();
+      });
+    }
+    for (const tg of root.querySelectorAll('.ds-toggle')) {
+      tg.addEventListener('click', () => tg.parentElement.classList.toggle('collapsed'));
+    }
+  },
+
+  renderCurrent() {
+    const el = document.getElementById('pageContainer');
+    if (!el || UI.currentView === 'map') return;
+    UIIndexes.rebuild();
+    const mobile = this.isMobile();
+    let html = '';
+    if (UI.currentView === 'characters') html = this.renderCharactersPage(mobile);
+    else if (UI.currentView === 'organizations') html = this.renderOrganizationsPage(mobile);
+    else if (UI.currentView === 'combat') html = this.renderCombatPage(mobile);
+    else if (UI.currentView === 'chronicle') html = this.renderChroniclePage(mobile);
+    else if (UI.currentView === 'world') html = this.renderWorldPage(mobile);
+    el.innerHTML = html;
+    this.wirePage(el);
+    UI.pageDirty = false;
+  },
+
+  pageShell(title, filters, tabs, listHtml, detailHtml, searchVal) {
+    return `<div class="page-view">
+      <div class="page-header">
+        <button type="button" class="page-back-btn" data-page-action="map">← กลับแผนที่</button>
+        <h2>${escHtml(title)}</h2>
+        <input class="page-search" type="search" placeholder="ค้นหา..." value="${escHtml(searchVal || '')}">
+      </div>
+      ${tabs || ''}
+      ${filters ? `<div class="page-filters">${filters}</div>` : ''}
+      <div class="page-body${this.isMobile() ? ' mobile-stack' : ''}">
+        <div class="entity-list">${listHtml}</div>
+        <div class="detail-panel">${detailHtml || '<p class="hint">เลือกรายการเพื่อดูรายละเอียด</p>'}</div>
+      </div>
+    </div>`;
+  },
+
+  filterAgents() {
+    const idx = UIIndexes.rebuild();
+    const p = this.prefs.characters;
+    const q = (p.search || '').toLowerCase();
+    let list = idx.alive.slice();
+    const f = p.filter;
+    if (f === 'famous') list = list.filter(a => a.fame >= 8);
+    else if (f === 'dead') list = idx.dead.slice();
+    else if (f === 'warriors') list = list.filter(a => MILITARY_PROFS.has(a.profession));
+    else if (f === 'traders') list = list.filter(a => a.profession === 'trader' || a.guildId);
+    else if (f === 'leaders') list = list.filter(a => (a.skills?.leadership || 0) >= 3 || a.rank === 'officer');
+    else if (f === 'wounded') list = list.filter(a => (a.injuries || []).some(i => !i.healed));
+    else if (f === 'veterans') list = list.filter(a => (a.memory?.survivedBattles || 0) >= 2);
+    else if (f === 'duelists') list = list.filter(a => (a.duelRecord?.wins || 0) > 0);
+    else if (f === 'guild') list = list.filter(a => a.guildId || (a.memberships || []).some(m => getOrganization(m.organizationId)?.type === 'merchant_guild'));
+    else if (f === 'warband') list = list.filter(a => (world.warbands || []).some(w => w.memberIds?.includes(a.id)));
+    else if (f === 'muster') list = list.filter(a => (a.memberships || []).some(m => m.status === 'traveling_to_muster'));
+    else if (f === 'refugee') list = list.filter(a => !a.homeId || a.profession === 'unemployed' || a.profession === 'migrant');
+    else if (f === 'ambition') list = list.filter(a => (a.traits?.ambition || 0) > 0.7);
+    else if (f === 'revenge') list = list.filter(a => Object.values(a.relationships || {}).some(r => r < -30));
+    else if (f === 'loyal') list = list.filter(a => (a.traits?.loyalty || 0) > 0.75);
+    else if (f === 'richest') list = idx.agentsByWealth.slice();
+    else if (f === 'connected') list = idx.agentsByConnections.slice();
+    else if (f === 'scarred') list = list.filter(a => (a.injuries || []).some(i => i.permanent || i.type === 'scar'));
+    if (q) list = list.filter(a => (idx.searchIndex.find(s => s.type === 'agent' && s.id === a.id)?.text || '').includes(q) || a.name.toLowerCase().includes(q));
+    if (f === 'famous' || f === 'richest' || f === 'connected') list.sort((a, b) => (b.fame || 0) - (a.fame || 0));
+    else list.sort((a, b) => (b.fame || 0) - (a.fame || 0) || a.name.localeCompare(b.name));
+    return list;
+  },
+
+  agentCard(a) {
+    const loc = getSettlement(a.locationId);
+    const mem = (a.memberships || []).find(m => ['active', 'traveling_to_muster'].includes(m.status));
+    const org = mem ? getOrganization(mem.organizationId) : null;
+    const danger = a.travel || (a.injuries || []).some(i => !i.healed) || mem?.status === 'traveling_to_muster';
+    const sub = [a.profession, loc?.name, org?.name].filter(Boolean).join(' · ');
+    return `<button type="button" class="entity-card${this.prefs.characters.selectedId === a.id ? ' active' : ''}" data-kind="agent" data-id="${a.id}">
+      <div class="ec-title">${danger ? '⚠ ' : ''}${escHtml(a.name)}${a.title ? ` <span class="stat-chip">${escHtml(a.title)}</span>` : ''}</div>
+      <div class="ec-sub">${escHtml(sub)} · HP ${fmt(a.stats?.health || 0)} · ⭐ ${fmt(a.fame || 0)}</div>
+      <div class="ec-sub">💭 ${escHtml((a.currentThought || '').slice(0, 60))}</div>
+    </button>`;
+  },
+
+  renderCharacterDetail(a) {
+    if (!a) return '<p class="hint">ไม่พบตัวละคร</p>';
+    const loc = getSettlement(a.locationId);
+    const home = a.homeId ? getSettlement(a.homeId) : null;
+    const birth = a.memory?.personal?.birthplaceId ? getSettlement(a.memory.personal.birthplaceId) : null;
+    const f = getFaction(a.factionId);
+    let html = `<div class="page-summary">${escHtml(generateAgentSummary(a))}</div>`;
+    html += `<div class="page-actions">
+      <button class="page-action-btn" data-page-action="center" data-entity-type="agent" data-entity-id="${a.id}">📍 Center on Map</button>
+      <button class="page-action-btn" data-page-action="follow" data-entity-type="agent" data-entity-id="${a.id}">👁 Follow</button>
+    </div>`;
+    html += this.section('A. ตัวตน', [
+      UI.kv('ชื่อ', a.name), UI.kv('อายุ', a.age), UI.kv('เกิดที่', birth ? this.linkChip('settlement', birth.id, birth.name) : '—'),
+      UI.kv('ที่อยู่', loc ? this.linkChip('settlement', loc.id, loc.name) : 'ระหว่างเดินทาง'),
+      UI.kv('บ้าน', home ? this.linkChip('settlement', home.id, home.name) : '—'),
+      UI.kv('ฝ่าย', f ? this.linkChip('faction', f.id, f.name) : '—'),
+      UI.kv('ความคิด', `"${escHtml(a.currentThought)}"`), UI.kv('เป้าหมาย', a.currentGoal)
+    ].join(''));
+    html += this.section('B. อาชีพ', [
+      UI.kv('อาชีพ', a.profession), UI.kv('ยศ', a.rank), UI.kv('เส้นทาง', (a.career || []).map(c => `D${c.day}:${c.profession}`).join(' → ')),
+      UI.kv('รายได้', fmt(a.stats?.wealth || 0))
+    ].join(''));
+    const memRows = (a.memberships || []).map(m => {
+      const org = getOrganization(m.organizationId);
+      return `<div>${org ? this.linkChip('organization', org.id, org.name) : '?'} — ${m.role || m.rank} · ${m.status} · ภักดี ${fmt(m.loyalty || 0)}</div>`;
+    }).join('') || '<span class="hint">ไม่มีสมาชิกภาพ</span>';
+    html += this.section('C. สมาชิกภาพ', memRows);
+    const body = a.body || {};
+    const eq = a.equipment || {};
+    html += this.section('D. ร่างกาย & การต่อสู้', [
+      UI.kv('ร่าง', `${body.build || '—'} / สูง ${body.height || '—'}`),
+      UI.kv('อาวุธ', eq.mainHand ? `${eq.mainHand.type} (${eq.mainHand.quality || 'common'})` : '—'),
+      UI.kv('เกราะ', eq.armor?.type || eq.chest?.type || '—'),
+      UI.kv('บาดแผล', (a.injuries || []).filter(i => !i.healed).map(i => i.type || i.part).join(', ') || 'ไม่มี'),
+      UI.kv('ดวล', `ชนะ ${a.duelRecord?.wins || 0} / แพ้ ${a.duelRecord?.losses || 0} / สังหาร ${a.duelRecord?.kills || 0}`),
+      UI.kv('รอดศึก', a.memory?.survivedBattles || 0)
+    ].join(''));
+    const battles = (world.battleReports || []).filter(br => br.commanders?.includes(a.id) || br.notableAgents?.some(n => n.id === a.id)).slice(-5);
+    html += this.section('E. ประวัติศึก', battles.length ? battles.map(br => this.linkChip('battle', br.id, `D${br.day} ${br.title || br.location || 'ศึก'}`)).join(' ') : '<span class="hint">ยังไม่มี</span>');
+    const pers = a.memory?.personal;
+    html += this.section('F. ความทรงจำ', [
+      pers?.turningPoints?.length ? `<div>จุดเปลี่ยน: ${pers.turningPoints.slice(-3).map(t => escHtml(t.text || t.kind)).join('; ')}</div>` : '',
+      pers?.trauma?.length ? `<div>บาดแผลใจ: ${pers.trauma.slice(-2).map(t => escHtml(t.text || t.kind)).join('; ')}</div>` : '',
+      pers?.grudges?.length ? `<div>แค้น: ${pers.grudges.slice(-2).map(g => escHtml(g.text || g.targetId)).join('; ')}</div>` : ''
+    ].filter(Boolean).join('') || '<span class="hint">—</span>');
+    const rels = Object.entries(a.relationships || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 8);
+    html += this.section('G. ความสัมพันธ์', rels.length ? rels.map(([oid, v]) => {
+      const o = getAgent(+oid);
+      return o ? `${this.linkChip('agent', o.id, o.name)} (${v > 0 ? '+' : ''}${fmt(v)})` : '';
+    }).join(' ') : '<span class="hint">—</span>');
+    return html;
+  },
+
+  renderCharactersPage(mobile) {
+    const p = this.prefs.characters;
+    const list = this.filterAgents();
+    const limit = this.LIST_LIMIT * (p.listPage + 1);
+    const slice = list.slice(0, limit);
+    if (!p.selectedId && slice[0]) p.selectedId = slice[0].id;
+    const sel = getAgent(p.selectedId) || (p.filter === 'dead' ? world.agents.find(a => a.id === p.selectedId) : null);
+    const filters = ['all', 'famous', 'alive', 'warriors', 'leaders', 'wounded', 'veterans', 'duelists', 'warband', 'muster', 'richest', 'scarred'].map(f =>
+      `<button type="button" class="page-filter${p.filter === f ? ' active' : ''}" data-filter="${f}">${f}</button>`).join('');
+    const listHtml = slice.map(a => this.agentCard(a)).join('') + (list.length > limit ? `<button type="button" class="show-more-btn">แสดงเพิ่ม (${list.length - limit})</button>` : '');
+    return this.pageShell('👤 Characters', filters, '', listHtml, this.renderCharacterDetail(sel), p.search);
+  },
+
+  orgCard(o) {
+    const leader = getAgent(o.leaderId);
+    const n = (o.memberIds || []).map(getAgent).filter(a => a && a.alive).length;
+    const risk = (o.foodReserve || 0) < n * 2 ? 'warn' : '';
+    return `<button type="button" class="entity-card${String(this.prefs.organizations.selectedId) === String(o.id) ? ' active' : ''}" data-kind="organization" data-id="${o.id}">
+      <div class="ec-title">${escHtml(o.name)} <span class="stat-chip">${escHtml(o.type)}</span></div>
+      <div class="ec-sub">${leader ? escHtml(leader.name) : '—'} · สมาชิกจริง ${n} · ชื่อเสียง ${fmt(o.reputation || 0)}</div>
+      ${risk ? '<span class="risk-chip warn">เสี่ยงเสบียง</span>' : ''}
+    </button>`;
+  },
+
+  wbCard(wb) {
+    const n = warbandMembers(wb).length;
+    const loc = getSettlement(wb.locationId);
+    return `<button type="button" class="entity-card${this.prefs.organizations.selectedId === 'wb:' + wb.id ? ' active' : ''}" data-kind="warband" data-id="${wb.id}">
+      <div class="ec-title">⚔ ${escHtml(wb.name)} <span class="stat-chip">${escHtml(wb.type)}</span></div>
+      <div class="ec-sub">${wb.status} · ${n} คน · ${loc?.name || '?'} · อาหาร ${fmt(wb.food || 0)}</div>
+    </button>`;
+  },
+
+  renderOrgDetail(org) {
+    if (!org) return '<p class="hint">ไม่พบองค์กร</p>';
+    let html = `<div class="page-summary">${escHtml(generateOrganizationSummary(org))}</div>`;
+    html += `<div class="page-actions">
+      <button class="page-action-btn" data-page-action="center" data-entity-type="organization" data-entity-id="${org.id}">📍 Center</button>
+    </div>`;
+    const leader = getAgent(org.leaderId);
+    const home = getSettlement(org.homeSettlementId);
+    const members = (org.memberIds || []).map(getAgent).filter(a => a && a.alive);
+    const traveling = members.filter(a => (a.memberships || []).find(m => m.organizationId === org.id)?.status === 'traveling_to_muster');
+    html += this.section('ภาพรวม', [
+      UI.kv('ผู้นำ', leader ? this.linkChip('agent', leader.id, leader.name) : '—'),
+      UI.kv('ฐาน', home ? this.linkChip('settlement', home.id, home.name) : '—'),
+      UI.kv('สมาชิกจริง', members.length), UI.kv('กำลังมารวมพล', traveling.length),
+      UI.kv('คลัง', `💰 ${fmt(org.wealth || 0)} · 🍞 ${fmt(org.foodReserve || 0)}`)
+    ].join(''));
+    const wbs = (world.warbands || []).filter(w => w.organizationId === org.id);
+    html += this.section('Warbands', wbs.length ? wbs.map(w => this.linkChip('warband', w.id, `${w.name} (${warbandMembers(w).length})`)).join(' ') : '—');
+    const offers = (world.recruitmentOffers || []).filter(r => r.organizationId === org.id && r.status === 'open');
+    html += this.section('รับสมัคร', offers.length ? offers.map(r => `ต้องการ ${r.quantityNeeded} (${r.type})`).join('<br>') : 'ไม่มีประกาศ');
+    return html;
+  },
+
+  renderWarbandDetail(wb) {
+    if (!wb) return '<p class="hint">ไม่พบ warband</p>';
+    let html = `<div class="page-summary">${escHtml(generateWarbandSummary(wb))}</div>`;
+    html += `<div class="page-actions">
+      <button class="page-action-btn" data-page-action="center" data-entity-type="warband" data-entity-id="${wb.id}">📍 Center</button>
+      <button class="page-action-btn" data-page-action="follow" data-entity-type="warband" data-entity-id="${wb.id}">👁 Follow</button>
+    </div>`;
+    const dest = wb.destinationId ? getSettlement(wb.destinationId) : null;
+    const route = wb.travel ? (wb.travel.path || []).map(getSettlement).filter(Boolean).map(s => s.name).join(' → ') : '';
+    html += this.section('การเคลื่อนที่', [
+      UI.kv('สถานะ', wb.status), UI.kv('ตำแหน่ง', getSettlement(wb.locationId)?.name || '?'),
+      UI.kv('ปลายทาง', dest ? dest.name : '—'), UI.kv('เส้นทาง', route || '—'),
+      UI.kv('ความเร็ว', fmt(WarbandSystem?.computeSpeed?.(wb) || 0, 2))
+    ].join(''));
+    const comp = wb.composition || {};
+    html += this.section('องค์ประกอบ', [
+      UI.kv('ขนาดจริง', warbandMembers(wb).length),
+      UI.kv('ทหาร', `ดาบ ${comp.swordsmen || 0} · หอก ${comp.spearmen || 0} · ธนู ${comp.archers || 0} · ม้า ${comp.cavalry || 0}`)
+    ].join(''));
+    html += this.section('เสบียง', [
+      UI.kv('อาหาร', wb.food), UI.kv('Morale', wb.morale), UI.kv('Cohesion', wb.cohesion), UI.kv('Fatigue', wb.fatigue)
+    ].join(''));
+    const top = warbandMembers(wb).slice(0, 6);
+    html += this.section('สมาชิก', top.map(m => this.linkChip('agent', m.id, m.name)).join(' '));
+    return html;
+  },
+
+  renderOrganizationsPage(mobile) {
+    const p = this.prefs.organizations;
+    const tabs = ['organizations', 'warbands', 'recruitment', 'muster', 'headquarters'].map(t =>
+      `<button type="button" class="page-tab${p.tab === t ? ' active' : ''}" data-tab="${t}">${t}</button>`).join('');
+    const tabHtml = `<div class="page-tabs">${tabs}</div>`;
+    let list = [], detail = '';
+    const q = (p.search || '').toLowerCase();
+    if (p.tab === 'warbands') {
+      list = (world.warbands || []).filter(w => warbandMembers(w).length > 0);
+      if (q) list = list.filter(w => w.name.toLowerCase().includes(q));
+      const limit = this.LIST_LIMIT * (p.listPage + 1);
+      const slice = list.slice(0, limit);
+      if (!p.selectedId && slice[0]) p.selectedId = 'wb:' + slice[0].id;
+      const wbId = String(p.selectedId || '').startsWith('wb:') ? +String(p.selectedId).slice(3) : null;
+      detail = this.renderWarbandDetail(wbId ? getWarband(wbId) : null);
+      const listHtml = slice.map(w => this.wbCard(w)).join('');
+      return this.pageShell('👥 Organizations & Warbands', '', tabHtml, listHtml, detail, p.search);
+    }
+    if (p.tab === 'recruitment') {
+      list = world.recruitmentOffers || [];
+      const listHtml = list.filter(r => !q || JSON.stringify(r).toLowerCase().includes(q)).slice(0, 50).map(r => {
+        const org = getOrganization(r.organizationId);
+        return `<div class="entity-card"><div class="ec-title">${org?.name || 'Org'} — ${r.type}</div><div class="ec-sub">ต้องการ ${r.quantityNeeded} · ${r.status}</div></div>`;
+      }).join('');
+      return this.pageShell('📢 Recruitment Offers', '', tabHtml, listHtml, '<p class="hint">เลือกประกาศจากรายการ</p>', p.search);
+    }
+    list = (world.organizations || []).filter(o => o.status !== 'disbanded');
+    if (q) list = list.filter(o => o.name.toLowerCase().includes(q) || o.type.includes(q));
+    const limit = this.LIST_LIMIT * (p.listPage + 1);
+    const slice = list.slice(0, limit);
+    if (!p.selectedId && slice[0]) p.selectedId = slice[0].id;
+    const org = getOrganization(+p.selectedId);
+    detail = this.renderOrgDetail(org);
+    const listHtml = slice.map(o => this.orgCard(o)).join('');
+    return this.pageShell('👥 Organizations', '', tabHtml, listHtml, detail, p.search);
+  },
+
+  battleCard(br) {
+    const sel = this.prefs.combat.selectedId;
+    return `<button type="button" class="entity-card${sel === br.id ? ' active' : ''}" data-kind="battle" data-id="${br.id}">
+      <div class="ec-title">${br.large ? '🏟 ' : '⚔ '}${escHtml(br.title || br.location || 'ศึก')}</div>
+      <div class="ec-sub">Day ${br.day} · ${escHtml(br.location || '')} · เสียชีวิต ${br.casualties || 0}</div>
+      <div class="ec-sub">${escHtml((br.summaryText || '').slice(0, 80))}</div>
+    </button>`;
+  },
+
+  renderBattleDetail(br) {
+    if (!br) return '<p class="hint">ไม่พบรายงานศึก</p>';
+    let html = `<div class="page-summary">${escHtml(generateBattleSummary(br))}</div>`;
+    html += `<div class="page-actions">
+      ${br.locationId ? `<button class="page-action-btn" data-page-action="center" data-entity-type="settlement" data-entity-id="${br.locationId}">📍 Center Location</button>` : ''}
+    </div>`;
+    html += this.section('ภาพรวม', [
+      UI.kv('วัน', br.day), UI.kv('สถานที่', br.location || getSettlement(br.locationId)?.name || '—'),
+      UI.kv('ภูมิประเทศ', br.terrain || '—'), UI.kv('ผู้ชนะ', br.winner === 'attacker' ? 'ฝ่ายบุก' : 'ฝ่ายรับ'),
+      UI.kv('เสียชีวิต', br.casualties || 0), UI.kv('บาดเจ็บ', br.wounded || br.injuries || 0)
+    ].join(''));
+    if (br.gridSnapshot) {
+      const grid = br.gridSnapshot.map(row => row.map(c => `[${String(c).padEnd(5).slice(0, 5)}]`).join(' ')).join('\n');
+      html += this.section('Battlefield Grid', `<pre class="battle-grid">${escHtml(grid)}</pre>`);
+    }
+    if (br.phaseSummaries?.length) {
+      html += this.section('Phase Summary', br.phaseSummaries.map(ph => `<div><b>${escHtml(ph.phase || ph.name)}</b>: ${escHtml(ph.text || ph.summary || '')}</div>`).join(''));
+    } else if (br.phases?.length) {
+      html += this.section('Phase Summary', br.phases.map(ph => `<div><b>${escHtml(ph.name)}</b>: ${escHtml(ph.text)}</div>`).join(''));
+    }
+    if (br.turningPoints?.length) html += this.section('จุดเปลี่ยน', br.turningPoints.map(t => `<div>• ${escHtml(t.text || t)}</div>`).join(''));
+    if (br.commanders?.length) html += this.section('ผู้บัญชาการ', br.commanders.map(id => this.linkChip('agent', id, getAgent(id)?.name || id)).join(' '));
+    return html;
+  },
+
+  renderCombatPage(mobile) {
+    const p = this.prefs.combat;
+    const tabs = ['battles', 'large', 'formations', 'weapons', 'injuries', 'rankings'].map(t =>
+      `<button type="button" class="page-tab${p.tab === t ? ' active' : ''}" data-tab="${t}">${t}</button>`).join('');
+    const tabHtml = `<div class="page-tabs">${tabs}</div>`;
+    const idx = UIIndexes.rebuild();
+    if (p.tab === 'formations') {
+      const body = Object.keys(FORMATION_INFO).map(fk => {
+        const uses = world.units.filter(u => u.formation === fk).length;
+        return `<div class="detail-section"><h4><span class="formation-badge">${fk}</span> ${FORMATION_INFO[fk].label}</h4><div>${escHtml(generateFormationSummary(fk))} · ใช้ล่าสุด ~${uses}</div></div>`;
+      }).join('');
+      return this.pageShell('⚔ Formations', '', tabHtml, '<p class="hint">แนวการต่อสู้</p>', body, p.search);
+    }
+    if (p.tab === 'weapons') {
+      const listHtml = idx.weaponsByFame.slice(0, 50).map(w => `<div class="entity-card"><div class="ec-title">${escHtml(w.item.name || w.item.type)}</div><div class="ec-sub">${generateWeaponSummary(w.item)} · ${getAgent(w.ownerId)?.name || '?'}</div></div>`).join('');
+      return this.pageShell('⚔ Weapons', '', tabHtml, listHtml, '', p.search);
+    }
+    if (p.tab === 'injuries') {
+      const listHtml = idx.injuriesActive.slice(0, 50).map(x => {
+        const a = getAgent(x.agentId);
+        return `<div class="entity-card" data-kind="agent" data-id="${a?.id}"><div class="ec-title">${a?.name || '?'}</div><div class="ec-sub">${x.injury.type || x.injury.part} — ${x.injury.severity || ''}</div></div>`;
+      }).join('');
+      return this.pageShell('🩹 Injuries', '', tabHtml, listHtml, '', p.search);
+    }
+    if (p.tab === 'rankings') {
+      const r = TextCombatCore?.rankings?.() || {};
+      const body = `<div>${(r.duelists || []).map(a => this.linkChip('agent', a.id, `${a.name} (${a.duelRecord?.wins}W)`)).join(' ')}</div>`;
+      return this.pageShell('🏆 Combat Rankings', '', tabHtml, '<p class="hint">อันดับ</p>', body, p.search);
+    }
+    let list = idx.battlesByDay.slice();
+    if (p.tab === 'large') list = list.filter(b => b.large);
+    if (p.filter === 'famous') list = list.filter(b => (b.casualties || 0) >= 10);
+    const q = (p.search || '').toLowerCase();
+    if (q) list = list.filter(b => JSON.stringify(b).toLowerCase().includes(q));
+    const limit = this.LIST_LIMIT * (p.listPage + 1);
+    const slice = list.slice(0, limit);
+    if (!p.selectedId && slice[0]) p.selectedId = slice[0].id;
+    const br = list.find(b => b.id === p.selectedId) || (world.battleReports || []).find(b => b.id === p.selectedId);
+    const filters = ['recent', 'famous', 'large', 'ambush'].map(f => `<button type="button" class="page-filter${p.filter === f ? ' active' : ''}" data-filter="${f}">${f}</button>`).join('');
+    const listHtml = slice.map(b => this.battleCard(b)).join('');
+    return this.pageShell('⚔ Combat & Battles', filters, tabHtml, listHtml, this.renderBattleDetail(br), p.search);
+  },
+
+  renderChroniclePage(mobile) {
+    const p = this.prefs.chronicle;
+    let entries = (world.chronicle || []).slice().reverse();
+    const q = (p.search || '').toLowerCase();
+    if (p.filter !== 'all') entries = entries.filter(e => e.category === p.filter);
+    if (q) entries = entries.filter(e => (e.title + ' ' + (e.description || '')).toLowerCase().includes(q));
+    entries = entries.slice(0, 100);
+    if (!p.selectedId && entries[0]) p.selectedId = entries[0].day;
+    const listHtml = entries.map(e => `<button type="button" class="entity-card${p.selectedId === e.day ? ' active' : ''}" data-kind="chronicle" data-id="${e.day}">
+      <div class="ec-title">${escHtml(e.title)}</div><div class="ec-sub">Day ${e.day} · ${e.category}</div>
+    </button>`).join('');
+    const sel = entries.find(e => e.day === p.selectedId) || entries[0];
+    const detail = sel ? `<div class="page-summary">${escHtml(sel.description || sel.title)}</div>${ObserverSystem.chronicleTargetButtons(sel)}` : '';
+    const filters = ['all', 'war', 'legend', 'personal', 'market'].map(f => `<button type="button" class="page-filter${p.filter === f ? ' active' : ''}" data-filter="${f}">${f}</button>`).join('');
+    return this.pageShell('📖 Chronicle', filters, '', listHtml, detail, p.search);
+  },
+
+  renderWorldPage(mobile) {
+    const body = UI.worldSummaryHTML();
+    return this.pageShell('🌍 World Summary', '', '', '<p class="hint">สรุปโลก</p>', body, '');
+  }
+};
+
 /* ═══════════════════ 17. UI ═══════════════════ */
 
 const UI = {
   paused: false,
   speed: 1,
   heatmapMode: 'none',
+  currentView: 'map',
+  pageDirty: true,
   selected: null,
   armedTool: null,
   roadPickFirst: null,
@@ -10288,6 +11008,25 @@ const UI = {
   showRelationLines: false,
   dashboardDirty: true,
   _lastTickTime: 0,
+
+  setView(view) {
+    this.currentView = view || 'map';
+    const main = document.getElementById('main');
+    const page = document.getElementById('pageContainer');
+    const mapWrap = document.getElementById('mapWrap');
+    const isMap = this.currentView === 'map';
+    if (main) main.classList.toggle('page-mode', !isMap);
+    if (page) page.classList.toggle('hidden', isMap);
+    if (mapWrap && isMap) mapWrap.classList.remove('hidden');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.id === {
+      map: 'btnMap', characters: 'btnCharacters', organizations: 'btnOrganizationsPage',
+      combat: 'btnCombat', chronicle: 'btnChroniclePage', world: 'btnWorldSummary'
+    }[this.currentView]));
+    if (!isMap) {
+      this.pageDirty = true;
+      if (typeof PageViewSystem !== 'undefined') PageViewSystem.renderCurrent();
+    }
+  },
 
   init() {
     // ── toolbar ──
@@ -10409,6 +11148,7 @@ const UI = {
     });
 
     if (typeof ObserverSystem !== 'undefined') ObserverSystem.init();
+    if (typeof PageViewSystem !== 'undefined') PageViewSystem.init();
   },
 
   loop(ts) {
@@ -10432,6 +11172,7 @@ const UI = {
       ObserverSystem.observerDirty = false;
     }
     if (this.marketOpen && typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.renderMarketPanel();
+    if (this.currentView !== 'map' && this.pageDirty && typeof PageViewSystem !== 'undefined') PageViewSystem.renderCurrent();
     requestAnimationFrame(t => this.loop(t));
   },
 
@@ -10691,8 +11432,14 @@ const UI = {
   wireInspectorLinks(body) {
     for (const link of body.querySelectorAll('[data-sel-kind]')) {
       link.addEventListener('click', () => {
-        this.selected = { kind: link.dataset.selKind, id: +link.dataset.selId };
-        this.inspectorDirty = true;
+        const kind = link.dataset.selKind;
+        const id = +link.dataset.selId;
+        if (typeof openEntityDetail !== 'undefined' && UI.currentView !== 'map' && ['agent', 'organization', 'warband', 'battle'].includes(kind)) {
+          openEntityDetail(kind, id);
+        } else {
+          this.selected = { kind, id };
+          this.inspectorDirty = true;
+        }
       });
     }
     const relCb = body.querySelector('#showRelLines');
@@ -11718,6 +12465,46 @@ const SandboxTools = {
         const org = createOrganization({ name: 'โจรหนีทหาร', type: 'bandit_gang', leaderId: deserters[0].id, homeSettlementId: camp.id, factionId: world.factions.find(f => f.isBandit)?.id, memberIds: [] });
         WarbandSystem.createFromMembers(org, deserters.map(a => a.id), { type: 'bandit_gang', locationId: camp.id, status: 'raiding', objective: { type: 'patrol_route' } });
         EventSystem.add('system', `☠ [Sandbox] กลุ่มโจร ${deserters.length} คนจาก agent จริง`);
+      },
+      openRandomFamousCharacter: () => {
+        UIIndexes.rebuild(true);
+        const a = (uiIndexes?.agentsByFame || []).find(x => x.fame >= 3) || pick(world.agents.filter(x => x.alive));
+        if (!a) return;
+        openEntityDetail('agent', a.id);
+        EventSystem.add('system', `👤 [Sandbox] เปิดตัวละคร ${a.name}`);
+      },
+      openRandomWarband: () => {
+        const wb = pick((world.warbands || []).filter(w => warbandMembers(w).length > 0));
+        if (!wb) { EventSystem.add('system', '✨ ไม่มี warband'); return; }
+        openEntityDetail('warband', wb.id);
+        EventSystem.add('system', `⚔ [Sandbox] เปิด ${wb.name}`);
+      },
+      openLatestBattleReport: () => {
+        const br = (world.battleReports || []).slice(-1)[0];
+        if (!br) { EventSystem.add('system', '✨ ยังไม่มี battle report'); return; }
+        openEntityDetail('battle', br.id);
+        EventSystem.add('system', `📜 [Sandbox] เปิดศึกล่าสุด`);
+      },
+      openLargestOrganization: () => {
+        const org = (world.organizations || []).slice().sort((a, b) => (b.memberIds?.length || 0) - (a.memberIds?.length || 0))[0];
+        if (!org) { EventSystem.add('system', '✨ ไม่มี organization'); return; }
+        openEntityDetail('organization', org.id);
+        EventSystem.add('system', `👥 [Sandbox] เปิด ${org.name}`);
+      },
+      generateTestBattleReport: () => {
+        const u1 = world.units.find(u => unitMembers(u).length >= 2);
+        const u2 = world.units.find(u => u.id !== u1?.id && unitMembers(u).length >= 2);
+        if (!u1 || !u2) { EventSystem.add('system', '✨ ต้องมี unit 2 กลุ่ม'); return; }
+        const s = world.settlements[0];
+        MilitarySystem.battle([u1], [u2], { settlementId: s.id, label: s.name, terrain: 'plain', title: 'Sandbox Test Battle' });
+        const br = world.battleReports.slice(-1)[0];
+        if (br) openEntityDetail('battle', br.id);
+        EventSystem.add('system', '🧪 [Sandbox] สร้าง test battle report');
+      },
+      rebuildUIIndexes: () => {
+        UIIndexes.rebuild(true);
+        UI.pageDirty = true;
+        EventSystem.add('system', '🔄 [Sandbox] Rebuilt UI indexes');
       }
     };
 
@@ -11936,7 +12723,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.3';
+const SAVE_SCHEMA_VERSION = '18.4';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -12006,6 +12793,8 @@ const SaveSystem = {
         speed: UI.speed,
         heatmapMode: UI.heatmapMode,
         paused: UI.paused,
+        currentView: UI.currentView,
+        pages: typeof PageViewSystem !== 'undefined' ? PageViewSystem.getPrefs() : null,
         observer: typeof ObserverSystem !== 'undefined' ? ObserverSystem.getPrefs() : null
       },
       world: this.serializeWorld()
@@ -12081,6 +12870,8 @@ const SaveSystem = {
     world.seed = migrated.seed != null ? migrated.seed : (world.seed || 0);
     this.applyPostLoad();
     if (migrated.uiPrefs) this.applyUiPrefs(migrated.uiPrefs);
+    if (migrated.uiPrefs?.pages && typeof PageViewSystem !== 'undefined') PageViewSystem.applyPrefs(migrated.uiPrefs.pages);
+    if (migrated.uiPrefs?.currentView) UI.setView(migrated.uiPrefs.currentView);
     if (migrated.uiPrefs?.observer && typeof ObserverSystem !== 'undefined') {
       ObserverSystem.applyPrefs(migrated.uiPrefs.observer);
     }
@@ -12418,6 +13209,7 @@ const SaveSystem = {
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
     if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
+    if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
   },
 
   applyUiPrefs(prefs) {
@@ -12437,6 +13229,7 @@ const SaveSystem = {
       const bp = document.getElementById('btnPause');
       if (bp) bp.textContent = UI.paused ? '▶ Resume' : '⏸ Pause';
     }
+    if (prefs.currentView && prefs.currentView !== 'map') UI.currentView = prefs.currentView;
   },
 
   tickAutoSave() {
