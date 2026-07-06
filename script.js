@@ -80,9 +80,9 @@ const MAX_SCOUT_REPORTS = 80;
 const WAR_GOAL_TYPES = ['capture_settlement', 'defend_border', 'cut_trade_route', 'break_vassal', 'punish_rebels', 'secure_market_hub', 'destroy_bandit_camp', 'force_tribute'];
 const TERRAIN_TYPES = ['plain', 'forest', 'hill', 'river', 'road', 'marsh'];
 
-function defaultPersonalMemory(birthplaceId) {
+function defaultPersonalMemory(birthplaceId, bornDay) {
   return {
-    bornDay: world.day,
+    bornDay: bornDay != null ? bornDay : (world ? world.day : 0),
     birthplaceId: birthplaceId || null,
     majorEvents: [],
     trauma: [],
@@ -7657,6 +7657,7 @@ const DiplomacySystem = {
 /* ═══════════════════ 15. SIMULATION TICK ═══════════════════ */
 
 function simulateDay() {
+  if (!world) return;
   world.day++;
 
   /* 1-2. Settlement ผลิต (ธรรมชาติเล็กน้อย) + decay */
@@ -9165,7 +9166,7 @@ const UI = {
 
   loop(ts) {
     const interval = { 1: 900, 5: 180, 20: 45 }[this.speed] || 900;
-    if (!this.paused && ts - this._lastTickTime >= interval) {
+    if (world && !this.paused && ts - this._lastTickTime >= interval) {
       this._lastTickTime = ts;
       simulateDay();
     }
@@ -9190,6 +9191,10 @@ const UI = {
   /* ── Phase 10: Chronicle rendering ── */
   renderChronicle() {
     const el = document.getElementById('chronicleList');
+    if (!world) {
+      el.innerHTML = '<p class="hint">โหลดหรือสร้างโลกเพื่อดูตำนาน</p>';
+      return;
+    }
     const f = this.chronicleFilter;
 
     if (f === 'heroes') {
@@ -9346,6 +9351,10 @@ const UI = {
 
   renderLog() {
     const el = document.getElementById('eventLog');
+    if (!world) {
+      el.innerHTML = '<div class="hint" style="padding:6px">โหลดหรือสร้างโลกเพื่อดูบันทึกเหตุการณ์</div>';
+      return;
+    }
     const obs = typeof ObserverSystem !== 'undefined' ? ObserverSystem : null;
     const events = world.events.slice(-250).filter(ev => {
       if (obs && !obs.eventMatchesFilter(ev)) return false;
@@ -9370,6 +9379,11 @@ const UI = {
   renderInspector() {
     const title = document.getElementById('inspectorTitle');
     const body = document.getElementById('inspectorBody');
+    if (!world) {
+      title.textContent = 'Inspector';
+      body.innerHTML = '<p class="hint">โหลดหรือสร้างโลกเพื่อดูข้อมูล</p>';
+      return;
+    }
     const sel = this.selected;
 
     if (!sel) {
@@ -10656,6 +10670,11 @@ const SaveSystem = {
     UI.inspectorDirty = true;
     UI.chronicleDirty = true;
     UI.dashboardDirty = true;
+    if (typeof Renderer !== 'undefined') Renderer.resetView();
+    if (typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.observerDirty = true;
+      ObserverSystem.updateFollowLabel();
+    }
     this.updateStatusUI();
     this.refreshContinueUI();
   },
@@ -10697,19 +10716,26 @@ const SaveSystem = {
     if (!w.worldName) w.worldName = data.worldName || 'Living Kingdom';
     if (w.seed == null) w.seed = data.seed || 0;
     if (!w._createdAt) w._createdAt = data.createdAt || new Date().toISOString();
-    for (const s of w.settlements) this.migrateSettlement(s);
-    for (const r of w.routes) this.migrateRoute(r);
-    for (const a of w.agents) this.migrateAgent(a);
-    for (const u of w.units) this.migrateUnit(u);
-    for (const ar of w.armies) this.migrateArmy(ar);
-    for (const f of w.factions) this.migrateFaction(f);
-    for (const wwar of w.wars) this.migrateWar(wwar);
-    for (const wh of w.warehouses) this.migrateWarehouse(wh);
-    for (const g of w.guilds) this.migrateGuild(g);
-    for (const c of w.tradeContracts) this.migrateContract(c);
-    data.schemaVersion = SAVE_SCHEMA_VERSION;
-    data.world = w;
-    return data;
+    const prevWorld = world;
+    world = w;
+    try {
+      for (const s of w.settlements) this.migrateSettlement(s);
+      for (const r of w.routes) this.migrateRoute(r);
+      for (const a of w.agents) this.migrateAgent(a, w.day);
+      for (const u of w.units) this.migrateUnit(u);
+      for (const ar of w.armies) this.migrateArmy(ar);
+      for (const f of w.factions) this.migrateFaction(f);
+      for (const wwar of w.wars) this.migrateWar(wwar);
+      for (const wh of w.warehouses) this.migrateWarehouse(wh);
+      for (const g of w.guilds) this.migrateGuild(g);
+      for (const c of w.tradeContracts) this.migrateContract(c, w.day);
+      data.schemaVersion = SAVE_SCHEMA_VERSION;
+      data.world = w;
+      return data;
+    } catch (e) {
+      world = prevWorld;
+      throw e;
+    }
   },
 
   migrateSettlement(s) {
@@ -10765,7 +10791,7 @@ const SaveSystem = {
     if (w.goalAchieved == null) w.goalAchieved = false;
   },
 
-  migrateAgent(a) {
+  migrateAgent(a, day) {
     a.stats = Object.assign({ hunger: 70, energy: 80, health: 100, morale: 60, wealth: 0 }, a.stats || {});
     a.inventory = Object.assign({ food: 0, wood: 0, ore: 0, tools: 0, weapon: 0, bow: 0, horse: 0, cart: 0 }, a.inventory || {});
     a.durability = a.durability || { tools: 0, weapon: 0, cart: 0 };
@@ -10777,8 +10803,9 @@ const SaveSystem = {
     a.skills = Object.assign(DEFAULT_SKILLS(), a.skills || {});
     a.traits = Object.assign({ bravery: 0.5, greed: 0.5, loyalty: 0.5, ambition: 0.5, riskTolerance: 0.5, discipline: 0.5 }, a.traits || {});
     a.memory = Object.assign({ battlesWon: 0, battlesLost: 0, survivedBattles: 0, citiesVisited: [], daysHungry: 0, raidsDone: 0, tradeProfit: 0 }, a.memory || {});
-    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(a.birthplaceId || a.locationId);
-    else a.memory.personal = Object.assign(defaultPersonalMemory(a.birthplaceId || a.locationId), a.memory.personal);
+    const bp = a.birthplaceId || a.locationId;
+    if (!a.memory.personal) a.memory.personal = defaultPersonalMemory(bp, day);
+    else a.memory.personal = Object.assign(defaultPersonalMemory(bp, day), a.memory.personal);
     if (!a.relationships) a.relationships = {};
     if (!a.motives) a.motives = defaultMotives();
     a.deeds = a.deeds || [];
@@ -10882,11 +10909,11 @@ const SaveSystem = {
     g._bountyDay = g._bountyDay != null ? g._bountyDay : -99;
   },
 
-  migrateContract(c) {
+  migrateContract(c, day) {
     c.status = c.status || 'open';
     if (c.acceptedByAgentId == null) c.acceptedByAgentId = null;
     if (c.escortUnitId == null) c.escortUnitId = null;
-    c.createdDay = c.createdDay != null ? c.createdDay : world.day;
+    c.createdDay = c.createdDay != null ? c.createdDay : (day || 0);
   },
 
   applyPostLoad() {
