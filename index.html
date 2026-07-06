@@ -15,7 +15,7 @@
     <span class="logo">⬢</span>
     <span>Living Kingdom Sandbox</span>
     <span id="dayCounter" class="day-counter">Day 0</span>
-    <span class="version-badge" title="Phase 13 — Save / Load / Export">v13</span>
+    <span class="version-badge" title="Phase 11 — Diplomacy + Phase 13 Save">v13.1</span>
   </div>
 
   <div class="tb-group">
@@ -44,6 +44,7 @@
     </select>
     <button id="btnTools" class="tb-btn accent">🛠 Sandbox Tools</button>
     <button id="btnChronicle" class="tb-btn accent">📖 Chronicle</button>
+    <button id="btnDiplomacy" class="tb-btn accent">🌐 Diplomacy</button>
     <button id="btnWorldSummary" class="tb-btn">🌍 สรุปโลก</button>
   </div>
 </header>
@@ -107,6 +108,13 @@
         <button class="tool-btn" data-tool="addTown">🏘 เพิ่มเมือง (คลิกแผนที่)</button>
         <button class="tool-btn" data-tool="addFort">🏰 เพิ่มป้อม (คลิกแผนที่)</button>
         <button class="tool-btn" data-tool="createWar">💥 ก่อสงคราม</button>
+        <button class="tool-btn" data-tool="forcePeace">🕊 บังคับสงบศึก</button>
+        <button class="tool-btn" data-tool="forceWar">⚔ บังคับสงคราม</button>
+        <button class="tool-btn" data-tool="improveRelations">🤝 ปรับปรุงความสัมพันธ์</button>
+        <button class="tool-btn" data-tool="damageRelations">💢 ทำลายความสัมพันธ์</button>
+        <button class="tool-btn" data-tool="createAlliance">🛡 สร้างพันธมิตร</button>
+        <button class="tool-btn" data-tool="breakTreaty">✖ หักสนธิสัญญา</button>
+        <button class="tool-btn" data-tool="makeVassal">👑 ทำให้เป็นเมืองขึ้น</button>
         <button class="tool-btn" data-tool="giveWealth">💰 ให้เงินเมือง (คลิกเมือง)</button>
       </div>
       <p class="tool-note">เครื่องมือที่ต้องคลิกเป้าหมาย: เลือกเครื่องมือแล้วคลิกบนแผนที่ (คลิกขวาเพื่อยกเลิก)</p>
@@ -125,12 +133,22 @@
         <button class="chron-filter" data-f="legend">ตำนาน</button>
         <button class="chron-filter" data-f="rebellion">กบฏ</button>
         <button class="chron-filter" data-f="settlement">เมือง</button>
+        <button class="chron-filter" data-f="diplomacy">การทูต</button>
         <button class="chron-filter" data-f="trade">การค้า</button>
         <button class="chron-filter" data-f="disaster">ภัยพิบัติ</button>
         <button class="chron-filter" data-f="faction">ฝ่าย</button>
         <button class="chron-filter" data-f="era">ยุคสมัย</button>
       </div>
       <div id="chronicleList"></div>
+    </div>
+
+    <!-- Diplomacy panel (Phase 11) -->
+    <div id="diplomacyPanel" class="hidden">
+      <div class="chron-header">
+        <h3>🌐 Diplomacy — ความสัมพันธ์ระหว่างฝ่าย</h3>
+        <button id="diplomacyClose" class="tb-btn">✕</button>
+      </div>
+      <div id="diplomacyBody"></div>
     </div>
 
     <!-- World summary modal (Phase 10) -->

@@ -25,6 +25,7 @@
    Phase 10.5: Simulation Stability + Ambition + Combat Depth
    Phase 10.6: Logistics Cleanup + Local Consumption Fix
    Phase 13: Save / Load / Export World
+   Phase 11: Diplomacy / Treaty / Vassal Negotiation
    ═══════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -245,6 +246,7 @@ function startWar(attackerF, defenderF, cause) {
   attackerF.warState = true; defenderF.warState = true;
   if (!attackerF.enemies.includes(defenderF.id)) attackerF.enemies.push(defenderF.id);
   if (!defenderF.enemies.includes(attackerF.id)) defenderF.enemies.push(attackerF.id);
+  if (typeof DiplomacySystem !== 'undefined') DiplomacySystem.onWarDeclared(attackerF, defenderF, cause);
   factionTimeline(attackerF, `ประกาศสงครามกับ${defenderF.name}`);
   factionTimeline(defenderF, `ถูก${attackerF.name}ประกาศสงคราม`);
   Chronicle.add({
@@ -256,19 +258,28 @@ function startWar(attackerF, defenderF, cause) {
   return w;
 }
 
-function endWar(w, winnerId, reason) {
+function endWar(w, winnerId, reason, peaceOpts) {
   if (!w || w.endDay) return;
   w.endDay = world.day;
   w.winner = winnerId;
+  w.peaceType = peaceOpts?.peaceType || null;
   const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
   const winF = winnerId ? getFaction(winnerId) : null;
   const days = Math.max(1, w.endDay - w.startDay);
   const capturedNames = w.captured.map(c => c.name).join(' และ ');
+  let endNote = '';
+  if (w.peaceType === 'peace_treaty') endNote = ' จบด้วยสนธิสัญญาสันติภาพ';
+  else if (w.peaceType === 'surrender' && winF) endNote = ` ฝ่าย${winF.id === att?.id ? def?.name : att?.name}ยอมจำนน`;
+  else if (w.peaceType === 'vassalage' && winF) {
+    const loser = winF.id === att?.id ? def : att;
+    endNote = loser ? ` ฝ่าย${loser.name}กลายเป็นเมืองขึ้นของ${winF.name}` : '';
+  }
   w.summary = `สงครามระหว่าง${att ? att.name : 'ฝ่ายที่สูญสิ้น'}กับ${def ? def.name : 'ฝ่ายที่สูญสิ้น'}กินเวลา ${days} วัน`
     + (w.battles.length ? ` มีศึกสำคัญ ${w.battles.length} ครั้ง` : '')
     + (w.casualties ? ` สูญเสียรวม ${w.casualties} ชีวิต` : '')
     + (winF ? ` จบลงด้วยชัยชนะของ${winF.name}` + (capturedNames ? ` หลังยึด${capturedNames}ได้สำเร็จ` : '')
             : ' จบลงโดยไม่มีผู้ชนะเด็ดขาด')
+    + endNote
     + (reason ? ` (${reason})` : '');
   for (const [f, other] of [[att, def], [def, att]]) {
     if (!f) continue;
@@ -276,6 +287,7 @@ function endWar(w, winnerId, reason) {
     if (!f.enemies.length) f.warState = false;
     factionTimeline(f, `สงครามกับ${other ? other.name : 'ศัตรู'}สิ้นสุด${winnerId === f.id ? ' — ได้รับชัยชนะ' : winnerId ? ' — พ่ายแพ้' : ''}`);
   }
+  if (typeof DiplomacySystem !== 'undefined') DiplomacySystem.onWarEnded(w, winnerId, reason, peaceOpts);
   Chronicle.add({
     category: 'war', importance: 5,
     title: `🕊 สงครามสิ้นสุด: ${att ? att.name : '?'} vs ${def ? def.name : '?'}`,
@@ -408,6 +420,7 @@ function createRoute(aId, bId, quality) {
 }
 
 function createFaction(opt) {
+  const personalities = ['balanced', 'aggressive', 'trader', 'defensive', 'opportunist', 'honorable'];
   const f = {
     id: uid(),
     name: opt.name,
@@ -419,7 +432,13 @@ function createFaction(opt) {
     enemies: [], allies: [],
     vassalIds: [],
     foundedDay: world.day,
-    timeline: []
+    timeline: [],
+    diplomacy: {
+      relations: {},
+      warExhaustion: 0,
+      diplomaticPersonality: opt.diplomaticPersonality || pick(personalities),
+      diplomaticMemory: []
+    }
   };
   world.factions.push(f);
   f.timeline.push({ day: world.day, text: `ก่อตั้ง${f.name}` });
@@ -557,6 +576,7 @@ function generateWorld() {
     settlements: [], routes: [], agents: [], units: [], armies: [], factions: [],
     events: [],
     chronicle: [], wars: [], eras: [],
+    treaties: [], vassalContracts: [],
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0 }
   };
 
@@ -688,10 +708,38 @@ function generateWorld() {
   banditF.rulerId = banditChief.id;
   camp.ownerId = banditChief.id;
 
+  // ── Phase 11: rival kingdom for diplomacy ──
+  const northK = createFaction({ name: 'อาณาจักรเหนือ', color: '#26a69a', treasury: 650, diplomaticPersonality: 'trader' });
+  const northTown = createSettlement({
+    name: 'เมืองชายแดนเหนือ', type: 'town', x: 200, y: 90, factionId: northK.id,
+    treasury: 450, stock: { food: 100, wood: 50, ore: 25, tools: 10 },
+    buildings: ['Market'], prod: { food: 1, wood: 0.4, ore: 0.2 }
+  });
+  const northVillage = createSettlement({
+    name: 'บ้านหนาวเหนือ', type: 'village', x: 120, y: 160, factionId: northK.id,
+    treasury: 120, stock: { food: 90, wood: 25 }, prod: { food: 2.5, wood: 0.5, ore: 0 }
+  });
+  const northKing = createAgent({
+    locationId: northTown.id, factionId: northK.id, profession: 'king', money: 400,
+    skills: { governance: 6, leadership: 7, diplomacy: 6, tactics: 4 }
+  });
+  northKing.rank = 'king';
+  northK.rulerId = northKing.id;
+  northTown.ownerId = northKing.id;
+  northVillage.ownerId = northKing.id;
+  for (let i = 0; i < 6; i++) {
+    const ag = createAgent({ locationId: northVillage.id, factionId: northK.id, profession: i < 4 ? 'farmer' : 'guard' });
+    seedSkillForProfession(ag, ag.profession);
+  }
+  createRoute(townN.id, northTown.id, 0.55);
+  createRoute(fort.id, northTown.id, 0.45);
+  createRoute(northTown.id, northVillage.id, 0.5);
+
   // จัด garrison เริ่มต้นให้ fort/castle/towns
-  for (const s of [fort, castle, townN, townS]) ensureGarrison(s);
+  for (const s of [fort, castle, townN, townS, northTown]) ensureGarrison(s);
 
   EventSystem.add('system', `🌍 โลกใหม่ถือกำเนิด — ${world.agents.length} ชีวิตใน ${world.settlements.length} ถิ่นฐาน ภายใต้${kingdom.name}`);
+  DiplomacySystem.initWorld();
 }
 
 function makeGovAttrs() {
@@ -3342,6 +3390,533 @@ function checkFactionCollapse(f) {
   }
 }
 
+/* ═══════════════ 14.5 PHASE 11: DIPLOMACY SYSTEM ═══════════════ */
+
+function defaultRelation() {
+  return {
+    score: 0, trust: 50, fear: 0, rivalry: 0, tradeValue: 0, borderTension: 0,
+    lastWarDay: null, lastTreatyDay: null,
+    tributeUntilDay: null, nonAggressionUntilDay: null, allianceUntilDay: null,
+    vassalOf: null, overlordOf: []
+  };
+}
+
+function ensureFactionDiplomacy(f) {
+  if (!f) return;
+  if (!f.diplomacy) {
+    f.diplomacy = {
+      relations: {},
+      warExhaustion: 0,
+      diplomaticPersonality: pick(['balanced', 'aggressive', 'trader', 'defensive', 'opportunist', 'honorable']),
+      diplomaticMemory: []
+    };
+  }
+  if (!f.diplomacy.relations) f.diplomacy.relations = {};
+  if (f.diplomacy.warExhaustion == null) f.diplomacy.warExhaustion = 0;
+  if (!f.diplomacy.diplomaticMemory) f.diplomacy.diplomaticMemory = [];
+}
+
+function getRelation(fA, fB) {
+  if (!fA || !fB || fA.id === fB.id) return defaultRelation();
+  ensureFactionDiplomacy(fA);
+  if (!fA.diplomacy.relations[fB.id]) {
+    const r = defaultRelation();
+    if (areAtWar(fA, fB)) { r.score = -60; r.trust = 15; r.rivalry = 40; r.lastWarDay = world.day; }
+    else if (fA.allies.includes(fB.id)) { r.score = 55; r.trust = 70; r.allianceUntilDay = world.day + 9999; }
+    fA.diplomacy.relations[fB.id] = r;
+  }
+  return fA.diplomacy.relations[fB.id];
+}
+
+function changeRelation(fA, fB, delta, reason) {
+  if (!fA || !fB || fA.id === fB.id) return;
+  const r = getRelation(fA, fB);
+  r.score = clamp(r.score + delta, -100, 100);
+  if (reason) {
+    fA.diplomacy.diplomaticMemory.push({ day: world.day, otherId: fB.id, text: reason, delta });
+    if (fA.diplomacy.diplomaticMemory.length > 30) fA.diplomacy.diplomaticMemory.shift();
+  }
+}
+
+function areAtWar(fA, fB) {
+  if (!fA || !fB) return false;
+  return fA.enemies.includes(fB.id) || !!activeWarBetween(fA.id, fB.id);
+}
+
+function areAllied(fA, fB) {
+  if (!fA || !fB) return false;
+  const r = getRelation(fA, fB);
+  return fA.allies.includes(fB.id) || (r.allianceUntilDay && r.allianceUntilDay > world.day);
+}
+
+function isVassalOf(fA, fB) {
+  if (!fA || !fB) return false;
+  const r = getRelation(fA, fB);
+  return r.vassalOf === fB.id || world.vassalContracts?.some(v => v.vassalFactionId === fA.id && v.overlordFactionId === fB.id && v.active);
+}
+
+function createTreaty(type, fA, fB, duration, terms) {
+  if (!world.treaties) world.treaties = [];
+  const t = {
+    id: uid(),
+    type,
+    factions: [fA.id, fB.id],
+    startDay: world.day,
+    endDay: duration ? world.day + duration : null,
+    terms: terms || {},
+    status: 'active',
+    brokenBy: null,
+    history: [`Day ${world.day}: ลงนาม${type}`]
+  };
+  world.treaties.push(t);
+  return t;
+}
+
+function setTreaty(fA, fB, type, duration) {
+  if (!fA || !fB || fA.isBandit || fB.isBandit) return null;
+  const dur = duration || 120;
+  const rA = getRelation(fA, fB), rB = getRelation(fB, fA);
+  const until = world.day + dur;
+  if (type === 'non_aggression') {
+    rA.nonAggressionUntilDay = until; rB.nonAggressionUntilDay = until;
+    changeRelation(fA, fB, 15, 'ลงนามสัญญาไม่รุกราน');
+    changeRelation(fB, fA, 15, 'ลงนามสัญญาไม่รุกราน');
+    EventSystem.add('politics', `🤝 ${fA.name} กับ ${fB.name} ลงนามสัญญาไม่รุกราน ${dur} วัน`);
+    Chronicle.add({ category: 'diplomacy', importance: 4, title: `🤝 สัญญาไม่รุกราน: ${fA.name}–${fB.name}`, description: `ทั้งสองฝ่ายตกลงไม่รุกรานกันเป็นเวลา ${dur} วัน`, factions: [fA.id, fB.id] });
+    factionTimeline(fA, `ลงนามสัญญาไม่รุกรานกับ${fB.name}`);
+    factionTimeline(fB, `ลงนามสัญญาไม่รุกรานกับ${fA.name}`);
+    return createTreaty('non_aggression', fA, fB, dur);
+  }
+  if (type === 'alliance') {
+    rA.allianceUntilDay = until; rB.allianceUntilDay = until;
+    if (!fA.allies.includes(fB.id)) fA.allies.push(fB.id);
+    if (!fB.allies.includes(fA.id)) fB.allies.push(fA.id);
+    changeRelation(fA, fB, 30, 'พันธมิตร');
+    changeRelation(fB, fA, 30, 'พันธมิตร');
+    EventSystem.add('politics', `🛡 ${fA.name} กับ ${fB.name} สร้างพันธมิตร`);
+    Chronicle.add({ category: 'diplomacy', importance: 5, title: `🛡 พันธมิตร: ${fA.name}–${fB.name}`, description: 'ทั้งสองฝ่ายร่วมมือป้องกันและสนับสนุนกัน', factions: [fA.id, fB.id] });
+    factionTimeline(fA, `สร้างพันธมิตรกับ${fB.name}`);
+    factionTimeline(fB, `สร้างพันธมิตรกับ${fA.name}`);
+    return createTreaty('alliance', fA, fB, dur);
+  }
+  if (type === 'trade') {
+    changeRelation(fA, fB, 12, 'ข้อตกลงการค้า');
+    changeRelation(fB, fA, 12, 'ข้อตกลงการค้า');
+    rA.tradeValue = Math.max(rA.tradeValue, 20);
+    rB.tradeValue = Math.max(rB.tradeValue, 20);
+    EventSystem.add('trade', `📜 ${fA.name} กับ ${fB.name} ลงนามข้อตกลงการค้า`);
+    Chronicle.add({ category: 'diplomacy', importance: 3, title: `📜 ข้อตกลงการค้า: ${fA.name}–${fB.name}`, factions: [fA.id, fB.id] });
+    return createTreaty('trade', fA, fB, dur, { tariffReduction: 0.15 });
+  }
+  if (type === 'peace') {
+    const w = activeWarBetween(fA.id, fB.id);
+    if (w) endWar(w, null, `สนธิสัญญาสันติภาพระหว่าง${fA.name}กับ${fB.name}`, { peaceType: 'peace_treaty' });
+    changeRelation(fA, fB, 20, 'สงบศึก');
+    changeRelation(fB, fA, 20, 'สงบศึก');
+    return createTreaty('peace', fA, fB, dur);
+  }
+  return null;
+}
+
+function breakTreaty(fA, fB, reason) {
+  if (!fA || !fB) return;
+  const rA = getRelation(fA, fB), rB = getRelation(fB, fA);
+  rA.trust = clamp(rA.trust - 35, 0, 100);
+  rB.trust = clamp(rB.trust - 35, 0, 100);
+  changeRelation(fA, fB, -40, `หักหลัง: ${reason}`);
+  changeRelation(fB, fA, -40, `ถูกหักหลัง: ${reason}`);
+  rA.nonAggressionUntilDay = null; rB.nonAggressionUntilDay = null;
+  rA.allianceUntilDay = null; rB.allianceUntilDay = null;
+  fA.allies = fA.allies.filter(id => id !== fB.id);
+  fB.allies = fB.allies.filter(id => id !== fA.id);
+  for (const t of world.treaties || []) {
+    if (t.status !== 'active') continue;
+    if (t.factions.includes(fA.id) && t.factions.includes(fB.id)) {
+      t.status = 'broken';
+      t.brokenBy = fA.id;
+      t.history.push(`Day ${world.day}: ถูกทำลายโดย${fA.name} — ${reason}`);
+    }
+  }
+  EventSystem.add('politics', `⚔ ${fA.name} หักหลัง${fB.name}! (${reason})`);
+  Chronicle.add({ category: 'diplomacy', importance: 5, title: `⚔ การทรยศทางการทูต: ${fA.name} หักหลัง ${fB.name}`, description: reason, factions: [fA.id, fB.id] });
+  factionTimeline(fA, `หักหลัง${fB.name}`);
+  factionTimeline(fB, `ถูก${fA.name}หักหลังสนธิสัญญา`);
+}
+
+const DiplomacySystem = {
+  DIPLO_INTERVAL: 5,
+
+  initWorld() {
+    if (!world.treaties) world.treaties = [];
+    if (!world.vassalContracts) world.vassalContracts = [];
+    for (const f of world.factions) {
+      ensureFactionDiplomacy(f);
+      for (const g of world.factions) {
+        if (g.id !== f.id) getRelation(f, g);
+      }
+    }
+  },
+
+  syncFromLegacy() {
+    this.initWorld();
+    for (const f of world.factions) {
+      for (const eid of f.enemies) {
+        const other = getFaction(eid);
+        if (other) { const r = getRelation(f, other); r.score = Math.min(r.score, -50); r.rivalry = Math.max(r.rivalry, 30); }
+      }
+      for (const aid of f.allies) {
+        const other = getFaction(aid);
+        if (other) { const r = getRelation(f, other); r.score = Math.max(r.score, 40); r.trust = Math.max(r.trust, 60); }
+      }
+    }
+  },
+
+  militaryPower(f) {
+    if (!f) return 0;
+    const settlements = world.settlements.filter(s => s.factionId === f.id);
+    const soldiers = world.agents.filter(a => a.alive && a.factionId === f.id && MILITARY_PROFS.has(a.profession)).length;
+    return settlements.length * 80 + soldiers * 12 + f.treasury * 0.05;
+  },
+
+  foodReserve(f) {
+    return sum(world.settlements.filter(s => s.factionId === f.id), s => s.stock.food);
+  },
+
+  borderTensionBetween(fA, fB) {
+    const sa = world.settlements.filter(s => s.factionId === fA.id && s.type !== 'camp');
+    const sb = world.settlements.filter(s => s.factionId === fB.id && s.type !== 'camp');
+    if (!sa.length || !sb.length) return 0;
+    let minD = Infinity;
+    for (const a of sa) for (const b of sb) minD = Math.min(minD, dist(a, b));
+    const close = minD < 350 ? (350 - minD) / 350 * 40 : 0;
+    const contested = world.routes.filter(r => {
+      const fa = getSettlement(r.a), fb = getSettlement(r.b);
+      return fa && fb && ((fa.factionId === fA.id && fb.factionId === fB.id) || (fa.factionId === fB.id && fb.factionId === fA.id));
+    });
+    const routeDanger = contested.length ? sum(contested, r => (r.threat || r.danger) * 20) / contested.length : 0;
+    return clamp(close + routeDanger, 0, 100);
+  },
+
+  rulerStats(f) {
+    const ruler = getAgent(f.rulerId);
+    if (!ruler) return { ambition: 0.5, diplomacy: 2, governance: 2, leadership: 2 };
+    return {
+      ambition: ruler.gov?.ambition ?? ruler.traits?.ambition ?? 0.5,
+      diplomacy: ruler.skills?.diplomacy ?? 2,
+      governance: ruler.skills?.governance ?? 2,
+      leadership: ruler.skills?.leadership ?? 2
+    };
+  },
+
+  tick() {
+    if (!world) return;
+    this.updateTreaties();
+    this.updateWarExhaustion();
+    if (world.day % this.DIPLO_INTERVAL !== 0) return;
+    this.update();
+  },
+
+  updateTreaties() {
+    for (const t of world.treaties || []) {
+      if (t.status !== 'active') continue;
+      if (t.endDay && world.day >= t.endDay) {
+        t.status = 'expired';
+        t.history.push(`Day ${world.day}: หมดอายุ`);
+        const fA = getFaction(t.factions[0]), fB = getFaction(t.factions[1]);
+        if (fA && fB && t.type === 'alliance') {
+          fA.allies = fA.allies.filter(id => id !== fB.id);
+          fB.allies = fB.allies.filter(id => id !== fA.id);
+        }
+      }
+    }
+    this.processVassals();
+  },
+
+  updateWarExhaustion() {
+    for (const f of world.factions) {
+      if (f.isBandit) continue;
+      ensureFactionDiplomacy(f);
+      const atWar = f.warState || world.wars.some(w => !w.endDay && (w.attackerId === f.id || w.defenderId === f.id));
+      if (atWar) {
+        const w = world.wars.find(x => !x.endDay && (x.attackerId === f.id || x.defenderId === f.id));
+        f.diplomacy.warExhaustion = clamp(f.diplomacy.warExhaustion + 0.15 + (w?.casualties || 0) * 0.002, 0, 100);
+        if (f.diplomacy.warExhaustion > 50) {
+          for (const s of world.settlements.filter(x => x.factionId === f.id)) s.unrest = clamp(s.unrest + 0.08, 0, 100);
+        }
+      } else {
+        f.diplomacy.warExhaustion = Math.max(0, f.diplomacy.warExhaustion - 0.12);
+      }
+    }
+  },
+
+  processVassals() {
+    for (const v of world.vassalContracts || []) {
+      if (!v.active) continue;
+      const overlord = getFaction(v.overlordFactionId), vassal = getFaction(v.vassalFactionId);
+      if (!overlord || !vassal) { v.active = false; continue; }
+      if (world.day - (v.lastTributeDay || v.startDay) >= 30) {
+        const tribute = Math.min(vassal.treasury * v.tributeRate, 120);
+        if (vassal.treasury >= tribute && tribute > 5) {
+          vassal.treasury -= tribute;
+          overlord.treasury += tribute;
+          v.lastTributeDay = world.day;
+          if (chance(0.15)) EventSystem.add('economy', `💰 ${vassal.name} ส่งบรรณาการ ${fmt(tribute)} ทองให้${overlord.name}`);
+        } else {
+          v.brokenPromises = (v.brokenPromises || 0) + 1;
+          v.loyalty = clamp((v.loyalty || 50) - 3, 0, 100);
+        }
+      }
+      if ((v.loyalty || 50) < 25 && chance(0.04)) this.breakVassalage(vassal, overlord, 'ประกาศเอกราชจากความไม่พอใจ');
+      if (vassal.treasury > overlord.treasury * 1.5 && (v.loyalty || 50) > 40 && chance(0.02)) {
+        this.breakVassalage(vassal, overlord, 'แข็งแกร่งพอจะแยกตัวได้');
+      }
+    }
+  },
+
+  update() {
+    const factions = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+    for (const f of factions) {
+      for (const other of factions) {
+        if (other.id === f.id) continue;
+        const r = getRelation(f, other);
+        r.borderTension = this.borderTensionBetween(f, other);
+        r.tradeValue = this.estimateTradeValue(f, other);
+        this.evaluatePair(f, other);
+      }
+    }
+  },
+
+  estimateTradeValue(fA, fB) {
+    const routes = world.routes.filter(r => {
+      const a = getSettlement(r.a), b = getSettlement(r.b);
+      return a && b && ((a.factionId === fA.id && b.factionId === fB.id) || (a.factionId === fB.id && b.factionId === fA.id));
+    });
+    if (!routes.length) return 0;
+    return clamp(routes.length * 18 + sum(routes, r => r.traffic * 3), 12, 100);
+  },
+
+  evaluatePair(f, other) {
+    if (areAtWar(f, other)) {
+      this.considerPeace(f, other);
+      return;
+    }
+    const rs = this.rulerStats(f);
+    const myPow = this.militaryPower(f), theirPow = this.militaryPower(other);
+    const r = getRelation(f, other);
+    const exhaustion = f.diplomacy.warExhaustion;
+
+    if (r.nonAggressionUntilDay && r.nonAggressionUntilDay > world.day) {
+      if (f.diplomacy.diplomaticPersonality === 'opportunist' && theirPow < myPow * 0.6 && rs.ambition > 0.7 && chance(0.03)) {
+        this.betray(f, other, 'ฉวยโอกาสทำลายสัญญาไม่รุกราน');
+        return;
+      }
+    }
+
+    const warScore = (theirPow < myPow * 0.7 ? 25 : 0) + r.borderTension * 0.4 + rs.ambition * 30
+      - exhaustion * 0.5 - (r.tradeValue * 0.3) - (r.score > 20 ? r.score * 0.2 : 0)
+      - (r.nonAggressionUntilDay > world.day ? 50 : 0)
+      - (areAllied(f, other) ? 80 : 0);
+    const peaceScore = exhaustion * 0.8 + (f.treasury < 200 ? 15 : 0) + (this.foodReserve(f) < 80 ? 20 : 0)
+      - (myPow > theirPow * 1.3 ? 20 : 0);
+    const vassalScore = (theirPow > myPow * 1.4 ? 30 : 0) + (this.foodReserve(f) < 60 ? 15 : 0)
+      - rs.ambition * 25 - (myPow > 50 ? 10 : 0);
+    const allianceScore = r.trust * 0.3 + r.tradeValue * 0.4 + (r.rivalry > 30 ? -20 : 0)
+      - (r.score < -20 ? 30 : 0);
+
+    const warThresh = f.diplomacy.diplomaticPersonality === 'aggressive' ? 35 : f.diplomacy.diplomaticPersonality === 'defensive' ? 55 : 45;
+    if (warScore > warThresh && !isVassalOf(f, other) && chance(0.1)) {
+      this.declareWar(f, other, 'ความตึงเครียดชายแดนและความทะเยอทะยานของผู้นำ');
+      return;
+    }
+    if (allianceScore > 38 && r.trust > 48 && !areAllied(f, other) && chance(0.14)) {
+      setTreaty(f, other, 'alliance', 180);
+      return;
+    }
+    if (allianceScore > 22 && r.trust > 35 && !r.nonAggressionUntilDay && chance(0.16)) {
+      setTreaty(f, other, 'non_aggression', 90);
+      return;
+    }
+    if (r.tradeValue > 15 && r.score > -15 && chance(0.12)) {
+      setTreaty(f, other, 'trade', 120);
+      return;
+    }
+    if (vassalScore > 35 && theirPow > myPow * 1.4 && chance(0.08)) {
+      this.offerVassalage(f, other);
+      return;
+    }
+    if (theirPow > myPow * 1.2 && f.treasury < 180 && chance(0.07)) {
+      this.payTribute(f, other);
+    }
+    if (theirPow > myPow * 1.8 && chance(0.05)) {
+      this.demandSurrender(other, f);
+    }
+    if (!areAtWar(f, other) && r.trust > 40 && world.day > 20 && chance(0.2)) {
+      if (r.tradeValue > 12 && !(world.treaties || []).some(t => t.status === 'active' && t.type === 'trade' && t.factions.includes(f.id) && t.factions.includes(other.id))) {
+        setTreaty(f, other, 'trade', 100);
+      } else if (!r.nonAggressionUntilDay && chance(0.55)) {
+        setTreaty(f, other, 'non_aggression', 80);
+      }
+    }
+  },
+
+  considerPeace(f, other) {
+    const exhaustion = f.diplomacy.warExhaustion;
+    const rs = this.rulerStats(f);
+    const peaceScore = exhaustion * 0.9 + (f.treasury < 150 ? 20 : 0) - rs.ambition * 25;
+    if (peaceScore > 32 && chance(0.22)) {
+      this.offerPeace(f, other);
+    }
+  },
+
+  declareWar(f, other, cause) {
+    if (areAtWar(f, other)) return;
+    if (getRelation(f, other).nonAggressionUntilDay > world.day || areAllied(f, other)) {
+      this.betray(f, other, 'ประกาศสงครามทั้งที่มีสัญญา');
+    }
+    startWar(f, other, cause);
+  },
+
+  offerPeace(f, other) {
+    const w = activeWarBetween(f.id, other.id);
+    if (!w) return;
+    const otherExhaustion = other.diplomacy?.warExhaustion || 0;
+    const accept = otherExhaustion > 35 || this.militaryPower(f) > this.militaryPower(other) * 1.2;
+    if (accept && chance(0.5)) {
+      EventSystem.add('politics', `🕊 ${f.name} กับ ${other.name} ตกลงสงบศึก`);
+      setTreaty(f, other, 'peace', 60);
+      Chronicle.add({ category: 'diplomacy', importance: 5, title: `🕊 สงบศึก: ${f.name}–${other.name}`, description: 'สงครามยาวนานจบลงด้วยการเจรจา', factions: [f.id, other.id] });
+    }
+  },
+
+  payTribute(f, other) {
+    const amount = Math.min(f.treasury * 0.12, 80);
+    if (amount < 10) return;
+    f.treasury -= amount;
+    other.treasury += amount;
+    getRelation(f, other).tributeUntilDay = world.day + 60;
+    changeRelation(f, other, 10, 'ส่งบรรณาการ');
+    changeRelation(other, f, 8, 'ได้รับบรรณาการ');
+    EventSystem.add('economy', `💰 ${f.name} ส่งบรรณาการ ${fmt(amount)} ทองให้${other.name}`);
+    Chronicle.add({ category: 'diplomacy', importance: 3, title: `💰 บรรณาการ: ${f.name} → ${other.name}`, description: `จ่าย ${fmt(amount)} ทองเพื่อหลีกเลี่ยงความขัดแย้ง`, factions: [f.id, other.id] });
+  },
+
+  offerVassalage(vassal, overlord) {
+    if (isVassalOf(vassal, overlord)) return;
+    const r = getRelation(vassal, overlord);
+    r.vassalOf = overlord.id;
+    getRelation(overlord, vassal).overlordOf = getRelation(overlord, vassal).overlordOf || [];
+    if (!getRelation(overlord, vassal).overlordOf.includes(vassal.id)) getRelation(overlord, vassal).overlordOf.push(vassal.id);
+    if (!overlord.vassalIds.includes(vassal.id)) overlord.vassalIds.push(vassal.id);
+    const contract = {
+      overlordFactionId: overlord.id, vassalFactionId: vassal.id,
+      startDay: world.day, tributeRate: 0.08, militarySupportExpected: true,
+      protectionExpected: true, loyalty: 65, autonomy: 0.7,
+      lastTributeDay: world.day, brokenPromises: 0, active: true
+    };
+    world.vassalContracts.push(contract);
+    createTreaty('vassalage', overlord, vassal, 365, { tributeRate: 0.08 });
+    EventSystem.add('politics', `👑 ${vassal.name} ยอมเป็นเมืองขึ้นของ${overlord.name}`);
+    Chronicle.add({ category: 'diplomacy', importance: 5, title: `👑 เมืองขึ้น: ${vassal.name} ภายใต้ ${overlord.name}`, factions: [vassal.id, overlord.id] });
+    factionTimeline(vassal, `ยอมเป็นเมืองขึ้นของ${overlord.name}`);
+    factionTimeline(overlord, `รับ${vassal.name}เป็นเมืองขึ้น`);
+    const w = activeWarBetween(vassal.id, overlord.id);
+    if (w) endWar(w, overlord.id, `${vassal.name}ยอมจำนนเป็นเมืองขึ้น`, { peaceType: 'vassalage' });
+  },
+
+  breakVassalage(vassal, overlord, reason) {
+    for (const v of world.vassalContracts) {
+      if (v.vassalFactionId === vassal.id && v.overlordFactionId === overlord.id) v.active = false;
+    }
+    getRelation(vassal, overlord).vassalOf = null;
+    overlord.vassalIds = overlord.vassalIds.filter(id => id !== vassal.id);
+    changeRelation(vassal, overlord, -25, reason);
+    EventSystem.add('politics', `🔥 ${vassal.name} แยกตัวจาก${overlord.name} (${reason})`);
+    Chronicle.add({ category: 'diplomacy', importance: 4, title: `🔥 ${vassal.name} แยกตัวจากเจ้าเหนือหัว`, description: reason, factions: [vassal.id, overlord.id] });
+    factionTimeline(vassal, `แยกตัวจาก${overlord.name}: ${reason}`);
+    if (chance(0.35)) this.declareWar(vassal, overlord, reason);
+  },
+
+  demandSurrender(strong, weak) {
+    if (areAtWar(strong, weak)) return;
+    const accept = this.militaryPower(weak) < this.militaryPower(strong) * 0.35 && weak.diplomacy.warExhaustion > 30;
+    if (accept && chance(0.4)) {
+      this.offerVassalage(weak, strong);
+    } else if (chance(0.3)) {
+      changeRelation(weak, strong, -15, 'ปฏิเสธคำขาด');
+      this.declareWar(strong, weak, `${weak.name}ปฏิเสธคำขาด`);
+    }
+  },
+
+  betray(f, other, reason) {
+    breakTreaty(f, other, reason);
+  },
+
+  onWarDeclared(attacker, defender, cause) {
+    ensureFactionDiplomacy(attacker);
+    ensureFactionDiplomacy(defender);
+    changeRelation(attacker, defender, -30, 'สงคราม');
+    changeRelation(defender, attacker, -35, 'ถูกรุกราน');
+    getRelation(attacker, defender).lastWarDay = world.day;
+    getRelation(defender, attacker).lastWarDay = world.day;
+    getRelation(attacker, defender).rivalry = clamp(getRelation(attacker, defender).rivalry + 20, 0, 100);
+    for (const t of world.treaties || []) {
+      if (t.status === 'active' && t.factions.includes(attacker.id) && t.factions.includes(defender.id)) {
+        t.status = 'broken';
+        t.brokenBy = attacker.id;
+      }
+    }
+  },
+
+  onWarEnded(w, winnerId, reason, peaceOpts) {
+    const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
+    if (att) att.diplomacy.warExhaustion = Math.max(0, att.diplomacy.warExhaustion - 15);
+    if (def) def.diplomacy.warExhaustion = Math.max(0, def.diplomacy.warExhaustion - 15);
+    if (peaceOpts?.peaceType === 'peace_treaty' && att && def) {
+      changeRelation(att, def, 15, 'สงบศึก');
+      changeRelation(def, att, 15, 'สงบศึก');
+    }
+  },
+
+  /* Sandbox / test helpers */
+  forcePeace(fA, fB) { setTreaty(fA, fB, 'peace', 120); },
+  forceWar(fA, fB) { this.declareWar(fA, fB, '[Sandbox] บังคับสงคราม'); },
+  improveRelations(fA, fB, n) { changeRelation(fA, fB, n || 30, '[Sandbox] ปรับปรุงความสัมพันธ์'); changeRelation(fB, fA, n || 30, '[Sandbox] ปรับปรุงความสัมพันธ์'); },
+  damageRelations(fA, fB, n) { changeRelation(fA, fB, -(n || 30), '[Sandbox] ทำลายความสัมพันธ์'); changeRelation(fB, fA, -(n || 30), '[Sandbox] ทำลายความสัมพันธ์'); },
+  forceAlliance(fA, fB) { setTreaty(fA, fB, 'alliance', 200); },
+  forceBreakTreaty(fA, fB) { breakTreaty(fA, fB, '[Sandbox] บังคับยกเลิกสนธิสัญญา'); },
+  forceVassal(vassal, overlord) { this.offerVassalage(vassal, overlord); },
+
+  diplomacySummaryHTML() {
+    const factions = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+    let html = '';
+    for (const f of factions) {
+      html += `<div class="dip-faction"><b style="color:${f.color}">■ ${f.name}</b>`;
+      html += ` <span class="dip-meta">เหนื่อยล้า ${fmt(f.diplomacy?.warExhaustion || 0, 0)}% · ${f.diplomacy?.diplomaticPersonality || '?'}</span>`;
+      html += `<ul class="dip-list">`;
+      for (const other of factions) {
+        if (other.id === f.id) continue;
+        const r = getRelation(f, other);
+        const state = areAtWar(f, other) ? '⚔ สงคราม' : areAllied(f, other) ? '🛡 พันธมิตร' : isVassalOf(f, other) ? '👑 เมืองขึ้น' : isVassalOf(other, f) ? '👑 เจ้าเหนือหัว' : '🕊 เป็นกลาง';
+        const treaties = (world.treaties || []).filter(t => t.status === 'active' && t.factions.includes(f.id) && t.factions.includes(other.id)).map(t => t.type).join(', ');
+        html += `<li>${this.linkFaction(other)}: <span class="${r.score < -20 ? 'bad' : r.score > 20 ? 'good' : ''}">${fmt(r.score)}</span> ${state}${treaties ? ` [${treaties}]` : ''}</li>`;
+      }
+      html += `</ul></div>`;
+    }
+    const activeTreaties = (world.treaties || []).filter(t => t.status === 'active').slice(-8);
+    if (activeTreaties.length) {
+      html += `<div class="dip-section"><b>สนธิสัญญาที่ใช้อยู่</b><ul class="dip-list">`;
+      for (const t of activeTreaties) {
+        const names = t.factions.map(id => getFaction(id)?.name || '?').join(' ↔ ');
+        html += `<li>${t.type}: ${names} (Day ${t.startDay}${t.endDay ? '–' + t.endDay : ''})</li>`;
+      }
+      html += `</ul></div>`;
+    }
+    return html || '<p class="hint">ยังไม่มีความสัมพันธ์ทางการทูต</p>';
+  },
+
+  linkFaction(f) { return f ? `<span style="color:${f.color}">${f.name}</span>` : '?'; }
+};
+
 /* ═══════════════════ 15. SIMULATION TICK ═══════════════════ */
 
 function simulateDay() {
@@ -3401,6 +3976,7 @@ function simulateDay() {
   /* 12-17. Governance + factions */
   for (const s of world.settlements) GovernanceSystem.updateSettlement(s);
   GovernanceSystem.updateFactions();
+  DiplomacySystem.tick();
 
   // เติม garrison จากทหารว่าง
   for (const s of world.settlements) {
@@ -3481,7 +4057,12 @@ function simulateDay() {
     if (w.endDay) continue;
     const lastBattleDay = w.battles.length ? w.battles[w.battles.length - 1].day : w.startDay;
     if (world.day - lastBattleDay > 60 && world.day - w.startDay > 90) {
-      endWar(w, null, 'ทั้งสองฝ่ายอ่อนล้าจนสงครามค่อยๆ มอดดับ');
+      const att = getFaction(w.attackerId), def = getFaction(w.defenderId);
+      if (att && def && !att.isBandit && !def.isBandit) {
+        setTreaty(att, def, 'peace', 120);
+      } else {
+        endWar(w, null, 'ทั้งสองฝ่ายอ่อนล้าจนสงครามค่อยๆ มอดดับ', { peaceType: 'peace_treaty' });
+      }
     }
   }
 
@@ -3956,6 +4537,21 @@ const UI = {
       document.getElementById('summaryModal').classList.add('hidden');
     });
 
+    document.getElementById('btnDiplomacy')?.addEventListener('click', () => {
+      const p = document.getElementById('diplomacyPanel');
+      if (!p) return;
+      p.classList.toggle('hidden');
+      document.getElementById('chroniclePanel')?.classList.add('hidden');
+      document.getElementById('summaryModal')?.classList.add('hidden');
+      document.getElementById('savePanel')?.classList.add('hidden');
+      this.chronicleOpen = false;
+      const body = document.getElementById('diplomacyBody');
+      if (body) body.innerHTML = DiplomacySystem.diplomacySummaryHTML();
+    });
+    document.getElementById('diplomacyClose')?.addEventListener('click', () => {
+      document.getElementById('diplomacyPanel')?.classList.add('hidden');
+    });
+
     // ── sandbox tools ──
     for (const btn of document.querySelectorAll('.tool-btn')) {
       btn.addEventListener('click', () => SandboxTools.activate(btn.dataset.tool, btn));
@@ -4099,6 +4695,37 @@ const UI = {
       html += `</div>`;
     }
     html += `<div class="sum-section"><span class="sum-head">ภัยคุกคามหลัก</span><br>${threats.join('<br>')}</div>`;
+
+    const kingdoms = liveFactions.filter(f => !f.isBandit);
+    const activeTreaties = (world.treaties || []).filter(t => t.status === 'active');
+    const alliances = activeTreaties.filter(t => t.type === 'alliance');
+    const vassals = (world.vassalContracts || []).filter(v => v.active);
+    const maxExhaust = kingdoms.reduce((m, f) => Math.max(m, f.diplomacy?.warExhaustion || 0), 0);
+    const exhaustedF = kingdoms.find(f => (f.diplomacy?.warExhaustion || 0) === maxExhaust);
+    const isolated = kingdoms.filter(f => {
+      const allies = f.allies.length + (world.treaties || []).filter(t => t.status === 'active' && t.type === 'alliance' && t.factions.includes(f.id)).length;
+      return allies === 0 && !f.warState;
+    });
+    if (alliances.length) {
+      html += `<div class="sum-section"><span class="sum-head">พันธมิตรหลัก</span><br>`;
+      html += alliances.slice(-3).map(t => t.factions.map(id => getFaction(id)?.name).join(' ↔ ')).join('<br>');
+      html += `</div>`;
+    }
+    if (vassals.length) {
+      html += `<div class="sum-section"><span class="sum-head">เมืองขึ้น</span><br>`;
+      html += vassals.map(v => `${getFaction(v.vassalFactionId)?.name} ภายใต้ ${getFaction(v.overlordFactionId)?.name}`).join('<br>');
+      html += `</div>`;
+    }
+    if (exhaustedF && maxExhaust > 20) {
+      html += `<div class="sum-section"><span class="sum-head">ความเหนื่อยล้าจากสงคราม</span><br>${exhaustedF.name} (${fmt(maxExhaust, 0)}%)</div>`;
+    }
+    if (isolated.length) {
+      html += `<div class="sum-section"><span class="sum-head">ฝ่ายโดดเดี่ยว</span><br>${isolated.map(f => f.name).join(', ')}</div>`;
+    }
+    const lastTreaty = activeTreaties[activeTreaties.length - 1];
+    if (lastTreaty) {
+      html += `<div class="sum-section"><span class="sum-head">สนธิสัญญาล่าสุด</span><br>${lastTreaty.type}: ${lastTreaty.factions.map(id => getFaction(id)?.name).join(' ↔ ')} (Day ${lastTreaty.startDay})</div>`;
+    }
 
     if (world.eras.length) {
       const era = world.eras[world.eras.length - 1];
@@ -4402,7 +5029,49 @@ const UI = {
     html += this.kv('ประชากรในสังกัด', members.length);
     html += this.kv('กำลังทหาร', soldiers.length);
     html += this.kv('คลังกลาง', fmt(f.treasury) + ' ทอง');
+    if (!f.isBandit && f.diplomacy) {
+      html += this.kv('War Exhaustion', fmt(f.diplomacy.warExhaustion, 0) + '%', f.diplomacy.warExhaustion > 50 ? 'bad' : '');
+      html += this.kv('Diplomatic Personality', f.diplomacy.diplomaticPersonality || 'balanced');
+    }
     html += `</div>`;
+    if (!f.isBandit && f.diplomacy) {
+      const others = world.factions.filter(o => o.id !== f.id && !o.isBandit && world.settlements.some(s => s.factionId === o.id));
+      if (others.length) {
+        html += `<div class="insp-section"><h4>ความสัมพันธ์ (Phase 11)</h4>`;
+        for (const o of others) {
+          const r = getRelation(f, o);
+          const state = areAtWar(f, o) ? '⚔ สงคราม' : areAllied(f, o) ? '🛡 พันธมิตร' : isVassalOf(f, o) ? '👑 เมืองขึ้น' : isVassalOf(o, f) ? '👑 เจ้าเหนือหัว' : '—';
+          html += this.kv(this.link('faction', o.id, o.name), `score ${fmt(r.score)} · trust ${fmt(r.trust)} · ${state}`, r.score < -20 ? 'bad' : r.score > 20 ? 'good' : '');
+        }
+        html += `</div>`;
+      }
+      const treaties = (world.treaties || []).filter(t => t.status === 'active' && t.factions.includes(f.id));
+      if (treaties.length) {
+        html += `<div class="insp-section"><h4>สนธิสัญญา</h4>`;
+        for (const t of treaties) {
+          const otherId = t.factions.find(id => id !== f.id);
+          const other = getFaction(otherId);
+          html += this.kv(t.type, `${other ? other.name : '?'} (Day ${t.startDay}${t.endDay ? '–' + t.endDay : ''})`);
+        }
+        html += `</div>`;
+      }
+      const vassals = (world.vassalContracts || []).filter(v => v.active && v.overlordFactionId === f.id);
+      const overlord = (world.vassalContracts || []).find(v => v.active && v.vassalFactionId === f.id);
+      if (vassals.length || overlord) {
+        html += `<div class="insp-section"><h4>เมืองขึ้น / เจ้าเหนือหัว</h4>`;
+        if (overlord) html += this.kv('เจ้าเหนือหัว', getFaction(overlord.overlordFactionId)?.name || '?');
+        for (const v of vassals) html += this.kv('เมืองขึ้น', getFaction(v.vassalFactionId)?.name || '?');
+        html += `</div>`;
+      }
+      if (f.diplomacy.diplomaticMemory?.length) {
+        html += `<div class="insp-section"><h4>ความทรงจำทางการทูต</h4>`;
+        for (const m of f.diplomacy.diplomaticMemory.slice(-6).reverse()) {
+          const on = getFaction(m.otherId);
+          html += `<div class="timeline-entry"><span class="tl-day">Day ${m.day}</span><span class="tl-text">${on ? on.name : '?'}: ${m.text}</span></div>`;
+        }
+        html += `</div>`;
+      }
+    }
     if (settlements.length) {
       html += `<div class="insp-section"><h4>ดินแดน</h4>`;
       for (const s of settlements) html += this.kv(this.link('settlement', s.id, s.name), s.type);
@@ -4582,7 +5251,7 @@ const SandboxTools = {
         const kingdoms = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
         if (kingdoms.length >= 2) {
           const [f1, f2] = [kingdoms[0], kingdoms[1]];
-          startWar(f1, f2, 'พลังลึกลับปลุกปั่นความเกลียดชังระหว่างสองฝ่าย');
+          DiplomacySystem.declareWar(f1, f2, 'พลังลึกลับปลุกปั่นความเกลียดชังระหว่างสองฝ่าย');
           EventSystem.add('war', `💥 [Sandbox] ${f1.name} ประกาศสงครามกับ ${f2.name}!`);
         } else if (kingdoms.length === 1) {
           // มีอาณาจักรเดียว → บังคับเมืองหนึ่งแยกตัวแล้วเปิดสงคราม
@@ -4598,6 +5267,38 @@ const SandboxTools = {
               GovernanceSystem.declareIndependence(gov, s, f);
             }
           }
+        }
+      },
+      forcePeace: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.forcePeace(ks[0], ks[1]); EventSystem.add('politics', `🕊 [Sandbox] บังคับสงบศึก ${ks[0].name}–${ks[1].name}`); }
+      },
+      forceWar: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.forceWar(ks[0], ks[1]); EventSystem.add('war', `💥 [Sandbox] บังคับสงคราม ${ks[0].name}–${ks[1].name}`); }
+      },
+      improveRelations: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.improveRelations(ks[0], ks[1], 35); EventSystem.add('politics', `🤝 [Sandbox] ปรับปรุงความสัมพันธ์ ${ks[0].name}–${ks[1].name}`); }
+      },
+      damageRelations: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.damageRelations(ks[0], ks[1], 35); EventSystem.add('politics', `💢 [Sandbox] ทำลายความสัมพันธ์ ${ks[0].name}–${ks[1].name}`); }
+      },
+      createAlliance: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.forceAlliance(ks[0], ks[1]); EventSystem.add('politics', `🛡 [Sandbox] สร้างพันธมิตร ${ks[0].name}–${ks[1].name}`); }
+      },
+      breakTreaty: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) { DiplomacySystem.forceBreakTreaty(ks[0], ks[1]); }
+      },
+      makeVassal: () => {
+        const ks = world.factions.filter(f => !f.isBandit && world.settlements.some(s => s.factionId === f.id));
+        if (ks.length >= 2) {
+          const sorted = ks.slice().sort((a, b) => DiplomacySystem.militaryPower(b) - DiplomacySystem.militaryPower(a));
+          DiplomacySystem.forceVassal(sorted[1], sorted[0]);
+          EventSystem.add('politics', `👑 [Sandbox] ${sorted[1].name} เป็นเมืองขึ้นของ${sorted[0].name}`);
         }
       }
     };
@@ -4715,7 +5416,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '13.0';
+const SAVE_SCHEMA_VERSION = '13.1';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -4882,6 +5583,8 @@ const SaveSystem = {
     w.chronicle = w.chronicle || [];
     w.wars = w.wars || [];
     w.eras = w.eras || [];
+    w.treaties = w.treaties || [];
+    w.vassalContracts = w.vassalContracts || [];
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
       bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0,
@@ -4984,6 +5687,7 @@ const SaveSystem = {
     f.timeline = f.timeline || [];
     f.warState = !!f.warState;
     f.isBandit = !!f.isBandit;
+    ensureFactionDiplomacy(f);
   },
 
   applyPostLoad() {
@@ -5003,6 +5707,7 @@ const SaveSystem = {
         if (u) u.armyId = ar.id;
       }
     }
+    DiplomacySystem.syncFromLegacy();
   },
 
   applyUiPrefs(prefs) {
@@ -5179,6 +5884,15 @@ const SaveSystem = {
       else lines.push(w.cause || '—');
       lines.push('');
     }
+    lines.push('## การทูตและสนธิสัญญา');
+    lines.push('');
+    for (const t of (world.treaties || []).slice().sort((a, b) => a.startDay - b.startDay)) {
+      const names = t.factions.map(id => getFaction(id)?.name || '?').join(' ↔ ');
+      lines.push(`- Day ${t.startDay}: ${t.type} (${t.status}) — ${names}`);
+    }
+    const dipChron = world.chronicle.filter(c => c.category === 'diplomacy');
+    for (const c of dipChron) lines.push(`- Day ${c.day}: ${c.title}`);
+    lines.push('');
     lines.push('## Chronicle (เรียงตามวัน)');
     lines.push('');
     const sorted = world.chronicle.slice().sort((a, b) => a.day - b.day || a.id - b.id);
@@ -5221,6 +5935,10 @@ const SaveSystem = {
     if (richest) txt += `เมืองมั่งคั่ง: ${richest.name} (${fmt(richest.treasury)} ทอง)\n`;
     if (famous) txt += `บุคคลแห่งยุค: ${famous.name} (fame ${fmt(famous.fame)}) — ${lifeSummary(famous)}\n`;
     if (activeWars.length) txt += `สงครามดำเนินอยู่: ${activeWars.map(w => w.name).join(', ')}\n`;
+    const treaties = (world.treaties || []).filter(t => t.status === 'active');
+    if (treaties.length) txt += `สนธิสัญญา: ${treaties.map(t => t.type).join(', ')}\n`;
+    const vassals = (world.vassalContracts || []).filter(v => v.active);
+    if (vassals.length) txt += `เมืองขึ้น: ${vassals.map(v => `${getFaction(v.vassalFactionId)?.name}→${getFaction(v.overlordFactionId)?.name}`).join(', ')}\n`;
     if (world.eras.length) txt += `ยุคล่าสุด: ${world.eras[world.eras.length - 1].text}\n`;
     return txt.trim();
   },
