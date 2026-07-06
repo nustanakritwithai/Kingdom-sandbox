@@ -372,6 +372,16 @@ body { display: flex; flex-direction: column; }
 .timeline-entry .tl-day { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .timeline-entry .tl-text { color: var(--text); }
 
+.insp-section .sub-head {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin: 6px 0 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
 /* ── Scrollbars ──────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--panel); }

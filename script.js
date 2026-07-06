@@ -22,6 +22,7 @@
     16. RENDERER        (canvas + heatmaps)
     17. UI              (toolbar / inspector / sandbox tools)
     18. INIT
+   Phase 10.5: Simulation Stability + Ambition + Combat Depth
    ═══════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -74,6 +75,69 @@ const BUILDINGS = {
 };
 
 const SETTLEMENT_RADIUS = { village: 9, town: 16, fort: 12, castle: 20, camp: 10 };
+
+/* ── Phase 10.5: Equipment & combat definitions ── */
+const WEAPON_DEFS = {
+  sword:  { price: 60,  attack: 12, defense: 4,  accuracy: 0.75, durability: 80,  prof: 'swordsman' },
+  spear:  { price: 45,  attack: 10, defense: 6,  accuracy: 0.7,  durability: 70,  prof: 'spearman', antiCavalry: 1.35 },
+  axe:    { price: 50,  attack: 14, defense: 2,  accuracy: 0.65, durability: 65,  prof: 'swordsman' },
+  bow:    { price: 45,  attack: 11, defense: 0,  accuracy: 0.8,  durability: 55,  prof: 'archer', ranged: true },
+  shield: { price: 35,  attack: 2,  defense: 10, accuracy: 0,   durability: 90,  prof: null, antiRanged: 0.65 }
+};
+const ARMOR_DEFS = {
+  cloth:     { price: 25,  armor: 4,  dodge: 0.05, fatigue: 1.0,  durability: 40 },
+  leather:   { price: 55,  armor: 10, dodge: 0.08, fatigue: 1.1,  durability: 60 },
+  chainmail: { price: 120, armor: 18, dodge: 0.03, fatigue: 1.25, durability: 90 },
+  plate:     { price: 200, armor: 28, dodge: 0.01, fatigue: 1.45, durability: 120 }
+};
+const MOUNT_DEFS = {
+  horse: { price: 120, attack: 4, speed: 50, charge: 1.3, durability: 70, prof: 'cavalry' }
+};
+const TOOL_DEF = { price: 35, workBonus: 1.5, durability: 50 };
+const CART_DEF = { price: 80, capacity: 14, durability: 70 };
+
+const MIGRATION_COOLDOWN_DAYS = 12;
+const FORM_SQUAD_LEADERSHIP = 2.8;
+const FORM_SQUAD_FIGHTING = 2.2;
+const FORM_SQUAD_MONEY = 55;
+
+function defaultCombatStats() {
+  return {
+    strength: rand(4, 8), agility: rand(4, 8), endurance: rand(4, 8), perception: rand(4, 8),
+    intelligence: rand(4, 8), charisma: rand(4, 8), discipline: rand(4, 8), courage: rand(4, 8)
+  };
+}
+
+function emptyEquipment() {
+  return { mainHand: null, offHand: null, ranged: null, armor: null, mount: null, tool: null };
+}
+
+function equipSlot(type, slot) {
+  if (!type) return null;
+  const d = WEAPON_DEFS[type] || ARMOR_DEFS[type] || MOUNT_DEFS[type] || (type === 'tool' ? TOOL_DEF : null);
+  if (!d) return null;
+  return { type, slot, durability: d.durability || 50, maxDurability: d.durability || 50 };
+}
+
+function syncLegacyInventory(a) {
+  if (!a.equipment) a.equipment = emptyEquipment();
+  if (a.inventory.weapon > 0 && !a.equipment.mainHand) {
+    a.equipment.mainHand = equipSlot('sword', 'mainHand');
+    a.inventory.weapon = 0;
+  }
+  if (a.inventory.bow > 0 && !a.equipment.ranged) {
+    a.equipment.ranged = equipSlot('bow', 'ranged');
+    a.inventory.bow = 0;
+  }
+  if (a.inventory.horse > 0 && !a.equipment.mount) {
+    a.equipment.mount = equipSlot('horse', 'mount');
+    a.inventory.horse = 0;
+  }
+  if (a.inventory.tools > 0 && !a.equipment.tool) {
+    a.equipment.tool = equipSlot('tool', 'tool');
+    a.inventory.tools = 0;
+  }
+}
 
 /* ═════════════ 3. WORLD STATE & EVENT SYSTEM ═════════════ */
 
@@ -302,7 +366,17 @@ function createSettlement(opt) {
     lastCapturedDay: -999,
     // ศักยภาพการผลิตพื้นฐานของพื้นที่
     prodPotential: opt.prod || { food: 0, wood: 0, ore: 0 },
-    history: []
+    history: [],
+    // ── Phase 10.5: migration & logistics ──
+    housingCapacity: opt.housingCapacity != null ? opt.housingCapacity : ({ village: 18, town: 35, fort: 22, castle: 28, camp: 12 }[opt.type] || 15),
+    jobSlots: opt.jobSlots != null ? opt.jobSlots : ({ village: 14, town: 28, fort: 16, castle: 22, camp: 8 }[opt.type] || 12),
+    crowding: 0,
+    foodPerCapita: 0,
+    foodReserveTargetDays: opt.foodReserveTargetDays != null ? opt.foodReserveTargetDays : 4,
+    maxFoodExportRatio: opt.maxFoodExportRatio != null ? opt.maxFoodExportRatio : 0.5,
+    recentInbound: 0,
+    townCaravanId: null,
+    caravanSubsidy: 0
   };
   world.settlements.push(s);
   return s;
@@ -317,7 +391,14 @@ function createRoute(aId, bId, quality) {
     traffic: 0,
     roadQuality: quality != null ? quality : rand(0.4, 0.8),
     patrolLevel: 0,
-    destroyed: false
+    destroyed: false,
+    // ── Phase 10.5: route security ──
+    threat: 0,
+    recentRaids: 0,
+    caravanLosses: 0,
+    bounty: 0,
+    patrolMissionId: null,
+    priceGapFood: 0
   };
   world.routes.push(r);
   return r;
@@ -370,7 +451,18 @@ function createAgent(opt) {
     stats: { hunger: rand(60, 95), energy: rand(60, 100), health: 100, morale: rand(50, 75), wealth: 0 },
     money: opt.money != null ? opt.money : randInt(10, 40),
     inventory: Object.assign({ food: randInt(1, 4), wood: 0, ore: 0, tools: 0, weapon: 0, bow: 0, horse: 0, cart: 0 }, opt.inventory || {}),
-    durability: { tools: 0, weapon: 0, cart: 0 },   // ความทนทานคงเหลือของไอเทมที่ถืออยู่
+    durability: { tools: 0, weapon: 0, cart: 0 },   // legacy — sync กับ equipment
+    equipment: opt.equipment || emptyEquipment(),
+    combatStats: Object.assign(defaultCombatStats(), opt.combatStats || {}),
+    derivedStats: null,
+    // ── Phase 10.5: ambition & wealth progression ──
+    ambitionPlan: opt.ambitionPlan || 'survive',
+    savingGoal: opt.savingGoal || 0,
+    nextPurchase: opt.nextPurchase || null,
+    lastMigrationDay: -99,
+    isTownCaravan: !!opt.isTownCaravan,
+    caravanOwnerId: opt.caravanOwnerId || null,
+    wantedLevel: 0,
     skills: Object.assign(DEFAULT_SKILLS(), opt.skills || {}),
     traits: {
       bravery: rand(0.15, 0.9), greed: rand(0.15, 0.9), loyalty: rand(0.2, 0.95),
@@ -405,7 +497,11 @@ function createUnit(opt) {
     morale: 65, cohesion: 70, fatigue: 0,
     supply: { food: opt.food || 20, arrows: 20, weapons: 5 },
     battleHistory: [],
-    armyId: null
+    armyId: null,
+    // ── Phase 10.5 ──
+    recentVictories: 0,
+    equipmentPower: 0,
+    combatPower: 0
   };
   world.units.push(u);
   for (const id of u.memberIds) { const m = getAgent(id); if (m) m.unitId = u.id; }
@@ -452,7 +548,7 @@ function generateWorld() {
     settlements: [], routes: [], agents: [], units: [], armies: [], factions: [],
     events: [],
     chronicle: [], wars: [], eras: [],
-    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0 }
+    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0 }
   };
 
   // ── Factions ──
@@ -603,15 +699,18 @@ function seedSkillForProfession(ag, prof) {
   };
   const sk = map[prof];
   if (sk) ag.skills[sk] = rand(1, 4);
-  if (prof === 'trader') { ag.money = randInt(80, 200); ag.inventory.cart = chance(0.5) ? 1 : 0; ag.durability.cart = ag.inventory.cart ? 60 : 0; }
-  if (MILITARY_PROFS.has(prof)) {
-    ag.inventory.weapon = 1; ag.durability.weapon = randInt(30, 60);
-    if (prof === 'archer') ag.inventory.bow = 1;
-    if (prof === 'cavalry') ag.inventory.horse = 1;
-  }
+  syncLegacyInventory(ag);
+  if (prof === 'trader') { ag.money = randInt(80, 200); ag._hasCart = chance(0.5); if (ag._hasCart) ag._cartDurability = CART_DEF.durability; }
+  if (prof === 'swordsman') ag.equipment.mainHand = equipSlot('sword', 'mainHand');
+  if (prof === 'spearman') ag.equipment.mainHand = equipSlot('spear', 'mainHand');
+  if (prof === 'archer') ag.equipment.ranged = equipSlot('bow', 'ranged');
+  if (prof === 'cavalry') { ag.equipment.mount = equipSlot('horse', 'mount'); ag.equipment.mainHand = equipSlot('sword', 'mainHand'); }
+  if (prof === 'guard' || prof === 'bandit') ag.equipment.mainHand = equipSlot(chance(0.5) ? 'spear' : 'sword', 'mainHand');
+  if (MILITARY_PROFS.has(prof) && chance(0.3)) ag.equipment.offHand = equipSlot('shield', 'offHand');
   if (['farmer', 'woodcutter', 'miner'].includes(prof) && chance(0.6)) {
-    ag.inventory.tools = 1; ag.durability.tools = randInt(20, 50);
+    ag.equipment.tool = equipSlot('tool', 'tool');
   }
+  AmbitionSystem.planFor(ag);
 }
 
 /* ═══════════ 6. ROUTE GRAPH / PATHFINDING / TRAVEL ═══════════ */
@@ -701,19 +800,484 @@ function buyProvisions(a, s, want) {
 }
 
 function agentSpeed(a) {
+  syncLegacyInventory(a);
   let sp = 80;
-  if (a.inventory.horse > 0) sp += 50;
-  if (a.cargo && a.inventory.cart > 0) sp -= 8;
+  if (a.equipment && a.equipment.mount) sp += MOUNT_DEFS.horse.speed;
+  else if (a.inventory.horse > 0) sp += 50;
+  if (a.cargo && (a.inventory.cart > 0 || a._hasCart)) sp -= 8;
   else if (a.cargo) sp -= 15;
   if (a.stats.energy < 30) sp *= 0.7;
+  const ds = CombatSystem.deriveStats(a);
+  sp += ds.agility * 0.5;
   return sp;
 }
+
+/* ═══════════ 6.5 PHASE 10.5 SYSTEMS ═══════════ */
+
+const SettlementMetrics = {
+  update(s) {
+    const pop = populationOf(s);
+    s.crowding = pop / Math.max(s.housingCapacity, 1);
+    s.foodPerCapita = pop > 0 ? s.stock.food / pop : s.stock.food;
+    if (s.recentInbound > 0) s.recentInbound = Math.max(0, s.recentInbound - 0.15);
+  },
+
+  exportableFood(s) {
+    const pop = populationOf(s);
+    const reserve = pop * s.foodReserveTargetDays;
+    const surplus = Math.max(0, s.stock.food - reserve);
+    const maxExport = s.stock.food * s.maxFoodExportRatio;
+    return Math.floor(Math.min(surplus, maxExport));
+  },
+
+  expectedWage(s, prof) {
+    const base = s.prices[({ farmer: 'food', woodcutter: 'wood', miner: 'ore', crafter: 'tools' }[prof] || 'food')] || 10;
+    const crowdWage = base * EconomySystem.crowding(s, prof);
+    return crowdWage * clamp(1 - (s.crowding - 1) * 0.35, 0.45, 1.2);
+  },
+
+  migrationScore(a, from, to, path) {
+    if (!to || to.id === from.id || to.siege) return -Infinity;
+    const pop = populationOf(to);
+    const foodAvail = to.foodPerCapita / 3;
+    const foodPricePenalty = (to.prices.food / BASE_PRICE.food - 1) * 12;
+    const expectedWage = (SettlementMetrics.expectedWage(to, 'farmer') + SettlementMetrics.expectedWage(to, 'woodcutter')) / 2;
+    const safety = (to.security + (100 - to.crime)) / 200;
+    const jobOpp = clamp((to.jobSlots - pop * 0.6) / Math.max(to.jobSlots, 1), -0.5, 1);
+    const crowdingPenalty = Math.max(0, to.crowding - 0.85) * 35;
+    const housingPressure = Math.max(0, pop - to.housingCapacity) * 2.2;
+    const recentMigrationPenalty = to.recentInbound * 4;
+    let travelDanger = 0;
+    if (path) {
+      for (let i = 0; i < path.length - 1; i++) {
+        const r = getRoute(path[i], path[i + 1]);
+        if (r) travelDanger += (r.threat || r.danger) * 8;
+      }
+    }
+    const cooldownPenalty = (world.day - a.lastMigrationDay < MIGRATION_COOLDOWN_DAYS) ? 40 : 0;
+    return foodAvail * 18 + expectedWage * 0.4 + safety * 22 + jobOpp * 15
+      - foodPricePenalty - crowdingPenalty - housingPressure - recentMigrationPenalty
+      - travelDanger - path.length * 4 - cooldownPenalty + to.prosperity * 0.15;
+  }
+};
+
+const CombatSystem = {
+  deriveStats(a) {
+    syncLegacyInventory(a);
+    const c = a.combatStats;
+    const sk = a.skills;
+    const eq = a.equipment || emptyEquipment();
+    let attack = c.strength * 1.2 + sk.fighting * 2 + sk.sword * 1.5 + sk.spear * 1.2 + sk.archery * 1.3;
+    let defense = c.endurance * 0.8 + c.discipline * 0.5;
+    let armor = 0, dodge = c.agility * 0.02, accuracy = 0.55 + c.perception * 0.03 + sk.archery * 0.04;
+    let initiative = c.agility * 0.6 + c.perception * 0.4;
+    let moraleResistance = c.courage * 0.08 + c.discipline * 0.06;
+    let carryingCapacity = 8 + c.strength * 0.8;
+    let fatigueMod = 1;
+    const slots = ['mainHand', 'offHand', 'ranged', 'armor', 'mount'];
+    for (const slot of slots) {
+      const item = eq[slot];
+      if (!item || item.durability <= 0) continue;
+      const ratio = item.durability / Math.max(item.maxDurability, 1);
+      const t = item.type;
+      if (WEAPON_DEFS[t]) {
+        attack += WEAPON_DEFS[t].attack * ratio;
+        defense += WEAPON_DEFS[t].defense * ratio;
+        if (WEAPON_DEFS[t].accuracy) accuracy += WEAPON_DEFS[t].accuracy * 0.15 * ratio;
+      }
+      if (ARMOR_DEFS[t]) {
+        armor += ARMOR_DEFS[t].armor * ratio;
+        dodge += ARMOR_DEFS[t].dodge * ratio;
+        fatigueMod *= ARMOR_DEFS[t].fatigue;
+      }
+      if (MOUNT_DEFS[t]) {
+        attack += MOUNT_DEFS[t].attack * ratio;
+        initiative += 3 * ratio;
+      }
+    }
+    const commandBonus = sk.leadership * 1.5 + sk.tactics * 0.8 + c.charisma * 0.3 + a.reputation * 0.05;
+    a.derivedStats = {
+      attack, defense, armor, dodge: clamp(dodge, 0, 0.45), accuracy: clamp(accuracy, 0.3, 0.95),
+      initiative, moraleResistance, carryingCapacity, commandBonus, fatigueMod
+    };
+    return a.derivedStats;
+  },
+
+  agentPower(a, terrain) {
+    if (!a || !a.alive) return 0;
+    const ds = this.deriveStats(a);
+    const morale = 0.5 + a.stats.morale / 150;
+    const health = 0.55 + a.stats.health / 220;
+    const fatigue = clamp(1 - (100 - a.stats.energy) / 200, 0.5, 1);
+    let p = (ds.attack + ds.defense * 0.6 + ds.armor * 0.4) * morale * health * fatigue;
+    const mh = a.equipment?.mainHand?.type;
+    const rg = a.equipment?.ranged?.type;
+    const mt = a.equipment?.mount?.type;
+    if (terrain === 'open' && mt) p *= 1.2;
+    if (terrain === 'close' && mh === 'sword') p *= 1.15;
+    if (terrain === 'range' && rg === 'bow') p *= 1.25;
+    return p;
+  },
+
+  matchupMod(attacker, defender, terrain) {
+    let mod = 1;
+    const aMH = attacker.equipment?.mainHand?.type;
+    const aRG = attacker.equipment?.ranged?.type;
+    const aMT = attacker.equipment?.mount?.type;
+    const dMH = defender.equipment?.mainHand?.type;
+    const dMT = defender.equipment?.mount?.type;
+    const dOH = defender.equipment?.offHand?.type;
+    if (aMH === 'spear' && dMT) mod *= 1.25;
+    if (aMT && dMH === 'archer') mod *= 1.2;
+    if (aRG === 'bow' && terrain === 'range') mod *= 1.2;
+    if (aRG === 'bow' && dOH === 'shield') mod *= 0.75;
+    if (dMH === 'sword' && terrain === 'close') mod *= 0.9;
+    return mod;
+  },
+
+  applyBattleWear(units, won) {
+    for (const u of units) {
+      for (const m of unitMembers(u)) {
+        const ds = this.deriveStats(m);
+        const wear = won ? rand(2, 8) : rand(5, 15);
+        for (const slot of Object.keys(m.equipment || {})) {
+          const item = m.equipment[slot];
+          if (item) {
+            item.durability = Math.max(0, item.durability - wear * (slot === 'armor' ? 1.3 : 1));
+            if (item.durability <= 0) m.equipment[slot] = null;
+          }
+        }
+        if (!won && chance(0.12)) {
+          m.stats.health -= randInt(5, 20);
+          m.stats.morale = clamp(m.stats.morale - 8, 0, 100);
+        }
+        if (won) m.skills.fighting = Math.min(10, m.skills.fighting + 0.08);
+        m.derivedStats = null;
+      }
+    }
+  },
+
+  inferProfession(a) {
+    syncLegacyInventory(a);
+    const eq = a.equipment;
+    if (eq.ranged?.type === 'bow' && eq.ranged.durability > 0) return 'archer';
+    if (eq.mount?.type === 'horse' && eq.mount.durability > 0) return 'cavalry';
+    if (eq.mainHand?.type === 'spear') return 'spearman';
+    if (eq.mainHand?.type === 'sword' || eq.mainHand?.type === 'axe') return 'swordsman';
+    if (MILITARY_PROFS.has(a.profession)) return a.profession;
+    return a.profession;
+  }
+};
+
+const AmbitionSystem = {
+  planFor(a) {
+    if (RULER_PROFS.has(a.profession) || a.unitId || a.travel) return;
+    if (a.profession === 'trader' || a.isTownCaravan) {
+      a.ambitionPlan = a.money > 200 ? 'caravan_company' : a.inventory.cart > 0 || a._hasCart ? 'expand_trade' : 'buy_cart';
+      a.nextPurchase = a.ambitionPlan === 'buy_cart' ? 'cart' : (a.money > 150 ? 'hire_guard' : null);
+      a.savingGoal = a.ambitionPlan === 'buy_cart' ? CART_DEF.price : (a.ambitionPlan === 'caravan_company' ? 250 : 120);
+    } else if (MILITARY_PROFS.has(a.profession) || a.skills.fighting > 3) {
+      a.ambitionPlan = a.skills.leadership > 3 ? 'form_squad' : 'buy_weapon';
+      a.nextPurchase = a.equipment?.mainHand ? (a.equipment?.armor ? 'recruit' : 'armor') : 'sword';
+      a.savingGoal = a.ambitionPlan === 'form_squad' ? FORM_SQUAD_MONEY : (WEAPON_DEFS[a.nextPurchase]?.price || ARMOR_DEFS.leather.price);
+    } else if (WORKER_PROFS.includes(a.profession)) {
+      a.ambitionPlan = 'buy_tool';
+      a.nextPurchase = 'tool';
+      a.savingGoal = TOOL_DEF.price;
+    } else if (a.traits.ambition > 0.7 && a.skills.leadership > 2.5) {
+      a.ambitionPlan = 'rise_leader';
+      a.savingGoal = FORM_SQUAD_MONEY;
+      a.nextPurchase = 'sword';
+    } else {
+      a.ambitionPlan = 'survive';
+      a.savingGoal = Math.max(40, a.savingGoal);
+    }
+  },
+
+  tryPurchase(a, s) {
+    if (!s || s.type === 'camp' || !a.nextPurchase || a.money < (a.savingGoal || 999)) return false;
+    syncLegacyInventory(a);
+    const item = a.nextPurchase;
+    let bought = false;
+
+    const buyWeapon = (type, slot) => {
+      const def = WEAPON_DEFS[type];
+      if (!def || a.money < def.price || s.stock.weapons < 1 && type !== 'shield') return false;
+      if (s.stock.weapons >= 1) s.stock.weapons -= 1;
+      else if (s.treasury < def.price * 0.5) return false;
+      a.money -= def.price;
+      s.treasury += def.price;
+      a.equipment[slot] = equipSlot(type, slot);
+      return true;
+    };
+
+    switch (item) {
+      case 'tool':
+        if (s.stock.tools >= 1 && a.money >= s.prices.tools) {
+          const got = EconomySystem.buyFromSettlement(a, s, 'tools', 1);
+          if (got) { a.equipment.tool = equipSlot('tool', 'tool'); bought = true; }
+        }
+        break;
+      case 'cart':
+        if (a.money >= CART_DEF.price) {
+          a.money -= CART_DEF.price; s.treasury += CART_DEF.price;
+          a._hasCart = true; a._cartDurability = CART_DEF.durability; bought = true;
+        }
+        break;
+      case 'sword': bought = buyWeapon('sword', 'mainHand'); break;
+      case 'spear': bought = buyWeapon('spear', 'mainHand'); break;
+      case 'bow': bought = buyWeapon('bow', 'ranged'); break;
+      case 'shield': bought = buyWeapon('shield', 'offHand'); break;
+      case 'armor':
+        for (const tier of ['leather', 'chainmail', 'cloth']) {
+          if (a.money >= ARMOR_DEFS[tier].price && s.treasury >= ARMOR_DEFS[tier].price * 0.3) {
+            a.money -= ARMOR_DEFS[tier].price; s.treasury += ARMOR_DEFS[tier].price;
+            a.equipment.armor = equipSlot(tier, 'armor');
+            bought = true; break;
+          }
+        }
+        break;
+      case 'horse':
+        if (s.stock.horses >= 1 && a.money >= s.prices.horses) {
+          const got = EconomySystem.buyFromSettlement(a, s, 'horses', 1);
+          if (got) { a.equipment.mount = equipSlot('horse', 'mount'); bought = true; }
+        }
+        break;
+    }
+
+    if (bought) {
+      world.stats.gearBought = (world.stats.gearBought || 0) + 1;
+      const prof = CombatSystem.inferProfession(a);
+      if (MILITARY_PROFS.has(prof) && !RULER_PROFS.has(a.profession)) a.profession = prof;
+      EventSystem.add('life', `🛒 ${a.name} ซื้อ${item} — กำลังเตรียมตัวสู่${a.ambitionPlan}`);
+      a.nextPurchase = null;
+      a.savingGoal = 0;
+      AmbitionSystem.planFor(a);
+    }
+    return bought;
+  },
+
+  considerFormingUnit(a, s) {
+    if (a.unitId || a.travel || RULER_PROFS.has(a.profession)) return;
+    const localThreat = EconomySystem.localDanger(s) + s.crime / 100;
+    const canLead = a.skills.leadership >= FORM_SQUAD_LEADERSHIP && a.skills.fighting >= FORM_SQUAD_FIGHTING
+      && a.money >= FORM_SQUAD_MONEY && (a.traits.ambition > 0.55 || localThreat > 0.35);
+    if (!canLead || !chance(0.12 + localThreat * 0.2 + a.traits.ambition * 0.08)) return;
+
+    const recruits = MilitarySystem.recruit(a, s, Math.min(5, MilitarySystem.commandCapacity(a)));
+    if (recruits.length < 1) return;
+
+    const objectives = ['hunt_bandits', 'patrol_route', 'escort_caravan', 'defend_town'];
+    let obj = 'hunt_bandits';
+    if (localThreat < 0.2 && a.traits.ambition > 0.75) obj = pick(['capture_fort', 'capture_weak_town', 'raid_bandit_camp']);
+    else if (s.stock.food < s.demand.food * 0.5) obj = 'escort_caravan';
+
+    const u = createUnit({
+      name: `กอง${a.name.split(' ')[0]}`, kind: 'field',
+      leaderId: a.id, memberIds: [a.id, ...recruits.map(r => r.id)],
+      factionId: a.factionId, locationId: s.id, food: 20,
+      objective: { type: obj }
+    });
+    a.unitId = u.id;
+    world.stats.squadsFormed = (world.stats.squadsFormed || 0) + 1;
+    EventSystem.add('war', `⚔ ${a.name} ตั้ง${u.name} (${recruits.length + 1} คน) — ภารกิจ: ${obj}`);
+    addDeed(a, `ก่อตั้ง${u.name}ด้วยกำลังพล ${recruits.length + 1} นาย`, 10, `ผู้ก่อตั้ง${u.name}`);
+    return u;
+  }
+};
+
+const LogisticsSystem = {
+  updateSettlement(s) {
+    if (s.type === 'camp') return;
+    const pop = populationOf(s);
+    const daysFood = pop > 0 ? s.stock.food / Math.max(pop * 2, 1) : 99;
+    const exportable = SettlementMetrics.exportableFood(s);
+
+    // Town caravan when food low elsewhere but we have surplus
+    if (exportable >= 8 && daysFood > s.foodReserveTargetDays + 1) {
+      const hungry = marketSettlements().filter(x => x.id !== s.id && x.stock.food < x.demand.food * 0.35 && findPath(s.id, x.id));
+      if (hungry.length && !s.townCaravanId) this.spawnTownCaravan(s, hungry[0]);
+    }
+
+    // Emergency relief
+    if (s.stock.food < pop * 2 && s.treasury > 80) {
+      const donor = marketSettlements().filter(x => x.id !== s.id && SettlementMetrics.exportableFood(x) > 15)
+        .sort((a, b) => SettlementMetrics.exportableFood(b) - SettlementMetrics.exportableFood(a))[0];
+      if (donor && chance(0.25)) this.spawnEmergencyRelief(donor, s);
+    }
+
+    // Subsidize trader hire
+    if (s.stock.food < s.demand.food * 0.45 && s.treasury > 100 && chance(0.12)) {
+      const subsidy = Math.min(60, s.treasury * 0.08);
+      s.treasury -= subsidy;
+      s.caravanSubsidy += subsidy;
+      const trader = agentsAt(s.id).find(a => a.profession === 'trader' && !a.travel);
+      if (trader) { trader.money += subsidy; EventSystem.add('economy', `💰 ${s.name} อุดหนุนพ่อค้า ${trader.name} ${fmt(subsidy)} ทองเพื่อนำเข้าอาหาร`); }
+      else this.convertToTrader(s, subsidy);
+    }
+  },
+
+  spawnTownCaravan(s, dest) {
+    let carrier = agentsAt(s.id).find(a => (a.profession === 'trader' || a.profession === 'unemployed') && !a.travel && !a.unitId);
+    if (!carrier) {
+      carrier = createAgent({ locationId: s.id, factionId: s.factionId, profession: 'trader', isTownCaravan: true, caravanOwnerId: s.id });
+      seedSkillForProfession(carrier, 'trader');
+    }
+    carrier.isTownCaravan = true;
+    carrier.caravanOwnerId = s.id;
+    carrier.profession = 'trader';
+    s.townCaravanId = carrier.id;
+    const qty = Math.min(SettlementMetrics.exportableFood(s), 12 + Math.floor(s.treasury / 50));
+    if (qty < 4) return;
+    s.stock.food -= qty;
+    carrier.cargo = { good: 'food', qty, buyCost: 0, destId: dest.id, subsidized: true };
+    carrier.currentGoal = `คาราวานเมืองขนอาหารไป${dest.name}`;
+    buyProvisions(carrier, s, 4);
+    startTravel(carrier, dest.id, 'town_caravan');
+    EventSystem.add('trade', `🐪 ${s.name} ส่งคาราวานเมืองขนอาหาร ${qty} หน่วยไป${dest.name}`);
+    world.stats.townCaravans = (world.stats.townCaravans || 0) + 1;
+  },
+
+  spawnEmergencyRelief(donor, needy) {
+    const qty = Math.min(SettlementMetrics.exportableFood(donor), Math.ceil(populationOf(needy) * 2));
+    if (qty < 6) return;
+    donor.stock.food -= qty;
+    const cost = Math.min(needy.treasury * 0.25, qty * needy.prices.food * 0.9);
+    needy.treasury -= cost;
+    donor.treasury += cost;
+    needy.stock.food += qty;
+    EventSystem.add('economy', `🆘 ${donor.name} ส่งคาราวานช่วยเหลือฉุกเฉินอาหาร ${qty} หน่วยให้${needy.name}`);
+    settlementHistory(needy, `ได้รับความช่วยเหลืออาหารฉุกเฉินจาก${donor.name} ${qty} หน่วย`);
+  },
+
+  convertToTrader(s, bonus) {
+    const c = agentsAt(s.id).find(a => !a.unitId && !a.travel && !RULER_PROFS.has(a.profession)
+      && (a.skills.trading > 1.5 || a.memory.tradeProfit > 50 || a.money > 60));
+    if (!c || !chance(0.35)) return;
+    c.profession = 'trader';
+    c.money += bonus || 0;
+    if (c.skills.trading < 1) c.skills.trading = 1;
+    EventSystem.add('trade', `🐪 ${c.name} เปลี่ยนอาชีพเป็นพ่อค้าที่${s.name}${bonus ? ` (ได้อุดหนุน ${fmt(bonus)} ทอง)` : ''}`);
+    world.stats.traderSpawns = (world.stats.traderSpawns || 0) + 1;
+  },
+
+  traderRespawn() {
+    const traders = world.agents.filter(a => a.alive && (a.profession === 'trader' || a.isTownCaravan)).length;
+    if (traders >= 8) return;
+    for (const s of marketSettlements()) {
+      if (s.type !== 'town' && s.type !== 'castle' && s.type !== 'village') continue;
+      const localTraders = agentsAt(s.id).filter(a => a.profession === 'trader').length;
+      if (localTraders > 0) continue;
+      if (chance(s.stock.food < s.demand.food * 0.5 ? 0.12 : 0.05)) this.convertToTrader(s, 25);
+    }
+  },
+
+  updatePriceGaps() {
+    const mkts = marketSettlements();
+    for (const r of world.routes) {
+      if (r.destroyed) continue;
+      const sa = getSettlement(r.a), sb = getSettlement(r.b);
+      if (!sa || !sb) continue;
+      r.priceGapFood = Math.abs(sa.prices.food - sb.prices.food) / BASE_PRICE.food;
+      r.threat = clamp(r.danger * 0.6 + r.recentRaids * 0.08 + r.caravanLosses * 0.04 - r.patrolLevel * 0.05, 0, 1);
+    }
+  }
+};
+
+const RouteSecuritySystem = {
+  update() {
+    LogisticsSystem.updatePriceGaps();
+    for (const r of world.routes) {
+      if (r.destroyed) continue;
+      if (r.recentRaids > 0) r.recentRaids = Math.max(0, r.recentRaids - 0.08);
+      if (r.threat > 0.45 && r.bounty < 30) this.postBounty(r);
+      if (r.caravanLosses >= 1 && r.bounty < 15) this.postBounty(r);
+      if (r.threat > 0.55 && !r.patrolMissionId && chance(0.15)) this.sendPatrolMission(r);
+    }
+    this.bountyHunters();
+  },
+
+  postBounty(r) {
+    const sa = getSettlement(r.a), sb = getSettlement(r.b);
+    for (const s of [sa, sb]) {
+      if (!s || s.type === 'camp' || s.treasury < 50) continue;
+      if (r.bounty >= 25) continue;
+      const offer = Math.min(40, Math.floor(s.treasury * 0.06) + r.caravanLosses * 5 + Math.floor((r.threat || r.danger) * 30));
+      if (offer < 15) continue;
+      s.treasury -= offer;
+      r.bounty += offer;
+      world.stats.bountiesPosted = (world.stats.bountiesPosted || 0) + 1;
+      EventSystem.add('war', `💰 ${s.name} ตั้งค่าหัวโจร ${offer} ทองบนเส้นทางที่เชื่อม${sa.name}–${sb.name}`);
+      break;
+    }
+  },
+
+  sendPatrolMission(r) {
+    const sa = getSettlement(r.a), sb = getSettlement(r.b);
+    const s = (sa && sa.garrisonUnitId) ? sa : sb;
+    if (!s || s.type === 'camp') return;
+    const g = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
+    if (!g || unitMembers(g).length < 3 || g.travel) return;
+    const dest = r.a === s.id ? r.b : r.a;
+    g.objective = { type: 'patrol_route', routeId: r.id };
+    r.patrolMissionId = g.id;
+    startTravel(g, dest, 'patrol');
+    EventSystem.add('war', `🛡 กอง${g.name} ออกลาดตระเวนเส้นทางที่มีภัยคุกคามสูง`);
+  },
+
+  bountyHunters() {
+    for (const r of world.routes) {
+      if (r.bounty < 20) continue;
+      const near = world.settlements.filter(s => {
+        if (s.type === 'camp') return false;
+        return getRoute(s.id, r.a) || getRoute(s.id, r.b);
+      });
+      for (const s of near) {
+        const hunter = agentsAt(s.id).find(a => !a.unitId && !a.travel && a.skills.fighting > 2.5
+          && a.skills.leadership > 2 && a.traits.bravery > 0.5);
+        if (!hunter || !chance(0.06)) continue;
+        const mates = MilitarySystem.recruit(hunter, s, 3);
+        if (!mates.length) continue;
+        const u = createUnit({
+          name: `นักล่าเงินรางวัลของ${hunter.name.split(' ')[0]}`, kind: 'field',
+          leaderId: hunter.id, memberIds: [hunter.id, ...mates.map(m => m.id)],
+          factionId: hunter.factionId, locationId: s.id, food: 15,
+          objective: { type: 'hunt_bandits', routeId: r.id, bounty: r.bounty }
+        });
+        hunter.unitId = u.id;
+        EventSystem.add('war', `🎯 ${hunter.name} รับค่าหัว ${fmt(r.bounty)} ทอง ออกปราบโจรบนเส้นทาง`);
+        r.bounty = Math.floor(r.bounty * 0.5);
+        break;
+      }
+    }
+  },
+
+  onCaravanRobbed(r) {
+    if (!r) return;
+    r.caravanLosses++;
+    r.recentRaids = clamp(r.recentRaids + 1, 0, 10);
+    r.threat = clamp(r.threat + 0.12, 0, 1);
+    r.danger = clamp(r.danger + 0.06, 0.02, 1);
+    if (r.caravanLosses >= 1) this.postBounty(r);
+  },
+
+  onPatrolComplete(u, r) {
+    if (!r) return;
+    r.patrolLevel = clamp(r.patrolLevel + 1.5, 0, 6);
+    r.threat = clamp(r.threat - 0.12, 0, 1);
+    r.danger = clamp(r.danger - 0.08, 0.02, 1);
+    r.patrolMissionId = null;
+    u.objective = { type: 'idle' };
+    EventSystem.add('war', `🛡 ${u.name} ลาดตระเวนเสร็จ — ความปลอดภัยบนเส้นทางดีขึ้น`);
+  }
+};
 
 /* ═══════════════════ 7. ECONOMY SYSTEM ═══════════════════ */
 
 const EconomySystem = {
   // 7.1 ผลิตทรัพยากรระดับ settlement (จากคนทำงาน — ดู WorkSystem) + demand + price
   updateDemandAndPrices(s) {
+    SettlementMetrics.update(s);
     const pop = populationOf(s);
     const garrison = s.garrisonUnitId ? unitMembers(getUnit(s.garrisonUnitId)).length : 0;
 
@@ -727,12 +1291,14 @@ const EconomySystem = {
     s.demand.arrows = Math.round(garrison * 3 + 10 + s.warDemand * 2);
     s.demand.horses = Math.round((s.type === 'castle' ? 8 : 2) + s.warDemand * 0.2);
 
-    // ── ราคา: base × scarcity × dangerMod × taxMod (เพดาน 0.3–6 เท่า) ──
+    // ── ราคา: base × scarcity × dangerMod × taxMod × crowding (อาหารแพงเมื่อแออัด) ──
     const dangerMod = 1 + this.localDanger(s) * 0.35;
     const taxMod = 1 + s.taxRate * 0.8;
+    const crowdFoodMod = 1 + Math.max(0, s.crowding - 0.9) * 0.45;
     for (const g of GOODS) {
       const scarcity = clamp(s.demand[g] / Math.max(s.stock[g], 1), 0.25, 6);
       let p = BASE_PRICE[g] * Math.pow(scarcity, 0.75) * dangerMod * taxMod;
+      if (g === 'food') p *= crowdFoodMod;
       if (s.siege) p *= 1.6;
       s.prices[g] = clamp(p, BASE_PRICE[g] * 0.3, BASE_PRICE[g] * 6);
     }
@@ -768,11 +1334,17 @@ const EconomySystem = {
   crowding(s, prof) {
     const n = agentsAt(s.id).filter(a => a.profession === prof).length;
     const ideal = { farmer: 8, woodcutter: 6, miner: 6, crafter: 5 }[prof] || 6;
-    return clamp(ideal / Math.max(n, 1), 0.2, 1);
+    const jobCrowd = clamp(ideal / Math.max(n, 1), 0.2, 1);
+    const housingCrowd = clamp(1 - Math.max(0, s.crowding - 1) * 0.25, 0.35, 1);
+    return jobCrowd * housingCrowd;
   },
 
   // agent ซื้อสินค้าจากคลังเมือง → เงินเข้าคลังเมือง
   buyFromSettlement(agent, s, good, qty) {
+    if (good === 'food' && !agent.isTownCaravan) {
+      const exportable = SettlementMetrics.exportableFood(s);
+      qty = Math.min(qty, exportable);
+    }
     qty = Math.min(qty, Math.floor(s.stock[good]));
     if (qty <= 0) return 0;
     const price = s.prices[good];
@@ -991,10 +1563,19 @@ const AgentAI = {
       options.push({ act: 'returnCamp', score: 30 });
     }
 
-    // ซื้อเครื่องมือถ้าเป็นคนงานและไม่มี
-    if (WORKER_PROFS.includes(a.profession) && a.profession !== 'crafter' && a.inventory.tools <= 0 &&
-        s.stock.tools >= 1 && a.money > s.prices.tools) {
+    // ซื้อเครื่องมือ/อุปกรณ์ตาม ambition
+    AmbitionSystem.planFor(a);
+    if (a.money >= (a.savingGoal || 999) && a.nextPurchase) {
+      options.push({ act: 'buyGear', score: 28 + a.traits.ambition * 15 });
+    }
+    if (WORKER_PROFS.includes(a.profession) && a.profession !== 'crafter' && !a.equipment?.tool) {
       options.push({ act: 'buyTools', score: 30 });
+    }
+
+    // ตั้งกองกำลังเอง
+    if (!a.unitId && a.skills.leadership >= FORM_SQUAD_LEADERSHIP && a.skills.fighting >= FORM_SQUAD_FIGHTING
+        && a.money >= FORM_SQUAD_MONEY && (a.traits.ambition > 0.55 || EconomySystem.localDanger(s) > 0.3)) {
+      options.push({ act: 'formSquad', score: 18 + a.traits.ambition * 20 + a.skills.leadership * 3 });
     }
 
     if (options.length === 0) options.push({ act: 'rest', score: 5 });
@@ -1024,6 +1605,7 @@ const AgentAI = {
         break;
       case 'trade':
         a.profession = 'trader';
+        if (!a._wasTrader) { a._wasTrader = true; world.stats.traderSpawns = (world.stats.traderSpawns || 0) + 1; }
         TraderSystem.planTrade(a, s);
         break;
       case 'migrate': {
@@ -1032,6 +1614,9 @@ const AgentAI = {
         a.currentThought = `${s.name}อยู่ยาก อาหารแพง ข้าจะไป${choice.targetName}`;
         buyProvisions(a, s, 4);
         if (startTravel(a, choice.target, 'migrate', a.traits.bravery < 0.4)) {
+          a.lastMigrationDay = world.day;
+          const dest = getSettlement(choice.target);
+          if (dest) dest.recentInbound += 1;
           if (chance(0.25)) EventSystem.add('life', `🚶 ${a.name} ย้ายออกจาก${s.name} มุ่งหน้า${choice.targetName}`);
         }
         break;
@@ -1060,30 +1645,33 @@ const AgentAI = {
       case 'buyTools': {
         const got = EconomySystem.buyFromSettlement(a, s, 'tools', 1);
         if (got > 0) {
-          a.inventory.tools += got;
-          a.durability.tools = 50;
+          a.equipment.tool = equipSlot('tool', 'tool');
+          a.inventory.tools = 0;
           a.currentThought = 'ได้เครื่องมือใหม่ ทำงานได้ไวขึ้นแน่';
+          EventSystem.add('life', `🛒 ${a.name} ซื้อเครื่องมือที่${s.name}`);
         }
         break;
       }
+      case 'buyGear':
+        AmbitionSystem.tryPurchase(a, s);
+        break;
+      case 'formSquad':
+        AmbitionSystem.considerFormingUnit(a, s);
+        break;
     }
   },
 
   bestMigrationTarget(a, from) {
+    if (world.day - a.lastMigrationDay < MIGRATION_COOLDOWN_DAYS) return null;
     let best = null, bestScore = -Infinity;
     for (const s of marketSettlements()) {
       if (s.id === from.id || s.siege) continue;
       const path = findPath(from.id, s.id);
       if (!path) continue;
-      // เมืองแน่นเกินศักยภาพ → ไม่น่าไป
-      const capacity = (s.prodPotential.food + s.prodPotential.wood + s.prodPotential.ore) * 8 + (s.type === 'town' ? 15 : s.type === 'castle' ? 12 : 5);
-      const congestion = Math.max(0, populationOf(s) - capacity) * 1.5;
-      const score = -(s.prices.food / BASE_PRICE.food) * 15 - s.unrest * 0.2 - s.crime * 0.25
-        + s.prosperity * 0.2 + (s.prodPotential.food + s.prodPotential.wood + s.prodPotential.ore) * 4
-        - path.length * 5 - congestion;
+      const score = SettlementMetrics.migrationScore(a, from, s, path);
       if (score > bestScore) { bestScore = score; best = s; }
     }
-    return best;
+    return bestScore > 5 ? best : null;
   },
 
   soldierThought(a) {
@@ -1102,7 +1690,8 @@ const WorkSystem = {
     if (a.stats.energy < 10) { a.currentThought = 'หมดแรง ทำงานไม่ไหว'; return; }
     a.stats.energy -= 18;
     const hungerPenalty = a.stats.hunger < 30 ? 0.5 : a.stats.hunger < 55 ? 0.8 : 1;
-    const toolBonus = (a.inventory.tools > 0 && a.durability.tools > 0) ? 1.5 : 1;
+    const toolBonus = (a.equipment?.tool && a.equipment.tool.durability > 0) ? TOOL_DEF.workBonus
+      : ((a.inventory.tools > 0 && a.durability.tools > 0) ? 1.5 : 1);
 
     let good = null, amount = 0, skill = null;
     switch (a.profession) {
@@ -1162,8 +1751,10 @@ const WorkSystem = {
 
       // เครื่องมือเสื่อม → สร้าง demand ให้เศรษฐกิจ
       if (toolBonus > 1) {
-        a.durability.tools -= 1;
-        if (a.durability.tools <= 0) {
+        if (a.equipment?.tool) a.equipment.tool.durability -= 1;
+        else a.durability.tools -= 1;
+        if ((a.equipment?.tool?.durability || a.durability.tools) <= 0) {
+          if (a.equipment) a.equipment.tool = null;
           a.inventory.tools = 0;
           a.currentThought = 'เครื่องมือข้าพังแล้ว ต้องซื้อใหม่';
         }
@@ -1181,9 +1772,11 @@ const TraderSystem = {
 
     for (const g of GOODS) {
       const buyPrice = s.prices[g];
-      const avail = Math.floor(s.stock[g]);
+      let avail = Math.floor(s.stock[g]);
+      if (g === 'food') avail = Math.min(avail, SettlementMetrics.exportableFood(s));
       if (avail < 2) continue;
-      const capacity = 8 + (a.inventory.cart > 0 ? 14 : 0) + (a.inventory.horse > 0 ? 4 : 0);
+      const ds = CombatSystem.deriveStats(a);
+      const capacity = 8 + (a._hasCart || a.inventory.cart > 0 ? CART_DEF.capacity : 0) + (a.equipment?.mount ? 4 : 0) + ds.carryingCapacity * 0.3;
       const qty = Math.min(avail, capacity, Math.floor(a.money / buyPrice));
       if (qty < 2) continue;
 
@@ -1193,14 +1786,17 @@ const TraderSystem = {
         if (!path) continue;
         const sellPrice = d.prices[g];
         // ความเสี่ยงตามเส้นทาง
-        let risk = 0;
+        let risk = 0, gapBonus = 0;
         for (let i = 0; i < path.length - 1; i++) {
           const r = getRoute(path[i], path[i + 1]);
-          if (r) risk += r.danger;
+          if (r) {
+            risk += (r.threat || r.danger);
+            if (g === 'food') gapBonus += (r.priceGapFood || 0) * 4;
+          }
         }
         const travelCost = path.length * 3;
         const expected = (sellPrice * 0.85 * (1 - d.taxRate) - buyPrice) * qty
-          - travelCost
+          - travelCost + gapBonus
           - risk * qty * buyPrice * (1.2 - a.traits.riskTolerance);
         if (expected > bestProfit) { bestProfit = expected; best = { good: g, qty, destId: d.id, destName: d.name, buyPrice }; }
       }
@@ -1237,6 +1833,12 @@ const TraderSystem = {
       const revenue = sold * s.prices[a.cargo.good] * 0.85 * (1 - s.taxRate);
       const profit = revenue - a.cargo.buyCost * (sold / a.cargo.qty);
       a.skills.trading = Math.min(10, a.skills.trading + 0.06);
+      if (a.isTownCaravan && a.caravanOwnerId) {
+        const owner = getSettlement(a.caravanOwnerId);
+        if (owner) { owner.townCaravanId = null; owner.stock.food += Math.floor(sold * 0.1); }
+        a.isTownCaravan = false;
+        a.caravanOwnerId = null;
+      }
       a.stats.morale = clamp(a.stats.morale + (profit > 0 ? 4 : -4), 0, 100);
       a.currentThought = profit > 0 ? `ขายได้กำไร ${fmt(profit)} ทอง — การค้าคือชีวิต` : `ขาดทุน ${fmt(-profit)} ทอง... คำนวณพลาด`;
       a.cargo.qty -= sold;
@@ -1271,8 +1873,10 @@ const BanditSystem = {
   update() {
     for (const camp of world.settlements.filter(s => s.type === 'camp')) {
       const banditsHere = agentsAt(camp.id).filter(a => a.profession === 'bandit' && !a.unitId);
-      // ── ตั้ง warband ใหม่เมื่อมีโจรว่างพอ ──
-      if (banditsHere.length >= 2 && chance(0.5)) {
+      // ── ตั้ง warband ใหม่เมื่อมีโจรว่างพอ (จำกัดด้วย supply และ wantedLevel) ──
+      const campWanted = camp._wantedLevel || 0;
+      const supplyOk = camp.stock.food >= banditsHere.length * 1.5;
+      if (banditsHere.length >= 2 && supplyOk && campWanted < 80 && chance(0.35 + banditsHere.length * 0.05)) {
         const leader = banditsHere.reduce((m, b) => (b.skills.leadership + b.skills.fighting > m.skills.leadership + m.skills.fighting ? b : m), banditsHere[0]);
         const members = banditsHere.slice(0, Math.min(banditsHere.length, 3 + Math.floor(leader.skills.leadership * 1.5)));
         const u = createUnit({
@@ -1363,8 +1967,8 @@ const BanditSystem = {
     const ambusher = world.units.find(u => u.kind === 'warband' && !u.travel &&
       u.objective.type === 'ambush' && u.objective.routeId === r.id && unitMembers(u).length > 0);
     // 2) หรือความเสี่ยงทั่วไปของเส้นทาง
-    const guardsPower = trader.inventory.weapon > 0 ? 6 : 0;
-    const baseRisk = clamp(r.danger - r.patrolLevel * 0.06, 0.01, 0.9);
+    const guardsPower = trader.inventory.weapon > 0 || trader.equipment?.mainHand ? 8 : 0;
+    const baseRisk = clamp((r.threat || r.danger) - r.patrolLevel * 0.06, 0.01, 0.9);
 
     if (ambusher || chance(baseRisk * 0.22)) {
       const robbers = ambusher ? unitMembers(ambusher).length : randInt(2, 4);
@@ -1384,6 +1988,12 @@ const BanditSystem = {
       trader.currentThought = 'โดนปล้นเรียบ... ข้าเกลียดเส้นทางนี้';
       world.stats.caravansRobbed++;
       r.danger = clamp(r.danger + 0.08, 0, 1);
+      RouteSecuritySystem.onCaravanRobbed(r);
+      const camp = ambusher ? world.settlements.find(s => s.type === 'camp' && s.factionId === ambusher.factionId) : null;
+      for (const m of ambusher ? unitMembers(ambusher) : []) {
+        m.wantedLevel = (m.wantedLevel || 0) + 8;
+        if (camp) camp._wantedLevel = (camp._wantedLevel || 0) + 5;
+      }
       if (ambusher) {
         ambusher.supply.food += good === 'food' ? stolenQty : 0;
         ambusher.lootGold = (ambusher.lootGold || 0) + stolenGold;
@@ -1425,22 +2035,25 @@ const BanditSystem = {
 
 const MilitarySystem = {
   /* ── พลังรบของหน่วย (สูตรตาม GDD 14.1 แบบย่อ) ── */
-  unitPower(u) {
+  unitPower(u, terrain) {
     if (!u) return 0;
     const members = unitMembers(u);
     if (members.length === 0) return 0;
+    terrain = terrain || 'field';
     let power = 0;
     for (const m of members) {
-      const combat = 8 + (m.skills.fighting + m.skills.sword + m.skills.archery * 0.8 + m.skills.spear + m.skills.riding * 0.6) * 1.6;
-      const equip = (m.inventory.weapon > 0 ? 1.35 : 1) * (m.inventory.bow > 0 ? 1.15 : 1) * (m.inventory.horse > 0 ? 1.25 : 1);
-      power += combat * equip * (0.5 + m.stats.morale / 150) * (0.6 + m.stats.health / 250);
+      let p = CombatSystem.agentPower(m, terrain);
+      // matchup ภายในหน่วย — เฉลี่ยจาก leader
+      power += p;
     }
     const leader = getAgent(u.leaderId);
-    const tacticsMod = leader ? 1 + leader.skills.tactics * 0.05 : 1;
+    const tacticsMod = leader ? 1 + leader.skills.tactics * 0.06 + CombatSystem.deriveStats(leader).commandBonus * 0.04 : 1;
     const moraleMod = 0.6 + u.morale / 160;
     const fatigueMod = 1 - u.fatigue / 250;
-    const supplyMod = u.supply.food >= members.length ? 1 : 0.7;
-    return power * tacticsMod * moraleMod * fatigueMod * supplyMod;
+    const supplyMod = u.supply.food >= members.length ? 1 : 0.65;
+    u.combatPower = power * tacticsMod * moraleMod * fatigueMod * supplyMod;
+    u.equipmentPower = sum(members, m => CombatSystem.deriveStats(m).attack);
+    return u.combatPower;
   },
 
   armyPower(ar) {
@@ -1457,8 +2070,22 @@ const MilitarySystem = {
   /* ── การรบ: attackerPower vs defenderPower ── */
   battle(attackerUnits, defenderUnits, context) {
     world.stats.battles++;
-    const atkPower = sum(attackerUnits, u => this.unitPower(u)) * rand(0.8, 1.2);
-    const defPower = (sum(defenderUnits, u => this.unitPower(u)) + (context.defenseBonus || 0)) * rand(0.8, 1.2);
+    const terrain = context.terrain || (context.kind === 'raid' ? 'close' : 'field');
+    let atkPower = 0, defPower = 0;
+    for (const u of attackerUnits) atkPower += this.unitPower(u, terrain);
+    for (const u of defenderUnits) {
+      defPower += this.unitPower(u, terrain);
+      // matchup: ใช้ leader ของแต่ละฝ่าย
+      const atkLead = attackerUnits[0] ? getAgent(attackerUnits[0].leaderId) : null;
+      const defLead = getAgent(u.leaderId);
+      if (atkLead && defLead) {
+        for (const m of unitMembers(u)) {
+          defPower += CombatSystem.agentPower(m, terrain) * (CombatSystem.matchupMod(atkLead, m, terrain) - 1) * 0.15;
+        }
+      }
+    }
+    atkPower *= rand(0.82, 1.18);
+    defPower = (defPower + (context.defenseBonus || 0)) * rand(0.82, 1.18);
     const attackerWins = atkPower > defPower;
     const ratio = clamp(Math.min(atkPower, defPower) / Math.max(atkPower, defPower, 1), 0.1, 1);
     const totalMen = sum(attackerUnits, u => unitMembers(u).length) + sum(defenderUnits, u => unitMembers(u).length);
@@ -1508,6 +2135,14 @@ const MilitarySystem = {
     const atkResult = applyCasualties(attackerUnits, attackerWins ? winnerRate : loserRate, attackerWins);
     const defResult = applyCasualties(defenderUnits, attackerWins ? loserRate : winnerRate, !attackerWins);
     const totalDead = atkResult.dead + defResult.dead;
+
+    CombatSystem.applyBattleWear(attackerUnits, attackerWins);
+    CombatSystem.applyBattleWear(defenderUnits, !attackerWins);
+    for (const u of attackerUnits) {
+      if (attackerWins) u.recentVictories = (u.recentVictories || 0) + 1;
+      const leader = getAgent(u.leaderId);
+      if (leader && attackerWins) leader.fame = (leader.fame || 0) + 1;
+    }
 
     // ── บันทึกประวัติศาสตร์: ศึกใหญ่ลง chronicle / ศึกในสงครามลง war object ──
     recordWarBattle(context.atkFactionId, context.defFactionId, bName, totalDead, attackerWins);
@@ -1672,7 +2307,13 @@ const MilitarySystem = {
         u.fatigue = clamp(u.fatigue + 6, 0, 100);
         for (const m of members) { m.locationId = u.locationId; m.travel = null; }
         if (!arrived) { for (const m of members) m.travel = u.travel; }
-        else { for (const m of members) m.travel = null; }
+        else {
+          for (const m of members) m.travel = null;
+          if (u.objective.type === 'patrol_route' && u.kind === 'guard') {
+            const r = world.routes.find(x => x.id === u.objective.routeId);
+            RouteSecuritySystem.onPatrolComplete(u, r);
+          }
+        }
       } else {
         u.fatigue = clamp(u.fatigue - 8, 0, 100);
       }
@@ -1712,28 +2353,16 @@ const MilitarySystem = {
 
   // ผู้นำที่มี leadership สูงและอิสระ อาจตั้งหน่วยรบอิสระ (เส้นทางขุนศึก)
   freeCompanyCheck() {
-    // ยิ่งโจรชุกยิ่งมีคนลุกขึ้นมาตั้งกองปราบ
     const banditCount = world.agents.filter(a => a.alive && a.profession === 'bandit').length;
-    if (!chance(0.06 + Math.min(banditCount * 0.006, 0.2))) return;
-    const candidates = world.agents.filter(a => a.alive && !a.unitId && !a.travel &&
-      a.skills.leadership >= 3 && MILITARY_PROFS.has(a.profession) && !RULER_PROFS.has(a.profession) &&
-      a.traits.ambition > 0.6);
+    if (!chance(0.05 + Math.min(banditCount * 0.005, 0.18))) return;
+    const candidates = world.agents.filter(a => a.alive && !a.unitId && !a.travel && !RULER_PROFS.has(a.profession) &&
+      a.skills.leadership >= FORM_SQUAD_LEADERSHIP && a.skills.fighting >= FORM_SQUAD_FIGHTING - 0.5
+      && a.money >= FORM_SQUAD_MONEY * 0.6 && (a.traits.ambition > 0.55 || banditCount > 6));
     if (!candidates.length) return;
     const leader = pick(candidates);
     const s = getSettlement(leader.locationId);
     if (!s || s.type === 'camp') return;
-    const recruits = this.recruit(leader, s, Math.min(5, this.commandCapacity(leader)));
-    if (recruits.length >= 2) {
-      const u = createUnit({
-        name: `กองอิสระของ${leader.name.split(' ')[0]}`, kind: 'field',
-        leaderId: leader.id, memberIds: [leader.id, ...recruits.map(r => r.id)],
-        factionId: leader.factionId, locationId: s.id, food: 25
-      });
-      leader.unitId = u.id;
-      u.objective = { type: 'huntBandits' };
-      EventSystem.add('war', `⚔ ${leader.name} รวบรวมคน ${recruits.length + 1} คนตั้ง${u.name} ออกปราบโจร`);
-      addDeed(leader, `ก่อตั้ง${u.name}ด้วยกำลังพล ${recruits.length + 1} นาย`, 10, `ผู้ก่อตั้ง${u.name}`);
-    }
+    AmbitionSystem.considerFormingUnit(leader, s);
   },
 
   /* ── recruitment ตาม GDD 13.5 — ชวนคนจน หิว กล้า เข้าหน่วย ── */
@@ -1755,55 +2384,78 @@ const MilitarySystem = {
     return recruits;
   },
 
-  // หน่วยอิสระ (field) ล่าโจร
+  // หน่วยอิสระ (field) — ภารกิจ Phase 10.5
   updateFieldUnits() {
     for (const u of world.units.filter(u => u.kind === 'field' && !u.travel)) {
       const members = unitMembers(u);
       if (!members.length) continue;
-      if (u.objective.type === 'huntBandits') {
-        // หา warband ที่ไม่เดินทางอยู่ หรือบุกค่ายโจร
+      const obj = u.objective.type;
+      const huntTypes = new Set(['huntBandits', 'hunt_bandits', 'raid_bandit_camp']);
+
+      if (huntTypes.has(obj)) {
         const target = world.units.find(w => w.kind === 'warband' && !w.travel && w.locationId === u.locationId && unitMembers(w).length > 0);
         if (target) {
           const s = getSettlement(u.locationId);
           const result = this.battle([u], [target], { label: s ? s.name : target.name, kind: 'field', settlementId: s ? s.id : null });
           if (result.attackerWins) {
-            EventSystem.add('war', `⚔ ${u.name} ปราบ${target.name}สำเร็จ!`);
+            EventSystem.add('war', `⚔ ${u.name} ปราบโจรสำเร็จ!`);
             const leader = getAgent(u.leaderId);
-            if (leader) leader.reputation += 6;
+            if (leader) { leader.reputation += 6; leader.fame = (leader.fame || 0) + 2; }
+            u.recentVictories = (u.recentVictories || 0) + 1;
             u.supply.food += target.supply.food; target.supply.food = 0;
+            if (u.objective.bounty) {
+              const share = Math.floor(u.objective.bounty / Math.max(members.length, 1));
+              for (const m of members) m.money += share;
+            }
+            BanditSystem.disband(target);
           } else {
             EventSystem.add('bandit', `🗡 ${target.name} ตีโต้${u.name}แตกพ่าย`);
           }
         } else {
           const wb = world.units.filter(w => w.kind === 'warband' && unitMembers(w).length > 0 && !w.travel);
           if (wb.length && chance(0.5)) startTravel(u, pick(wb).locationId, 'hunt');
-          else {
+          else if (obj === 'raid_bandit_camp' || (chance(0.2) && this.unitPower(u) > 70)) {
             const camp = world.settlements.find(x => x.type === 'camp');
-            if (camp && chance(0.2) && this.unitPower(u) > 80) { u.objective = { type: 'raid', targetId: camp.id }; startTravel(u, camp.id, 'attackCamp'); }
-            else if (chance(0.3)) { // เดินลาดตระเวน
-              const routes = world.routes.filter(r => !r.destroyed && (r.a === u.locationId || r.b === u.locationId));
-              if (routes.length) { const r = pick(routes); r.patrolLevel = clamp(r.patrolLevel + 1, 0, 5); r.danger = clamp(r.danger - 0.05, 0.02, 1); startTravel(u, r.a === u.locationId ? r.b : r.a, 'patrol'); }
+            if (camp) { u.objective = { type: 'raid', targetId: camp.id }; startTravel(u, camp.id, 'attackCamp'); }
+          } else if (chance(0.3)) {
+            const routes = world.routes.filter(r => !r.destroyed && (r.a === u.locationId || r.b === u.locationId));
+            if (routes.length) {
+              const r = pick(routes);
+              u.objective = { type: 'patrol_route', routeId: r.id };
+              startTravel(u, r.a === u.locationId ? r.b : r.a, 'patrol');
+              EventSystem.add('war', `🛡 ${u.name} ออกลาดตระเวนเส้นทาง`);
             }
           }
         }
-        // เสบียงหมด → กลับเมืองเติม / สลาย
-        if (u.supply.food < members.length * 2) {
-          const s = getSettlement(u.locationId);
-          if (s && s.type !== 'camp') {
-            const bought = Math.min(Math.floor(s.stock.food * 0.2), members.length * 6);
-            const leader = getAgent(u.leaderId);
-            if (leader && leader.money > bought * s.prices.food) {
-              leader.money -= bought * s.prices.food; s.treasury += bought * s.prices.food;
-              s.stock.food -= bought; u.supply.food += bought;
-            } else if (u.morale < 40 || chance(0.3)) {
-              BanditSystem.disband(u);
-              EventSystem.add('war', `💨 ${u.name} สลายตัวเพราะขาดเสบียง`);
+      } else if (obj === 'patrol_route') {
+        const r = world.routes.find(x => x.id === u.objective.routeId);
+        if (r) RouteSecuritySystem.onPatrolComplete(u, r);
+      } else if (obj === 'escort_caravan') {
+        const traders = world.agents.filter(a => a.alive && a.cargo && a.travel);
+        if (traders.length && chance(0.4)) startTravel(u, traders[0].locationId, 'escort');
+      } else if (obj === 'defend_town') {
+        const s = getSettlement(u.locationId);
+        if (s) s.security = clamp(s.security + 2, 0, 100);
+      } else if (obj === 'capture_weak_town' || obj === 'capture_fort') {
+        const leader = getAgent(u.leaderId);
+        if (leader && this.unitPower(u) > 90 && leader.traits.ambition > 0.7 && chance(0.08)) {
+          const targets = world.settlements.filter(x => x.type !== 'camp' && x.factionId !== u.factionId
+            && (obj === 'capture_fort' ? x.type === 'fort' : (x.loyalty < 40 || x.security < 35))
+            && findPath(u.locationId, x.id));
+          if (targets.length) {
+            const t = pick(targets);
+            const f = getFaction(u.factionId) || createFaction({ name: `แคว้น${leader.name.split(' ')[0]}`, color: pick(['#7e57c2', '#26a69a']), rulerId: leader.id });
+            if (this.resolveCapture([u], f, leader, t)) {
+              EventSystem.add('war', `🏰 ${u.name} ยึด${t.name}ได้!`);
+              u.objective = { type: 'defend_town' };
             }
           }
         }
-      } else if (u.objective.type === 'raid' && u.locationId === u.objective.targetId) {
+      } else if (obj === 'huntBandits') {
+        u.objective.type = 'hunt_bandits';
+        continue;
+      } else if (obj === 'raid' && u.locationId === u.objective.targetId) {
         const camp = getSettlement(u.objective.targetId);
-        // โจมตีค่ายโจร: สู้กับโจรทุกคนในค่าย
         const defenders = world.units.filter(w => w.factionId === camp.factionId && w.locationId === camp.id);
         const looseBandits = agentsAt(camp.id).filter(a => a.profession === 'bandit' && !a.unitId);
         let tempUnit = null;
@@ -1820,7 +2472,22 @@ const MilitarySystem = {
           if (leader) { leader.reputation += 12; this.checkPromotion(leader); }
         }
         if (tempUnit && world.units.includes(tempUnit)) BanditSystem.disband(tempUnit);
-        u.objective = { type: 'huntBandits' };
+        u.objective = { type: 'hunt_bandits' };
+      }
+
+      if (u.supply.food < members.length * 2) {
+        const s = getSettlement(u.locationId);
+        if (s && s.type !== 'camp') {
+          const bought = Math.min(Math.floor(s.stock.food * 0.2), members.length * 6);
+          const leader = getAgent(u.leaderId);
+          if (leader && leader.money > bought * s.prices.food) {
+            leader.money -= bought * s.prices.food; s.treasury += bought * s.prices.food;
+            s.stock.food -= bought; u.supply.food += bought;
+          } else if (u.morale < 40 || chance(0.3)) {
+            BanditSystem.disband(u);
+            EventSystem.add('war', `💨 ${u.name} สลายตัวเพราะขาดเสบียง`);
+          }
+        }
       }
     }
   },
@@ -2108,10 +2775,22 @@ const GovernanceSystem = {
       s.taxRate = Math.max(0.08, s.taxRate - 0.01);
     }
 
-    /* จ้างทหารเพิ่มเมื่ออันตราย */
+    /* จ้างทหารเพิ่ม / mercenary เมื่ออันตราย */
     const threat = EconomySystem.localDanger(s) * 100 + s.crime * 0.5 + (s.raidedRecently > 0 ? 30 : 0);
     const wantGarrison = Math.ceil(threat / 15) + (s.type === 'fort' || s.type === 'castle' ? 5 : 1);
     if (garrisonSize < wantGarrison && s.treasury > 120) {
+      const merc = world.units.find(u => u.kind === 'field' && !u.armyId && u.factionId === s.factionId
+        && unitMembers(u).length >= 2 && !u.travel && chance(0.1));
+      if (merc && s.treasury > 200) {
+        const cost = unitMembers(merc).length * 15;
+        s.treasury -= cost;
+        const leader = getAgent(merc.leaderId);
+        if (leader) leader.money += cost * 0.7;
+        merc.kind = 'guard';
+        merc.objective = { type: 'defend_town' };
+        s.garrisonUnitId = merc.id;
+        EventSystem.add('war', `💰 ${s.name} จ้าง${merc.name}เป็นทหารรับจ้าง (${fmt(cost)} ทอง)`);
+      }
       const candidates = agentsAt(s.id).filter(a => !a.unitId && (a.profession === 'unemployed' || a.profession === 'militia' || a.profession === 'refugee') && a.stats.hunger > 20);
       const hired = candidates.slice(0, Math.min(2, wantGarrison - garrisonSize));
       for (const h of hired) {
@@ -2279,7 +2958,17 @@ const GovernanceSystem = {
     // ค่ายโจรผลิตอาหารเล็กน้อย (ล่าสัตว์)
     const bandits = agentsAt(s.id).filter(a => a.profession === 'bandit');
     s.stock.food += bandits.length * 0.5 * Math.max(s.prodPotential.food, 0.3) * 3;
-    // ค่ายอดอยาก → โจรบางคนทิ้งค่ายกลับตัวเป็นคนธรรมดา
+    s._wantedLevel = clamp((s._wantedLevel || 0) - 0.5, 0, 100);
+    // ค่ายอดอยาก / wanted สูง → โจรอ่อนแรง แตกกลุ่ม หรือกลับตัว
+    const perBanditFood = bandits.length ? s.stock.food / bandits.length : 99;
+    if (perBanditFood < 2 || (s._wantedLevel || 0) > 60) {
+      for (const u of world.units.filter(u => u.kind === 'warband' && u.factionId === s.factionId)) {
+        if (u.supply.food < unitMembers(u).length && chance(0.2)) {
+          BanditSystem.disband(u);
+          EventSystem.add('bandit', `💨 ${u.name} แตกกลุ่มเพราะขาดเสบียงและถูกไล่ล่า`);
+        } else u.morale = clamp(u.morale - 5, 0, 100);
+      }
+    }
     if (s.stock.food < bandits.length && bandits.length > 0) {
       for (const b of bandits) {
         if (b.unitId || b.stats.hunger > 40 || !chance(0.25)) continue;
@@ -2465,8 +3154,17 @@ function simulateDay() {
   /* 3-4. Agents: needs */
   for (const a of world.agents) if (a.alive) NeedSystem.update(a);
 
-  /* 5. ราคา */
-  for (const s of world.settlements) EconomySystem.updateDemandAndPrices(s);
+  /* 5. ราคา + settlement metrics */
+  for (const s of world.settlements) {
+    SettlementMetrics.update(s);
+    EconomySystem.updateDemandAndPrices(s);
+  }
+
+  /* 5.5 Phase 10.5: logistics & route security */
+  LogisticsSystem.updatePriceGaps();
+  for (const s of world.settlements) LogisticsSystem.updateSettlement(s);
+  LogisticsSystem.traderRespawn();
+  RouteSecuritySystem.update();
 
   /* 6-8. Agent AI + งาน + พ่อค้า */
   for (const a of world.agents) {
@@ -2516,9 +3214,8 @@ function simulateDay() {
   for (const s of marketSettlements()) {
     const pop = populationOf(s);
     if (pop < 1) continue;
-    const capacity = (s.prodPotential.food + s.prodPotential.wood + s.prodPotential.ore) * 8 + (s.type === 'town' ? 15 : s.type === 'castle' ? 12 : 5);
-    if (pop > capacity * 1.3) continue;   // เมืองแน่นเกิน — ไม่มีที่ทำกินให้คนรุ่นใหม่
-    const foodOk = s.stock.food > s.demand.food * 0.6;
+    if (pop > s.housingCapacity * 1.25) continue;
+    const foodOk = s.stock.food > s.demand.food * 0.6 && s.crowding < 1.15;
     const growthChance = foodOk && s.unrest < 50 ? pop * 0.006 * (s.prosperity / 60) : 0;
     if (chance(clamp(growthChance, 0, 0.25))) {
       const child = createAgent({ locationId: s.id, factionId: s.factionId, profession: 'unemployed', money: randInt(3, 15) });
@@ -2893,6 +3590,14 @@ const Renderer = {
       const u = ar.unitIds.map(getUnit).find(Boolean);
       if (u) { x = u._px; y = u._py; }
       r = 18;
+    } else if (sel.kind === 'route') {
+      const route = world.routes.find(rt => rt.id === sel.id);
+      if (!route) return;
+      const a = getSettlement(route.a), b = getSettlement(route.b);
+      if (!a || !b) return;
+      x = (this.sx(a.x) + this.sx(b.x)) / 2;
+      y = (this.sy(a.y) + this.sy(b.y)) / 2;
+      r = 12;
     }
     if (x == null) return;
     const pulse = 1 + Math.sin(performance.now() / 250) * 0.15;
@@ -2938,6 +3643,21 @@ const Renderer = {
         return { kind: 'settlement', id: s.id };
       }
     }
+    // 4) routes (คลิกใกล้เส้นทาง)
+    let bestR = null, bestRd = 12;
+    for (const r of world.routes) {
+      if (r.destroyed) continue;
+      const a = getSettlement(r.a), b = getSettlement(r.b);
+      if (!a || !b) continue;
+      const ax = this.sx(a.x), ay = this.sy(a.y), bx = this.sx(b.x), by = this.sy(b.y);
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy || 1;
+      const t = clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0, 1);
+      const distLine = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+      if (distLine < bestRd) { bestRd = distLine; bestR = r; }
+    }
+    if (bestR && bestRd < 10) return { kind: 'route', id: bestR.id };
+
     return null;
   }
 };
@@ -3205,6 +3925,12 @@ const UI = {
       if (!ar) { this.selected = null; return; }
       title.textContent = `🚩 ${ar.name}`;
       body.innerHTML = this.armyHTML(ar);
+    } else if (sel.kind === 'route') {
+      const r = world.routes.find(x => x.id === sel.id);
+      if (!r) { this.selected = null; return; }
+      const sa = getSettlement(r.a), sb = getSettlement(r.b);
+      title.textContent = `🛤 เส้นทาง ${sa ? sa.name : '?'} ↔ ${sb ? sb.name : '?'}`;
+      body.innerHTML = this.routeHTML(r, sa, sb);
     } else if (sel.kind === 'faction') {
       const fc = getFaction(sel.id);
       if (!fc) { this.selected = null; return; }
@@ -3281,6 +4007,32 @@ const UI = {
     html += this.kv('ชื่อเสียง (rep)', fmt(a.reputation));
     html += this.kv('Fame', fmt(a.fame), a.fame >= 20 ? 'warn' : '');
     html += `</div>`;
+    // ── Phase 10.5: Ambition ──
+    html += `<div class="insp-section"><h4>Ambition & เป้าหมาย</h4>`;
+    html += this.kv('แผน', a.ambitionPlan || '—');
+    html += this.kv('เป้าหมายเงิน', a.savingGoal ? fmt(a.savingGoal) + ' ทอง' : '—');
+    html += this.kv('ซื้อถัดไป', a.nextPurchase || '—');
+    if (a.lastMigrationDay > 0) html += this.kv('ย้ายล่าสุด', `Day ${a.lastMigrationDay}`);
+    if (a.wantedLevel > 0) html += this.kv('ค่าหัว', fmt(a.wantedLevel), 'bad');
+    html += `</div>`;
+    // ── Phase 10.5: Combat stats ──
+    const ds = CombatSystem.deriveStats(a);
+    html += `<div class="insp-section"><h4>Combat Stats</h4>`;
+    for (const [k, v] of Object.entries(a.combatStats || {})) html += this.kv(k, fmt(v, 1));
+    html += `<div class="sub-head">Derived</div>`;
+    html += this.kv('attack', fmt(ds.attack, 1)) + this.kv('defense', fmt(ds.defense, 1));
+    html += this.kv('armor', fmt(ds.armor, 1)) + this.kv('dodge', fmt(ds.dodge * 100, 0) + '%');
+    html += this.kv('accuracy', fmt(ds.accuracy * 100, 0) + '%') + this.kv('initiative', fmt(ds.initiative, 1));
+    html += this.kv('commandBonus', fmt(ds.commandBonus, 1));
+    html += `</div>`;
+    // ── Phase 10.5: Equipment ──
+    html += `<div class="insp-section"><h4>Equipment</h4>`;
+    syncLegacyInventory(a);
+    for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount', 'tool']) {
+      const item = a.equipment[slot];
+      html += this.kv(slot, item ? `${item.type} (${fmt(item.durability)}/${fmt(item.maxDurability)})` : '—');
+    }
+    html += `</div>`;
     html += `<div class="insp-section"><h4>เรื่องราวชีวิต</h4><div class="ce-desc" style="font-size:11.5px;line-height:1.5">${lifeSummary(a)}</div></div>`;
     html += `<div class="insp-section"><h4>สถานะ</h4>`;
     html += this.kv('Hunger', fmt(a.stats.hunger), a.stats.hunger < 30 ? 'bad' : 'good') + this.bar(a.stats.hunger, a.stats.hunger < 30 ? '#ef5350' : '#5dbb63');
@@ -3351,6 +4103,12 @@ const UI = {
     html += `</div>`;
     html += `<div class="insp-section"><h4>สังคม</h4>`;
     html += this.kv('ประชากร', populationOf(s));
+    html += this.kv('Crowding', fmt(s.crowding, 2), s.crowding > 1.1 ? 'bad' : '');
+    html += this.kv('Housing', `${populationOf(s)}/${s.housingCapacity}`);
+    html += this.kv('Food/capita', fmt(s.foodPerCapita, 1));
+    html += this.kv('Exportable food', SettlementMetrics.exportableFood(s));
+    html += this.kv('Food reserve', s.foodReserveTargetDays + ' วัน');
+    html += this.kv('Max export', fmt(s.maxFoodExportRatio * 100) + '%');
     html += this.kv('Prosperity', fmt(s.prosperity)) + this.bar(s.prosperity, '#5dbb63');
     html += this.kv('Loyalty', fmt(s.loyalty), s.loyalty < 35 ? 'bad' : '') + this.bar(s.loyalty, '#42a5f5');
     html += this.kv('Unrest', fmt(s.unrest), s.unrest > 55 ? 'bad' : '') + this.bar(s.unrest, '#ef5350');
@@ -3443,8 +4201,25 @@ const UI = {
     if (leader) html += this.kv('Command Capacity', MilitarySystem.commandCapacity(leader), members.length > MilitarySystem.commandCapacity(leader) ? 'bad' : 'good');
     html += this.kv('ตำแหน่ง', u.travel ? 'กำลังเดินทาง' : (s ? this.link('settlement', s.id, s.name) : '—'));
     html += this.kv('ภารกิจ', u.objective.type);
+    if (u.objective.bounty) html += this.kv('ค่าหัวเป้าหมาย', fmt(u.objective.bounty) + ' ทอง', 'warn');
     html += this.kv('พลังรบ', fmt(MilitarySystem.unitPower(u)));
+    html += this.kv('Combat Power', fmt(u.combatPower || 0));
+    html += this.kv('ชนะล่าสุด', u.recentVictories || 0, (u.recentVictories || 0) >= 2 ? 'good' : '');
     html += `</div>`;
+    // equipment composition
+    const eqComp = {};
+    for (const m of members) {
+      syncLegacyInventory(m);
+      for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount']) {
+        const t = m.equipment?.[slot]?.type;
+        if (t) eqComp[t] = (eqComp[t] || 0) + 1;
+      }
+    }
+    if (Object.keys(eqComp).length) {
+      html += `<div class="insp-section"><h4>Equipment องค์ประกอบ</h4>`;
+      for (const [t, n] of Object.entries(eqComp)) html += this.kv(t, n);
+      html += `</div>`;
+    }
     html += `<div class="insp-section"><h4>สภาพหน่วย</h4>`;
     html += this.kv('Morale', fmt(u.morale)) + this.bar(u.morale, '#ab47bc');
     html += this.kv('Cohesion', fmt(u.cohesion)) + this.bar(u.cohesion, '#42a5f5');
@@ -3464,6 +4239,29 @@ const UI = {
       html += u.battleHistory.slice(-5).map(b => `<div class="kv"><span class="k">Day ${b.day} vs ${b.vs}</span><span class="v ${b.won ? 'good' : 'bad'}">${b.won ? 'ชนะ' : 'แพ้'}</span></div>`).join('');
       html += `</div>`;
     }
+    return html;
+  },
+
+  routeHTML(r, sa, sb) {
+    let html = `<div class="insp-section"><h4>เส้นทาง</h4>`;
+    html += this.kv('จาก', sa ? this.link('settlement', sa.id, sa.name) : '?');
+    html += this.kv('ถึง', sb ? this.link('settlement', sb.id, sb.name) : '?');
+    html += this.kv('ระยะทาง', fmt(r.distance, 0));
+    html += this.kv('คุณภาพถนน', fmt(r.roadQuality, 2));
+    html += `</div><div class="insp-section"><h4>ความปลอดภัย (Phase 10.5)</h4>`;
+    html += this.kv('Threat', fmt((r.threat || r.danger) * 100, 0) + '%', (r.threat || r.danger) > 0.5 ? 'bad' : '') + this.bar((r.threat || r.danger) * 100, '#ef5350');
+    html += this.kv('Danger (legacy)', fmt(r.danger * 100, 0) + '%');
+    html += this.kv('Patrol Level', fmt(r.patrolLevel, 1));
+    html += this.kv('Bounty', fmt(r.bounty) + ' ทอง', r.bounty > 20 ? 'warn' : '');
+    html += this.kv('Recent Raids', fmt(r.recentRaids, 1));
+    html += this.kv('Caravan Losses', r.caravanLosses || 0, (r.caravanLosses || 0) > 3 ? 'bad' : '');
+    html += this.kv('Food Price Gap', fmt(r.priceGapFood || 0, 2));
+    html += this.kv('Traffic', fmt(r.traffic, 1));
+    if (r.patrolMissionId) {
+      const pu = getUnit(r.patrolMissionId);
+      html += this.kv('Patrol Mission', pu ? this.link('unit', pu.id, pu.name) : 'active');
+    }
+    html += `</div>`;
     return html;
   },
 
