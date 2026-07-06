@@ -47,6 +47,31 @@ const MAP_W = 1000, MAP_H = 640;
 
 const GOODS = ['food', 'wood', 'ore', 'tools', 'weapons', 'bows', 'arrows', 'horses'];
 
+function defaultMarketRole() {
+  return {
+    isMarketHub: false, hubLevel: 0, tradeInfluence: 0,
+    connectedRoutes: [], storageBonus: 0, priceStability: 0, guildPresence: 0
+  };
+}
+
+function defaultMarketIndex() {
+  return {
+    foodIndex: 1, woodIndex: 1, oreIndex: 1, toolsIndex: 1, weaponsIndex: 1,
+    volatility: 0, tradeHealth: 50, totalTradeVolume: 0, caravanSurvivalRate: 1,
+    lastUpdateDay: 0
+  };
+}
+
+const MERCHANT_RANKS = ['peddler', 'caravan_trader', 'master_merchant', 'guild_member', 'guild_elder', 'trade_prince'];
+const MERCHANT_RANK_TITLES = {
+  peddler: 'พ่อค้าเร่', caravan_trader: 'เจ้าคาราวาน', master_merchant: 'นายคลังสินค้า',
+  guild_member: 'สมาชิกสมาคมพ่อค้า', guild_elder: 'เจ้าสมาคมพ่อค้า', trade_prince: 'เจ้าชายการค้า'
+};
+
+function getGuild(id) { return (world.guilds || []).find(g => g.id === id); }
+function getWarehouse(id) { return (world.warehouses || []).find(w => w.id === id); }
+function getContract(id) { return (world.tradeContracts || []).find(c => c.id === id); }
+
 const BASE_PRICE = {
   food: 10, wood: 8, ore: 15, tools: 35,
   weapons: 60, bows: 45, arrows: 4, horses: 120
@@ -400,7 +425,11 @@ function createSettlement(opt) {
     recentInbound: 0,
     townCaravanId: null,
     emergencyCaravanId: null,
-    caravanSubsidy: 0
+    caravanSubsidy: 0,
+    // ── Phase 12: market hub / trade ──
+    marketRole: defaultMarketRole(),
+    tradeVolume: 0,
+    priceVolatility: 0
   };
   world.settlements.push(s);
   return s;
@@ -442,6 +471,7 @@ function createFaction(opt) {
     vassalIds: [],
     foundedDay: world.day,
     timeline: [],
+    tradeInfluence: 0,
     diplomacy: {
       relations: {},
       warExhaustion: 0,
@@ -511,7 +541,14 @@ function createAgent(opt) {
     currentThought: 'วันนี้จะทำอะไรดี...',
     // สำหรับ render
     _jitterA: Math.random() * Math.PI * 2,
-    _jitterR: rand(0.3, 1)
+    _jitterR: rand(0.3, 1),
+    // ── Phase 12: merchant career ──
+    guildId: opt.guildId || null,
+    merchantRank: opt.merchantRank || 'peddler',
+    tradeReputation: opt.tradeReputation != null ? opt.tradeReputation : 50,
+    contractsCompleted: 0,
+    contractsFailed: 0,
+    warehouseIds: []
   };
   world.agents.push(a);
   return a;
@@ -586,7 +623,9 @@ function generateWorld() {
     events: [],
     chronicle: [], wars: [], eras: [],
     treaties: [], vassalContracts: [],
-    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0 }
+    guilds: [], warehouses: [], tradeContracts: [],
+    marketIndex: defaultMarketIndex(),
+    stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0, contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0 }
   };
 
   // ── Factions ──
@@ -749,6 +788,7 @@ function generateWorld() {
 
   EventSystem.add('system', `🌍 โลกใหม่ถือกำเนิด — ${world.agents.length} ชีวิตใน ${world.settlements.length} ถิ่นฐาน ภายใต้${kingdom.name}`);
   DiplomacySystem.initWorld();
+  MarketTradeSystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -2022,11 +2062,723 @@ const WorkSystem = {
   }
 };
 
+/* ═══════════════════ 10.8 PHASE 12: MARKET / GUILD / TRADE ═══════════════════ */
+
+function createWarehouse(opt) {
+  const wh = {
+    id: uid(),
+    settlementId: opt.settlementId,
+    ownerType: opt.ownerType || 'settlement',
+    ownerId: opt.ownerId,
+    capacity: opt.capacity || 120,
+    stock: newStock(opt.stock),
+    rentIncome: 0,
+    security: opt.security != null ? opt.security : 40
+  };
+  world.warehouses.push(wh);
+  return wh;
+}
+
+function createGuild(opt) {
+  const g = {
+    id: uid(),
+    name: opt.name || `สมาคมพ่อค้าแห่ง${(getSettlement(opt.homeSettlementId) || {}).name || 'แผ่นดิน'}`,
+    homeSettlementId: opt.homeSettlementId,
+    factionId: opt.factionId || null,
+    wealth: opt.wealth || 100,
+    influence: opt.influence || 10,
+    reputation: opt.reputation || 50,
+    members: opt.members ? opt.members.slice() : [],
+    warehouses: [],
+    contracts: [],
+    policyPreference: { lowTax: true, safeRoutes: true, tradeTreaties: true, antiBandit: true },
+    relations: opt.relations || {},
+    foundedDay: world.day,
+    _bountyDay: -99
+  };
+  world.guilds.push(g);
+  const s = getSettlement(opt.homeSettlementId);
+  if (s && s.marketRole) {
+    s.marketRole.guildPresence = clamp((s.marketRole.guildPresence || 0) + 20, 0, 100);
+    s.marketRole.isMarketHub = true;
+    if (s.marketRole.hubLevel < 1) s.marketRole.hubLevel = 1;
+  }
+  return g;
+}
+
+function createTradeContract(opt) {
+  const c = {
+    id: uid(),
+    issuerType: opt.issuerType || 'settlement',
+    issuerId: opt.issuerId,
+    originId: opt.originId,
+    destinationId: opt.destinationId,
+    good: opt.good,
+    quantity: opt.quantity,
+    reward: opt.reward,
+    deadlineDay: opt.deadlineDay || (world.day + 25),
+    riskLevel: opt.riskLevel || 0.2,
+    status: 'open',
+    acceptedByAgentId: null,
+    escortUnitId: null,
+    createdDay: world.day
+  };
+  world.tradeContracts.push(c);
+  return c;
+}
+
+const MarketTradeSystem = {
+  initWorld() {
+    if (!world.guilds) world.guilds = [];
+    if (!world.warehouses) world.warehouses = [];
+    if (!world.tradeContracts) world.tradeContracts = [];
+    if (!world.marketIndex) world.marketIndex = defaultMarketIndex();
+    for (const s of world.settlements) this.ensureSettlementMarket(s);
+    for (const f of world.factions) {
+      if (f.tradeInfluence == null) f.tradeInfluence = 0;
+    }
+    for (const a of world.agents) this.ensureAgentMerchant(a);
+    this.validateAll();
+  },
+
+  ensureSettlementMarket(s) {
+    if (!s.marketRole) s.marketRole = defaultMarketRole();
+    if (s.tradeVolume == null) s.tradeVolume = 0;
+    if (s.priceVolatility == null) s.priceVolatility = 0;
+  },
+
+  ensureAgentMerchant(a) {
+    if (a.guildId == null) a.guildId = null;
+    if (!a.merchantRank) a.merchantRank = a.profession === 'trader' ? 'peddler' : 'peddler';
+    if (a.tradeReputation == null) a.tradeReputation = 50;
+    if (a.contractsCompleted == null) a.contractsCompleted = 0;
+    if (a.contractsFailed == null) a.contractsFailed = 0;
+    if (!a.warehouseIds) a.warehouseIds = [];
+  },
+
+  settlementWarehouses(sid) {
+    return (world.warehouses || []).filter(w => w.settlementId === sid);
+  },
+
+  guildAt(sid) {
+    return (world.guilds || []).find(g => g.homeSettlementId === sid);
+  },
+
+  routeTradeValue(r) {
+    const a = getSettlement(r.a), b = getSettlement(r.b);
+    if (!a || !b || r.destroyed) return 0;
+    return (r.traffic || 0) * 8 + (a.tradeVolume + b.tradeVolume) * 0.05 + (r.priceGapFood || 0) * 2;
+  },
+
+  computeSettlementTradeInfluence(s) {
+    if (!s || s.type === 'camp') return 0;
+    this.ensureSettlementMarket(s);
+    const routes = world.routes.filter(r => !r.destroyed && (r.a === s.id || r.b === s.id));
+    const routeBonus = sum(routes, r => r.traffic || 0) * 2;
+    const whCap = sum(this.settlementWarehouses(s.id), w => w.capacity);
+    const g = this.guildAt(s.id);
+    const guildInf = g ? g.influence : 0;
+    const danger = EconomySystem.localDanger(s);
+    const siegePen = s.siege ? 40 : 0;
+    const inf = (s.tradeVolume || 0) * 0.4 + (s.marketRole.hubLevel || 0) * 18 + routes.length * 6
+      + whCap * 0.08 + guildInf * 0.5 - danger * 25 - siegePen;
+    s.marketRole.tradeInfluence = clamp(inf, 0, 500);
+    s.marketRole.connectedRoutes = routes.map(r => r.id);
+    return s.marketRole.tradeInfluence;
+  },
+
+  computeFactionTradeInfluence(f) {
+    if (!f || f.isBandit) { if (f) f.tradeInfluence = 0; return 0; }
+    let inf = sum(world.settlements.filter(s => s.factionId === f.id), s => this.computeSettlementTradeInfluence(s));
+    const treaties = (world.treaties || []).filter(t => t.status === 'active' && t.type === 'trade' && t.factions.includes(f.id));
+    inf += treaties.length * 15;
+    for (const g of (world.guilds || []).filter(gu => gu.factionId === f.id)) {
+      inf += (g.relations[f.id] || g.reputation * 0.3);
+    }
+    inf -= (f.diplomacy?.warExhaustion || 0) * 0.4;
+    f.tradeInfluence = clamp(inf, 0, 2000);
+    return f.tradeInfluence;
+  },
+
+  tickDaily() {
+    this.initWorld();
+    for (const s of marketSettlements()) {
+      this.updateSettlementTrade(s);
+      this.evaluateMarketHub(s);
+      this.trySpawnGuild(s);
+      this.maybeCreateContracts(s);
+    }
+    for (const g of world.guilds) this.guildPolitics(g);
+    this.processContracts();
+    this.updateMerchantRanks();
+    for (const f of world.factions.filter(x => !x.isBandit)) this.computeFactionTradeInfluence(f);
+    if (world.day % 3 === 0) this.warehouseRaidCheck();
+    if (world.day % 10 === 0) this.updateMarketIndex();
+  },
+
+  updateSettlementTrade(s) {
+    let vol = 0;
+    for (const r of world.routes) {
+      if (r.destroyed) continue;
+      if (r.a === s.id || r.b === s.id) {
+        vol += r.traffic || 0;
+        r.traffic = clamp((r.traffic || 0) * 0.98 + this.routeTradeValue(r) * 0.02, 0, 50);
+      }
+    }
+    const traders = agentsAt(s.id).filter(a => a.profession === 'trader').length;
+    vol += traders * 2;
+    s.tradeVolume = clamp(vol, 0, 200);
+    const foodBase = BASE_PRICE.food;
+    s.priceVolatility = clamp(Math.abs(s.prices.food / foodBase - 1) * 30 + (s.marketRole.hubLevel > 0 ? -s.marketRole.priceStability * 0.1 : 0), 0, 100);
+    if (s.marketRole.hubLevel > 0) {
+      s.marketRole.priceStability = clamp(10 + s.marketRole.hubLevel * 8 + (s.buildings.includes('Market') ? 10 : 0), 0, 50);
+      s.marketRole.storageBonus = s.marketRole.hubLevel * 15;
+    }
+  },
+
+  evaluateMarketHub(s) {
+    if (s.type === 'camp' || s.siege) return;
+    const mr = s.marketRole;
+    const routes = world.routes.filter(r => !r.destroyed && (r.a === s.id || r.b === s.id));
+    const traders = agentsAt(s.id).filter(a => a.profession === 'trader').length;
+    const score = (s.tradeVolume || 0) + routes.length * 8 + traders * 5
+      + (s.buildings.includes('Market') ? 15 : 0) + (s.buildings.includes('Warehouse') ? 10 : 0)
+      + sum(this.settlementWarehouses(s.id), w => Object.values(w.stock).reduce((a, b) => a + b, 0)) * 0.05;
+    let level = 0;
+    if (score > 25) level = 1;
+    if (score > 55) level = 2;
+    if (score > 90) level = 3;
+    if (score > 130) level = 4;
+    if (score > 180) level = 5;
+    if (level > 0 && !mr.isMarketHub) {
+      mr.isMarketHub = true;
+      mr.hubLevel = level;
+      EventSystem.add('trade', `🏦 ${s.name} กลายเป็นตลาดกลางระดับ ${level}`);
+      Chronicle.add({
+        category: 'market', importance: 4,
+        title: `🏦 ตลาดกลาง${s.name} ถือกำเนิด`,
+        description: `เส้นทางการค้าและพ่อค้ารวมตัวที่${s.name} กลายเป็นศูนย์กลางเศรษฐกิจของแผ่นดิน`,
+        settlements: [s.id], factions: s.factionId ? [s.factionId] : []
+      });
+    } else if (mr.isMarketHub && level > mr.hubLevel) {
+      mr.hubLevel = level;
+    } else if (mr.isMarketHub && level < mr.hubLevel - 1) {
+      mr.hubLevel = Math.max(1, mr.hubLevel - 1);
+    }
+    mr.guildPresence = clamp((this.guildAt(s.id) ? 40 : 0) + traders * 4, 0, 100);
+  },
+
+  governorDevelopHub(gov, s) {
+    if (s.siege || s.type === 'camp') return;
+    const faction = getFaction(s.factionId);
+    const personality = faction?.diplomacy?.diplomaticPersonality || 'balanced';
+    if (personality === 'aggressive') return;
+    if (s.tradeVolume < 12 || s.treasury < 280 || s.security < 35) return;
+    if (!s.buildings.includes('Market') && (s.type === 'town' || s.type === 'castle') && chance(0.12)) {
+      const cost = BUILDINGS.Market.cost;
+      if (s.treasury >= cost.gold && s.stock.wood >= cost.wood) {
+        s.treasury -= cost.gold; s.stock.wood -= cost.wood;
+        s.buildings.push('Market');
+        EventSystem.add('trade', `🏗 ${gov.name} พัฒนา${s.name}เป็นศูนย์การค้า (Market)`);
+      }
+    }
+    if (s.marketRole.hubLevel >= 1 && !this.settlementWarehouses(s.id).length && s.treasury > 400 && chance(0.08)) {
+      const cost = BUILDINGS.Warehouse.cost;
+      if (s.treasury >= cost.gold && s.stock.wood >= cost.wood) {
+        s.treasury -= cost.gold; s.stock.wood -= cost.wood;
+        createWarehouse({ settlementId: s.id, ownerType: 'settlement', ownerId: s.id, capacity: 100 + s.marketRole.hubLevel * 30, security: s.security * 0.6 });
+        if (!s.buildings.includes('Warehouse')) s.buildings.push('Warehouse');
+      }
+    }
+  },
+
+  trySpawnGuild(s) {
+    if (s.type === 'camp' || s.siege) return;
+    if (this.guildAt(s.id)) return;
+    const traders = agentsAt(s.id).filter(a => a.alive && a.profession === 'trader' && !a.guildId);
+    const wealthy = traders.find(a => a.money >= 120 || a.memory.tradeProfit >= 150);
+    if (traders.length < 3 || s.tradeVolume < 15) return;
+    if (!s.marketRole.isMarketHub && s.marketRole.hubLevel < 1 && traders.length < 5) return;
+    if (!wealthy && s.tradeVolume < 25) return;
+    if (!chance(0.04 + traders.length * 0.01)) return;
+    const leader = wealthy || traders.reduce((m, t) => t.memory.tradeProfit > m.memory.tradeProfit ? t : m, traders[0]);
+    const g = createGuild({
+      name: `สมาคมพ่อค้าแห่ง${s.name}`,
+      homeSettlementId: s.id,
+      factionId: s.factionId,
+      wealth: leader.money * 0.3 + 80,
+      members: traders.slice(0, 6).map(t => t.id)
+    });
+    for (const t of traders.slice(0, 6)) {
+      t.guildId = g.id;
+      if (MERCHANT_RANKS.indexOf(t.merchantRank) < MERCHANT_RANKS.indexOf('guild_member')) {
+        t.merchantRank = 'guild_member';
+        t.title = MERCHANT_RANK_TITLES.guild_member;
+      }
+    }
+    const wh = createWarehouse({ settlementId: s.id, ownerType: 'guild', ownerId: g.id, capacity: 80, security: 45 });
+    g.warehouses.push(wh.id);
+    EventSystem.add('trade', `🏛 สมาคมพ่อค้า "${g.name}" ก่อตั้งที่${s.name} ภายใต้${leader.name}`);
+    Chronicle.add({
+      category: 'guild', importance: 4,
+      title: `🏛 ก่อตั้ง${g.name}`,
+      description: `${leader.name} รวมพ่อค้า ${g.members.length} คน ตั้งสมาคมค้าขายที่${s.name}`,
+      agents: [leader.id], settlements: [s.id], factions: s.factionId ? [s.factionId] : []
+    });
+  },
+
+  maybeCreateContracts(s) {
+    if (s.siege || chance(0.85)) return;
+    const open = world.tradeContracts.filter(c => c.status === 'open' && (c.originId === s.id || c.issuerId === s.id));
+    if (open.length >= 3) return;
+    let good = null, qty = 0, dest = null, reward = 0;
+    if (s.stock.food < s.demand.food * 0.45) {
+      good = 'food'; qty = randInt(8, 20);
+      dest = s.id;
+      const donor = marketSettlements().filter(x => x.id !== s.id && SettlementMetrics.exportableFood(x) > qty + 10)
+        .sort((a, b) => b.stock.food - a.stock.food)[0];
+      if (!donor) return;
+      reward = Math.floor(qty * s.prices.food * 1.2 + 15);
+      if (s.treasury < reward * 0.5) return;
+      createTradeContract({
+        issuerType: 'settlement', issuerId: s.id, originId: donor.id, destinationId: s.id,
+        good, quantity: qty, reward, riskLevel: this.contractRisk(donor.id, s.id)
+      });
+      return;
+    }
+    if (s.warDemand > 3 && s.stock.weapons < s.demand.weapons) {
+      good = 'weapons'; qty = randInt(3, 8);
+      const src = marketSettlements().find(x => x.stock.weapons >= qty + 2 && x.id !== s.id);
+      if (!src) return;
+      reward = Math.floor(qty * s.prices.weapons * 1.5 + 25);
+      if (s.treasury < reward * 0.4) return;
+      createTradeContract({
+        issuerType: 'settlement', issuerId: s.id, originId: src.id, destinationId: s.id,
+        good, quantity: qty, reward, riskLevel: this.contractRisk(src.id, s.id)
+      });
+      return;
+    }
+    const g = this.guildAt(s.id);
+    if (g && g.wealth > 60 && chance(0.15)) {
+      good = pick(['food', 'wood', 'tools'].filter(gg => s.stock[gg] < s.demand[gg] * 0.5));
+      if (!good) return;
+      qty = randInt(5, 15);
+      const src = marketSettlements().find(x => x.stock[good] >= qty + 3 && x.id !== s.id);
+      if (!src) return;
+      reward = Math.floor(qty * (s.prices[good] || BASE_PRICE[good]) * 1.1 + 10);
+      createTradeContract({
+        issuerType: 'guild', issuerId: g.id, originId: src.id, destinationId: s.id,
+        good, quantity: qty, reward, riskLevel: this.contractRisk(src.id, s.id)
+      });
+    }
+  },
+
+  contractRisk(fromId, toId) {
+    const path = findPath(fromId, toId, true);
+    if (!path) return 0.8;
+    let risk = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const r = getRoute(path[i], path[i + 1]);
+      if (r) risk += r.danger || r.threat || 0;
+    }
+    return clamp(risk / Math.max(path.length - 1, 1), 0.05, 0.95);
+  },
+
+  processContracts() {
+    for (const c of world.tradeContracts) {
+      if (c.status === 'open' && world.day > c.deadlineDay) {
+        this.failContract(c, 'หมดเวลา');
+      }
+    }
+    for (const a of world.agents) {
+      if (!a.alive || a.profession !== 'trader' || a.cargo || a.travel || a.isTownCaravan) continue;
+      if (a.contractId) continue;
+      this.traderConsiderContract(a);
+    }
+  },
+
+  traderConsiderContract(a) {
+    const s = getSettlement(a.locationId);
+    if (!s) return;
+    const open = world.tradeContracts.filter(c => c.status === 'open');
+    let best = null, bestScore = 8;
+    for (const c of open) {
+      if (c.originId !== s.id && c.destinationId !== s.id) {
+        const nearOrigin = findPath(s.id, c.originId);
+        if (!nearOrigin) continue;
+      }
+      const origin = getSettlement(c.originId);
+      const dest = getSettlement(c.destinationId);
+      if (!origin || !dest) continue;
+      const avail = this.availableStock(origin, c.good, c.quantity);
+      if (avail < c.quantity) continue;
+      const daysLeft = c.deadlineDay - world.day;
+      if (daysLeft < 3) continue;
+      const risk = c.riskLevel || this.contractRisk(c.originId, c.destinationId);
+      let score = c.reward - c.quantity * (origin.prices[c.good] || BASE_PRICE[c.good]) * 0.9;
+      score -= risk * 40 * (1.1 - a.traits.riskTolerance);
+      score += a.skills.trading * 3;
+      if (a.guildId) score += 8;
+      if (daysLeft < 8) score -= 10;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    if (!best) return;
+    this.acceptContract(a, best);
+  },
+
+  availableStock(s, good, need) {
+    let avail = Math.floor(s.stock[good] || 0);
+    if (good === 'food') avail = Math.min(avail, SettlementMetrics.exportableFood(s));
+    const whs = this.settlementWarehouses(s.id);
+    for (const wh of whs) avail += Math.floor(wh.stock[good] || 0);
+    return avail;
+  },
+
+  withdrawStock(s, good, qty) {
+    let left = qty;
+    const whs = this.settlementWarehouses(s.id);
+    for (const wh of whs) {
+      const take = Math.min(left, Math.floor(wh.stock[good] || 0));
+      wh.stock[good] = Math.max(0, (wh.stock[good] || 0) - take);
+      left -= take;
+      if (left <= 0) return qty;
+    }
+    if (good === 'food') {
+      const take = Math.min(left, SettlementMetrics.exportableFood(s));
+      s.stock.food -= take;
+      left -= take;
+    } else {
+      const take = Math.min(left, Math.floor(s.stock[good] || 0));
+      s.stock[good] -= take;
+      left -= take;
+    }
+    return qty - left;
+  },
+
+  acceptContract(a, c) {
+    const origin = getSettlement(c.originId);
+    if (!origin) return;
+    if (a.locationId !== c.originId) {
+      a.pendingContractId = c.id;
+      startTravel(a, c.originId, 'contract');
+      return;
+    }
+    this.pickupContract(a, c);
+  },
+
+  pickupContract(a, c) {
+    const origin = getSettlement(c.originId);
+    if (!origin) return;
+    const got = this.withdrawStock(origin, c.good, c.quantity);
+    if (got < Math.ceil(c.quantity * 0.8)) return;
+    c.status = 'accepted';
+    c.acceptedByAgentId = a.id;
+    a.contractId = c.id;
+    a.pendingContractId = null;
+    a.cargo = { good: c.good, qty: got, buyCost: got * (origin.prices[c.good] || BASE_PRICE[c.good]), destId: c.destinationId, isContract: true, contractId: c.id };
+    a.currentGoal = `สัญญาขนส่ง ${c.good} → ${(getSettlement(c.destinationId) || {}).name || '?'}`;
+    startTravel(a, c.destinationId, 'contract');
+    EventSystem.add('trade', `📜 ${a.name} รับสัญญาขนส่ง ${c.good} ${got} หน่วย (ค่าจ้าง ${fmt(c.reward)} ทอง)`);
+  },
+
+  completeContract(c, a) {
+    const dest = getSettlement(c.destinationId);
+    if (!dest || !a.cargo) return;
+    const qty = Math.min(a.cargo.qty, c.quantity);
+    dest.stock[c.good] = Math.min(dest.stock[c.good] + qty, EconomySystem.storageCap(dest, c.good));
+    dest.recentInbound = (dest.recentInbound || 0) + qty;
+    let paid = c.reward;
+    if (c.issuerType === 'settlement') {
+      const iss = getSettlement(c.issuerId);
+      if (iss) { paid = Math.min(c.reward, iss.treasury); iss.treasury -= paid; }
+    } else if (c.issuerType === 'guild') {
+      const g = getGuild(c.issuerId);
+      if (g) { paid = Math.min(c.reward, g.wealth); g.wealth -= paid; g.influence += 2; }
+    } else if (c.issuerType === 'faction') {
+      const f = getFaction(c.issuerId);
+      if (f) { paid = Math.min(c.reward, f.treasury); f.treasury -= paid; }
+    }
+    a.money += paid;
+    a.contractsCompleted = (a.contractsCompleted || 0) + 1;
+    a.tradeReputation = clamp((a.tradeReputation || 50) + 4, 0, 100);
+    a.skills.trading = Math.min(10, a.skills.trading + 0.1);
+    world.stats.contractsCompleted = (world.stats.contractsCompleted || 0) + 1;
+    c.status = 'completed';
+    a.contractId = null;
+    a.cargo = null;
+    if (a.guildId) {
+      const g = getGuild(a.guildId);
+      if (g) { g.wealth += paid * 0.1; g.influence += 3; g.contracts.push(c.id); }
+    }
+    if (c.reward >= 40 || qty >= 15) {
+      Chronicle.add({
+        category: 'market', importance: 3,
+        title: `📜 สัญญาขนส่งสำเร็จ: ${c.good} → ${dest.name}`,
+        description: `${a.name} ส่งมอบ ${qty} หน่วย${c.good} ตามสัญญา ได้รับ ${fmt(paid)} ทอง`,
+        agents: [a.id], settlements: [c.originId, c.destinationId]
+      });
+    }
+    EventSystem.add('trade', `✅ ${a.name} ส่งมอบสัญญา ${c.good} ที่${dest.name} ได้ ${fmt(paid)} ทอง`);
+  },
+
+  failContract(c, reason) {
+    c.status = 'failed';
+    if (c.acceptedByAgentId) {
+      const a = getAgent(c.acceptedByAgentId);
+      if (a) {
+        a.contractsFailed = (a.contractsFailed || 0) + 1;
+        a.tradeReputation = clamp((a.tradeReputation || 50) - 8, 0, 100);
+        a.contractId = null;
+        if (a.cargo?.contractId === c.id) a.cargo = null;
+      }
+    }
+    world.stats.contractsFailed = (world.stats.contractsFailed || 0) + 1;
+    if (c.issuerType === 'guild') {
+      const g = getGuild(c.issuerId);
+      if (g) g.reputation = clamp(g.reputation - 5, 0, 100);
+    }
+    if (reason && chance(0.3)) EventSystem.add('trade', `❌ สัญญาขนส่ง ${c.good} ล้มเหลว — ${reason}`);
+  },
+
+  onTraderArriveContract(a) {
+    if (!a.contractId) return false;
+    const c = getContract(a.contractId);
+    if (!c || c.status !== 'accepted') return false;
+    if (a.locationId === c.destinationId && a.cargo) {
+      this.completeContract(c, a);
+      return true;
+    }
+    return false;
+  },
+
+  onContractCaravanLost(a) {
+    if (!a.contractId) return;
+    const c = getContract(a.contractId);
+    if (c) this.failContract(c, 'ถูกปล้นหรือสูญหาย');
+    a.contractId = null;
+  },
+
+  guildPolitics(g) {
+    const s = getSettlement(g.homeSettlementId);
+    if (!s) return;
+    const f = getFaction(s.factionId);
+    if (!g.relations[s.factionId]) g.relations[s.factionId] = 50;
+    let rel = g.relations[s.factionId];
+    if (s.taxRate > 0.22) {
+      rel -= 0.4;
+      if (chance(0.05)) EventSystem.add('politics', `🏛 ${g.name} ไม่พอใจภาษีสูงที่${s.name} — พ่อค้าเริ่มเลี่ยง`);
+    } else if (s.taxRate < 0.12 && s.security > 40) {
+      rel += 0.3;
+    }
+    const routeDanger = EconomySystem.localDanger(s);
+    if (routeDanger > 0.45 && g.policyPreference.antiBandit && world.day - g._bountyDay > 20) {
+      for (const r of world.routes.filter(rt => !rt.destroyed && (rt.a === s.id || rt.b === s.id))) {
+        if (r.danger > 0.35 && g.wealth > 40) {
+          const bounty = Math.min(60, Math.floor(g.wealth * 0.15));
+          g.wealth -= bounty;
+          r.bounty = (r.bounty || 0) + bounty;
+          g._bountyDay = world.day;
+          EventSystem.add('bandit', `💰 ${g.name} ตั้งค่าหัว ${fmt(bounty)} ทองบนเส้นทางค้า`);
+          break;
+        }
+      }
+      if (g.wealth > 120 && routeDanger > 0.5 && chance(0.06)) {
+        const guards = agentsAt(s.id).filter(a => a.profession === 'guard' && !a.unitId);
+        if (guards.length >= 2) {
+          const leader = guards[0];
+          const u = createUnit({
+            name: `คุ้มกันคาราวาน${g.name.split('แห่ง')[0]}`, kind: 'field',
+            leaderId: leader.id, memberIds: guards.slice(0, 3).map(x => x.id),
+            factionId: s.factionId, locationId: s.id, food: 15
+          });
+          u.objective = { type: 'patrol_guild', guildId: g.id };
+          g.wealth -= 50;
+          EventSystem.add('war', `🛡 ${g.name} จ้าง${u.name} ลาดตระเวนปกป้องเส้นทางค้า`);
+        }
+      }
+    }
+    if (f && f.warState && g.policyPreference.tradeTreaties && chance(0.04)) {
+      const enemy = world.factions.find(o => f.enemies.includes(o.id));
+      if (enemy && rel > 40) {
+        EventSystem.add('diplomacy', `🏛 ${g.name} กดดันให้${f.name}หาทางสงบศึกเพื่อการค้า`);
+        f.diplomacy.warExhaustion = clamp((f.diplomacy.warExhaustion || 0) + 2, 0, 100);
+      }
+    }
+  },
+
+  warehouseRaidCheck() {
+    for (const wh of world.warehouses) {
+      const s = getSettlement(wh.settlementId);
+      if (!s || s.siege) continue;
+      const totalStock = sum(GOODS, g => wh.stock[g] || 0);
+      if (totalStock < 8) continue;
+      const attract = totalStock * 0.002 + EconomySystem.localDanger(s) * 0.08;
+      if (!chance(attract)) continue;
+      const good = pick(GOODS.filter(g => (wh.stock[g] || 0) > 2));
+      if (!good) continue;
+      const stolen = Math.min(Math.floor(wh.stock[good] * rand(0.15, 0.4)), Math.floor(wh.stock[good]));
+      wh.stock[good] -= stolen;
+      world.stats.warehouseRaids = (world.stats.warehouseRaids || 0) + 1;
+      s.crime = clamp(s.crime + 8, 0, 100);
+      EventSystem.add('bandit', `🔥 โจรปล้นคลังสินค้าที่${s.name}! เสีย ${good} ${stolen} หน่วย`);
+      Chronicle.add({
+        category: 'market', importance: 3,
+        title: `🔥 คลังสินค้า${s.name}ถูกปล้น`,
+        description: `โจรขโมย ${good} ${stolen} หน่วยจากคลัง — เส้นทางค้าเสี่ยงขึ้น`,
+        settlements: [s.id]
+      });
+      for (const r of world.routes.filter(rt => !rt.destroyed && (rt.a === s.id || rt.b === s.id))) {
+        r.danger = clamp(r.danger + 0.03, 0, 1);
+      }
+    }
+  },
+
+  updateMerchantRanks() {
+    for (const a of world.agents) {
+      if (!a.alive || a.profession !== 'trader') continue;
+      this.ensureAgentMerchant(a);
+      const profit = a.memory.tradeProfit || 0;
+      const completed = a.contractsCompleted || 0;
+      let rank = 'peddler';
+      if (profit >= 80 || completed >= 2) rank = 'caravan_trader';
+      if (profit >= 200 && a.money >= 120) rank = 'master_merchant';
+      if (a.guildId) rank = MERCHANT_RANKS[Math.max(MERCHANT_RANKS.indexOf('guild_member'), MERCHANT_RANKS.indexOf(rank))];
+      if (a.guildId) {
+        const g = getGuild(a.guildId);
+        if (g && (g.influence > 40 || completed >= 5)) rank = 'guild_elder';
+      }
+      if (profit >= 500 && (a.fame || 0) >= 12) rank = 'trade_prince';
+      const idx = MERCHANT_RANKS.indexOf(rank);
+      const curIdx = MERCHANT_RANKS.indexOf(a.merchantRank);
+      if (idx > curIdx) {
+        a.merchantRank = rank;
+        const title = MERCHANT_RANK_TITLES[rank];
+        if (title && (!a.title || rank === 'trade_prince')) {
+          a.title = title;
+          if (rank === 'trade_prince') {
+            Chronicle.add({
+              category: 'guild', importance: 4,
+              title: `👑 ${a.name} ขึ้นเป็นเจ้าชายการค้า`,
+              description: `พ่อค้าผู้ยิ่งใหญ่ที่ครอบครองเส้นทางค้าและกำไรสะสม ${fmt(profit)} ทอง`,
+              agents: [a.id]
+            });
+            EventSystem.add('legend', `👑 ${a.name} "${title}" — ผู้ครอบครองเส้นเลือดเศรษฐกิจ`);
+          }
+        }
+      }
+    }
+  },
+
+  updateMarketIndex() {
+    const idx = world.marketIndex || defaultMarketIndex();
+    const mkts = marketSettlements();
+    if (!mkts.length) return;
+    for (const g of GOODS.slice(0, 5)) {
+      const avg = sum(mkts, s => s.prices[g] / BASE_PRICE[g]) / mkts.length;
+      idx[g + 'Index'] = clamp(avg, 0.3, 4);
+    }
+    idx.volatility = sum(mkts, s => s.priceVolatility || 0) / mkts.length;
+    idx.totalTradeVolume = sum(mkts, s => s.tradeVolume || 0);
+    const raids = world.stats.caravansRobbed + (world.stats.warehouseRaids || 0);
+    const trips = Math.max(1, idx.totalTradeVolume + raids);
+    idx.caravanSurvivalRate = clamp(1 - raids / trips, 0.3, 1);
+    idx.tradeHealth = clamp(50 + idx.totalTradeVolume * 0.15 - idx.volatility * 0.5 + idx.caravanSurvivalRate * 20, 0, 100);
+    idx.lastUpdateDay = world.day;
+    world.marketIndex = idx;
+    if (idx.tradeHealth > 75 && idx.volatility < 15 && chance(0.15)) {
+      Chronicle.add({
+        category: 'market', importance: 3,
+        title: `📈 การค้าเฟื่องฟู (trade health ${fmt(idx.tradeHealth, 0)})`,
+        description: `ตลาดมั่นคง ปริมาณค้า ${fmt(idx.totalTradeVolume, 0)} ดัชนีอาหาร ${fmt(idx.foodIndex, 2)}`
+      });
+    }
+    if (idx.foodIndex > 2.2 && idx.volatility > 25 && chance(0.2)) {
+      Chronicle.add({
+        category: 'market', importance: 4,
+        title: `📉 วิกฤตราคาอาหาร`,
+        description: `ดัชนีอาหารพุ่ง ${fmt(idx.foodIndex, 2)} ความผันผวน ${fmt(idx.volatility, 1)} — พ่อค้าและชาวบ้านเดือดร้อน`
+      });
+    }
+  },
+
+  validateAll() {
+    world.tradeContracts = (world.tradeContracts || []).filter(c => {
+      if (!getSettlement(c.originId) || !getSettlement(c.destinationId)) return false;
+      if (c.issuerType === 'guild' && !getGuild(c.issuerId)) return false;
+      if (c.issuerType === 'settlement' && !getSettlement(c.issuerId)) return false;
+      if (c.acceptedByAgentId && !getAgent(c.acceptedByAgentId)?.alive) {
+        c.status = 'failed'; c.acceptedByAgentId = null;
+      }
+      return true;
+    });
+    for (const a of world.agents) {
+      if (a.contractId && !getContract(a.contractId)) a.contractId = null;
+      if (a.guildId && !getGuild(a.guildId)) a.guildId = null;
+    }
+  },
+
+  diplomacyTradeWeight(f) {
+    return clamp((f.tradeInfluence || 0) * 0.02, 0, 25);
+  },
+
+  rankings() {
+    const hubs = marketSettlements().filter(s => s.marketRole?.isMarketHub)
+      .sort((a, b) => (b.marketRole.tradeInfluence || 0) - (a.marketRole.tradeInfluence || 0)).slice(0, 10);
+    const guilds = (world.guilds || []).slice().sort((a, b) => b.wealth - a.wealth).slice(0, 10);
+    const routes = world.routes.filter(r => !r.destroyed).map(r => ({ route: r, value: this.routeTradeValue(r) }))
+      .sort((a, b) => b.value - a.value).slice(0, 10);
+    const volatile = marketSettlements().slice().sort((a, b) => (b.priceVolatility || 0) - (a.priceVolatility || 0)).slice(0, 10);
+    const contracts = (world.tradeContracts || []).filter(c => c.status === 'open' || c.status === 'accepted')
+      .sort((a, b) => b.reward - a.reward).slice(0, 15);
+    const profitable = GOODS.map(g => ({
+      good: g,
+      avgPrice: sum(marketSettlements(), s => s.prices[g]) / Math.max(marketSettlements().length, 1)
+    })).sort((a, b) => b.avgPrice - a.avgPrice);
+    return { hubs, guilds, routes, volatile, contracts, profitable, marketIndex: world.marketIndex };
+  },
+
+  renderMarketPanel() {
+    const body = document.getElementById('marketPanelBody');
+    if (!body || !world) return;
+    const rk = this.rankings();
+    const idx = world.marketIndex || defaultMarketIndex();
+    let html = `<div class="mkt-index-box">
+      <div><b>Market Index</b> (Day ${idx.lastUpdateDay || world.day})</div>
+      <div class="mkt-idx-row">🍞 food ${fmt(idx.foodIndex, 2)} · 🪵 wood ${fmt(idx.woodIndex, 2)} · ⛏ ore ${fmt(idx.oreIndex, 2)}</div>
+      <div class="mkt-idx-row">Health ${fmt(idx.tradeHealth, 0)} · Volatility ${fmt(idx.volatility, 1)} · Volume ${fmt(idx.totalTradeVolume, 0)}</div>
+      <div class="mkt-idx-row">Caravan survival ${fmt((idx.caravanSurvivalRate || 1) * 100, 0)}%</div>
+    </div>`;
+    html += '<div class="obs-section-head">Top Market Hubs</div>';
+    html += rk.hubs.length ? rk.hubs.map(s =>
+      `<div class="obs-row" data-kind="settlement" data-id="${s.id}"><span>${s.name}</span><span class="obs-sub">Lv${s.marketRole.hubLevel} · ${fmt(s.marketRole.tradeInfluence, 0)}</span></div>`
+    ).join('') : '<p class="hint">ยังไม่มีตลาดกลาง</p>';
+    html += '<div class="obs-section-head">Guilds</div>';
+    html += rk.guilds.length ? rk.guilds.map(g =>
+      `<div class="obs-row" data-kind="settlement" data-id="${g.homeSettlementId}"><span>${g.name}</span><span class="obs-sub">${fmt(g.wealth)} ทอง · ${g.members.length} สมาชิก</span></div>`
+    ).join('') : '<p class="hint">ยังไม่มีสมาคม</p>';
+    html += '<div class="obs-section-head">Active Contracts</div>';
+    html += rk.contracts.length ? rk.contracts.map(c => {
+      const o = getSettlement(c.originId), d = getSettlement(c.destinationId);
+      return `<div class="obs-row" data-kind="settlement" data-id="${c.destinationId}"><span>${c.good} ×${c.quantity}</span><span class="obs-sub">${c.status} · ${o ? o.name : '?'}→${d ? d.name : '?'} · ${fmt(c.reward)}</span></div>`;
+    }).join('') : '<p class="hint">ไม่มีสัญญาเปิด</p>';
+    html += '<div class="obs-section-head">Warehouse Stock</div>';
+    const whSum = newStock();
+    for (const wh of (world.warehouses || [])) for (const g of GOODS) whSum[g] += wh.stock[g] || 0;
+    html += GOODS.filter(g => whSum[g] > 0).map(g => `<div class="kv"><span class="k">${g}</span><span class="v">${fmt(whSum[g])}</span></div>`).join('') || '<p class="hint">คลังว่าง</p>';
+    body.innerHTML = html;
+    for (const row of body.querySelectorAll('.obs-row')) {
+      row.addEventListener('click', () => ObserverSystem.focusTarget(row.dataset.kind, +row.dataset.id));
+    }
+  }
+};
+
 /* ═══════════════════ 11. TRADER SYSTEM ═══════════════════ */
 
 const TraderSystem = {
   planTrade(a, s) {
-    if (a.cargo) return; // มีสินค้าค้างอยู่ระหว่างทางแล้ว
+    if (a.cargo) return;
+    if (!a.contractId && !a.pendingContractId) MarketTradeSystem.traderConsiderContract(a);
+    if (a.cargo || a.contractId || a.pendingContractId) return;
     let best = null, bestProfit = 12; // ต้องคุ้มขั้นต่ำ
 
     for (const g of GOODS) {
@@ -2084,6 +2836,15 @@ const TraderSystem = {
   onArrive(a) {
     const s = getSettlement(a.locationId);
     if (!s) return;
+
+    if (a.pendingContractId) {
+      const pc = getContract(a.pendingContractId);
+      if (pc && a.locationId === pc.originId) {
+        MarketTradeSystem.pickupContract(a, pc);
+        return;
+      }
+    }
+    if (MarketTradeSystem.onTraderArriveContract(a)) return;
 
     // คาราวานช่วยเหลือฉุกเฉินถึงปลายทาง
     if (a.isEmergencyCaravan && a.cargo && s.id === a.cargo.destId) {
@@ -2197,7 +2958,8 @@ const BanditSystem = {
     // ตัวเลือก 1: ดักปล้นเส้นทางที่คาราวานพลุกพล่าน ยามน้อย
     for (const r of world.routes) {
       if (r.destroyed) continue;
-      const score = r.traffic * 4 - r.patrolLevel * 8 + r.danger * 5;
+      const score = r.traffic * 4 - r.patrolLevel * 8 + r.danger * 5
+        + (typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.routeTradeValue(r) * 0.08 : 0);
       if (score > bestScore) { bestScore = score; best = { type: 'ambush', routeId: r.id, atId: chance(0.5) ? r.a : r.b }; }
     }
     // ตัวเลือก 2: ปล้นหมู่บ้านที่ป้องกันอ่อน
@@ -2205,7 +2967,9 @@ const BanditSystem = {
       if (s.type === 'camp' || s.factionId === u.factionId) continue;
       const garrisonPower = s.garrisonUnitId ? MilitarySystem.unitPower(getUnit(s.garrisonUnitId)) : 0;
       const wallMod = s.buildings.includes('Wall') ? 2 : 1;
-      const lootValue = s.stock.food * 0.5 + s.treasury * 0.1 + s.stock.weapons * 2;
+      const lootValue = s.stock.food * 0.5 + s.treasury * 0.1 + s.stock.weapons * 2
+        + sum((world.warehouses || []).filter(w => w.settlementId === s.id), w => sum(GOODS, g => w.stock[g] || 0)) * 0.3
+        + (s.marketRole?.isMarketHub ? 25 : 0);
       const score = lootValue / 8 - (garrisonPower * wallMod) / Math.max(power, 1) * 20 - (s.type !== 'village' ? 15 : 0);
       if (score > bestScore) { bestScore = score; best = { type: 'raid', targetId: s.id }; }
     }
@@ -2252,6 +3016,7 @@ const BanditSystem = {
       trader.money -= stolenGold;
       const good = trader.cargo.good;
       if (trader.isTownCaravan || trader.isEmergencyCaravan) clearTownCaravan(trader, 'robbed');
+      if (trader.contractId) MarketTradeSystem.onContractCaravanLost(trader);
       trader.cargo = null;
       trader.stats.morale -= 15;
       trader.stats.health -= randInt(0, 25);
@@ -3107,6 +3872,8 @@ const GovernanceSystem = {
       }
     }
 
+    if (typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.governorDevelopHub(gov, s);
+
     /* governor อิสระ/กบฏ: ambition สูง loyalty ต่ำ กองกำลังพร้อม */
     if (gov.gov && s.governorId === gov.id && s.ownerId !== gov.id) {
       const faction = getFaction(s.factionId);
@@ -3754,7 +4521,7 @@ const DiplomacySystem = {
       }
     }
 
-    const warScore = (theirPow < myPow * 0.7 ? 25 : 0) + r.borderTension * 0.4 + rs.ambition * 30
+    let warScore = (theirPow < myPow * 0.7 ? 25 : 0) + r.borderTension * 0.4 + rs.ambition * 30
       - exhaustion * 0.5 - (r.tradeValue * 0.3) - (r.score > 20 ? r.score * 0.2 : 0)
       - (r.nonAggressionUntilDay > world.day ? 50 : 0)
       - (areAllied(f, other) ? 80 : 0);
@@ -3766,6 +4533,9 @@ const DiplomacySystem = {
       - (r.score < -20 ? 30 : 0);
 
     const warThresh = f.diplomacy.diplomaticPersonality === 'aggressive' ? 35 : f.diplomacy.diplomaticPersonality === 'defensive' ? 55 : 45;
+    const tradePen = typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.diplomacyTradeWeight(f) : 0;
+    if (f.diplomacy.diplomaticPersonality === 'trader') warScore -= tradePen * 1.5;
+    else warScore -= tradePen * 0.6;
     if (warScore > warThresh && !isVassalOf(f, other) && chance(0.1)) {
       this.declareWar(f, other, 'ความตึงเครียดชายแดนและความทะเยอทะยานของผู้นำ');
       return;
@@ -3804,7 +4574,8 @@ const DiplomacySystem = {
   considerPeace(f, other) {
     const exhaustion = f.diplomacy.warExhaustion;
     const rs = this.rulerStats(f);
-    const peaceScore = exhaustion * 0.9 + (f.treasury < 150 ? 20 : 0) - rs.ambition * 25;
+    const peaceScore = exhaustion * 0.9 + (f.treasury < 150 ? 20 : 0) - rs.ambition * 25
+      + (typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.diplomacyTradeWeight(f) * 0.5 : 0);
     if (peaceScore > 32 && chance(0.22)) {
       this.offerPeace(f, other);
     }
@@ -4019,6 +4790,7 @@ function simulateDay() {
   for (const s of world.settlements) GovernanceSystem.updateSettlement(s);
   GovernanceSystem.updateFactions();
   DiplomacySystem.tick();
+  MarketTradeSystem.tickDaily();
 
   // เติม garrison จากทหารว่าง
   for (const s of world.settlements) {
@@ -4151,6 +4923,15 @@ function generateEraSummary() {
   } else if (d.raids >= 10) {
     theme = 'ยุคโจรชุกชุม';
     detail = `เส้นทางการค้ากลายเป็นแดนอันตราย มีการปล้นถึง ${d.raids} ครั้ง พ่อค้าต้องเสี่ยงชีวิตแลกกำไร`;
+  } else if (world.marketIndex && world.marketIndex.tradeHealth > 78 && world.marketIndex.foodIndex < 1.4) {
+    theme = 'ยุคทองแห่งการค้า';
+    detail = `ตลาดรุ่งเรือง trade health ${fmt(world.marketIndex.tradeHealth, 0)} ปริมาณค้า ${fmt(world.marketIndex.totalTradeVolume, 0)} ดัชนีอาหาร ${fmt(world.marketIndex.foodIndex, 2)}`;
+  } else if (world.marketIndex && world.marketIndex.foodIndex > 2.2) {
+    theme = 'วิกฤตราคาอาหาร';
+    detail = `ดัชนีอาหารพุ่ง ${fmt(world.marketIndex.foodIndex, 2)} ความผันผวน ${fmt(world.marketIndex.volatility, 1)} — ชาวบ้านและพ่อค้าเดือดร้อน`;
+  } else if ((world.guilds || []).length >= 2 && world.marketIndex?.tradeHealth > 65) {
+    theme = 'ยุคสมาคมพ่อค้าครองเมือง';
+    detail = `สมาคมพ่อค้า ${world.guilds.length} แห่งชี้นำเส้นเลือดเศรษฐกิจของแผ่นดิน`;
   } else if (d.deaths >= 20 || avgFood > 25) {
     theme = 'ยุคแห่งความอดอยาก';
     detail = `ราคาอาหารเฉลี่ยพุ่งสูงถึง ${fmt(avgFood, 1)} ทอง ${hungriest.name}เดือดร้อนหนักที่สุด มีผู้เสียชีวิต ${d.deaths} ราย`;
@@ -4256,6 +5037,8 @@ const ObserverSystem = {
     document.getElementById('diplomacyPanel')?.classList.add('hidden');
     document.getElementById('summaryModal')?.classList.add('hidden');
     document.getElementById('savePanel')?.classList.add('hidden');
+    document.getElementById('marketPanel')?.classList.add('hidden');
+    UI.marketOpen = false;
     UI.chronicleOpen = false;
     if (this.observerOpen) { this.observerDirty = true; this.renderPanel(); }
   },
@@ -4334,6 +5117,11 @@ const ObserverSystem = {
     }
     for (const ar of world.armies) {
       if (ar.name.toLowerCase().includes(q)) push('army', ar.id, ar.name, `${ar.unitIds.length} หน่วย`);
+    }
+    for (const g of (world.guilds || [])) {
+      if (g.name.toLowerCase().includes(q)) {
+        push('settlement', g.homeSettlementId, g.name, 'guild');
+      }
     }
     return results.slice(0, 25);
   },
@@ -4546,7 +5334,10 @@ const ObserverSystem = {
       foodCrisis,
       banditAvg,
       strongest: strongest ? strongest.name : '—',
-      day: world.day
+      day: world.day,
+      tradeHealth: world.marketIndex ? fmt(world.marketIndex.tradeHealth, 0) : '—',
+      guilds: (world.guilds || []).length,
+      hubs: marketSettlements().filter(s => s.marketRole?.isMarketHub).length
     };
   },
 
@@ -4626,6 +5417,33 @@ const ObserverSystem = {
            <span class="ce-day">Day ${e.day}</span> ${e.title}
            ${this.chronicleTargetButtons(e)}
          </div>`).join('');
+    } else if (tab === 'market' && typeof MarketTradeSystem !== 'undefined') {
+      const mk = MarketTradeSystem.rankings();
+      html = '<div class="obs-section-head">Top Market Hubs</div>';
+      html += mk.hubs.map(s => row(s.name, `hub Lv${s.marketRole.hubLevel} · influence ${fmt(s.marketRole.tradeInfluence, 0)}`, 'settlement', s.id)).join('')
+        || '<p class="hint">ยังไม่มีตลาดกลาง</p>';
+      html += '<div class="obs-section-head">Trade Routes</div>';
+      html += mk.routes.map(x => {
+        const sa = getSettlement(x.route.a), sb = getSettlement(x.route.b);
+        return row(`${sa ? sa.name : '?'} ↔ ${sb ? sb.name : '?'}`, `value ${fmt(x.value, 0)}`, 'route', x.route.id);
+      }).join('');
+      html += '<div class="obs-section-head">Price Volatility</div>';
+      html += mk.volatile.slice(0, 5).map(s => row(s.name, fmt(s.priceVolatility, 1), 'settlement', s.id)).join('');
+    } else if (tab === 'guild' && typeof MarketTradeSystem !== 'undefined') {
+      const mk = MarketTradeSystem.rankings();
+      html = mk.guilds.map(g => {
+        const home = getSettlement(g.homeSettlementId);
+        return row(g.name, `wealth ${fmt(g.wealth)} · influence ${fmt(g.influence)}`, 'settlement', g.homeSettlementId);
+      }).join('') || '<p class="hint">ยังไม่มีสมาคมพ่อค้า</p>';
+    } else if (tab === 'contracts' && typeof MarketTradeSystem !== 'undefined') {
+      const mk = MarketTradeSystem.rankings();
+      html = mk.contracts.map(c => {
+        const o = getSettlement(c.originId), d = getSettlement(c.destinationId);
+        return `<div class="obs-row" data-kind="settlement" data-id="${c.destinationId}">
+          <span>${c.good} ×${c.quantity} (${c.status})</span>
+          <span class="obs-sub">${o ? o.name : '?'} → ${d ? d.name : '?'} · ${fmt(c.reward)} ทอง</span>
+        </div>`;
+      }).join('') || '<p class="hint">ไม่มีสัญญาที่เปิดอยู่</p>';
     }
     body.innerHTML = html;
     for (const rowEl of body.querySelectorAll('.obs-row')) {
@@ -4647,9 +5465,9 @@ const ObserverSystem = {
       ['👥', d.population, 'pop'],
       ['🚩', d.factions, 'fac'],
       ['⚔', d.wars, 'war'],
-      ['📜', d.treaties, 'trt'],
+      ['🏦', d.tradeHealth, 'trade'],
+      ['🏛', d.guilds, 'guild'],
       ['🍞', d.foodCrisis, 'food'],
-      ['🗡', fmt(d.banditAvg * 100, 0) + '%', 'band'],
       ['👑', d.strongest, 'str'],
       ['📅', 'Day ' + d.day, 'day']
     ].map(([icon, val, cls]) => `<span class="dash-item ${cls}" title="${cls}">${icon} ${val}</span>`).join('');
@@ -5091,6 +5909,7 @@ const UI = {
   chronicleDirty: true,
   chronicleFilter: 'all',
   chronicleOpen: false,
+  marketOpen: false,
   dashboardDirty: true,
   _lastTickTime: 0,
 
@@ -5166,13 +5985,33 @@ const UI = {
       document.getElementById('summaryModal')?.classList.add('hidden');
       document.getElementById('savePanel')?.classList.add('hidden');
       document.getElementById('observerPanel')?.classList.add('hidden');
+      document.getElementById('marketPanel')?.classList.add('hidden');
       ObserverSystem.observerOpen = false;
+      this.marketOpen = false;
       this.chronicleOpen = false;
       const body = document.getElementById('diplomacyBody');
       if (body) body.innerHTML = DiplomacySystem.diplomacySummaryHTML();
     });
     document.getElementById('diplomacyClose')?.addEventListener('click', () => {
       document.getElementById('diplomacyPanel')?.classList.add('hidden');
+    });
+
+    document.getElementById('btnMarket')?.addEventListener('click', () => {
+      this.marketOpen = !this.marketOpen;
+      const p = document.getElementById('marketPanel');
+      if (p) p.classList.toggle('hidden', !this.marketOpen);
+      document.getElementById('observerPanel')?.classList.add('hidden');
+      document.getElementById('chroniclePanel')?.classList.add('hidden');
+      document.getElementById('diplomacyPanel')?.classList.add('hidden');
+      document.getElementById('summaryModal')?.classList.add('hidden');
+      document.getElementById('savePanel')?.classList.add('hidden');
+      ObserverSystem.observerOpen = false;
+      this.chronicleOpen = false;
+      if (this.marketOpen && typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.renderMarketPanel();
+    });
+    document.getElementById('marketClose')?.addEventListener('click', () => {
+      this.marketOpen = false;
+      document.getElementById('marketPanel')?.classList.add('hidden');
     });
 
     // ── sandbox tools ──
@@ -5216,6 +6055,7 @@ const UI = {
       ObserverSystem.renderPanel();
       ObserverSystem.observerDirty = false;
     }
+    if (this.marketOpen && typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.renderMarketPanel();
     requestAnimationFrame(t => this.loop(t));
   },
 
@@ -5528,6 +6368,20 @@ const UI = {
     html += this.kv('ชื่อเสียง (rep)', fmt(a.reputation));
     html += this.kv('Fame', fmt(a.fame), a.fame >= 20 ? 'warn' : '');
     html += `</div>`;
+    if (a.profession === 'trader' || a.guildId) {
+      const g = a.guildId ? getGuild(a.guildId) : null;
+      html += `<div class="insp-section"><h4>การค้า (Phase 12)</h4>`;
+      html += this.kv('Merchant Rank', MERCHANT_RANK_TITLES[a.merchantRank] || a.merchantRank);
+      html += this.kv('Trade Reputation', fmt(a.tradeReputation || 50), (a.tradeReputation || 50) < 35 ? 'bad' : 'good');
+      html += this.kv('สัญญาสำเร็จ/ล้มเหลว', `${a.contractsCompleted || 0} / ${a.contractsFailed || 0}`);
+      html += this.kv('กำไรค้าสะสม', fmt(a.memory.tradeProfit || 0) + ' ทอง');
+      if (g) html += this.kv('สมาคม', g.name);
+      if (a.contractId) {
+        const c = getContract(a.contractId);
+        if (c) html += this.kv('สัญญาปัจจุบัน', `${c.good} ×${c.quantity} → ${(getSettlement(c.destinationId) || {}).name || '?'}`);
+      }
+      html += `</div>`;
+    }
     // ── Phase 10.5: Ambition ──
     html += `<div class="insp-section"><h4>Ambition & เป้าหมาย</h4>`;
     html += this.kv('แผน', a.ambitionPlan || '—');
@@ -5622,6 +6476,21 @@ const UI = {
     html += this.kv('อัตราภาษี', fmt(s.taxRate * 100) + '%', s.taxRate > 0.22 ? 'bad' : '');
     html += this.kv('คลังเมือง', fmt(s.treasury) + ' ทอง');
     html += `</div>`;
+    if (s.marketRole) {
+      const g = typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.guildAt(s.id) : null;
+      const openContracts = (world.tradeContracts || []).filter(c => c.status === 'open' && (c.originId === s.id || c.destinationId === s.id || c.issuerId === s.id));
+      html += `<div class="insp-section"><h4>ตลาด / การค้า (Phase 12)</h4>`;
+      html += this.kv('Market Hub', s.marketRole.isMarketHub ? `Lv ${s.marketRole.hubLevel}` : '—');
+      html += this.kv('Trade Influence', fmt(s.marketRole.tradeInfluence || 0, 0));
+      html += this.kv('Trade Volume', fmt(s.tradeVolume || 0, 1));
+      html += this.kv('Price Volatility', fmt(s.priceVolatility || 0, 1), s.priceVolatility > 30 ? 'bad' : '');
+      html += this.kv('Guild Presence', fmt(s.marketRole.guildPresence || 0, 0) + '%');
+      if (g) html += this.kv('สมาคมพ่อค้า', g.name);
+      const whs = typeof MarketTradeSystem !== 'undefined' ? MarketTradeSystem.settlementWarehouses(s.id) : [];
+      html += this.kv('Warehouses', whs.length);
+      html += this.kv('Open Contracts', openContracts.length);
+      html += `</div>`;
+    }
     html += `<div class="insp-section"><h4>สังคม</h4>`;
     html += this.kv('ประชากร', populationOf(s));
     html += this.kv('Crowding', fmt(s.crowding, 2), s.crowding > 1.1 ? 'bad' : '');
@@ -5703,6 +6572,7 @@ const UI = {
     if (!f.isBandit && f.diplomacy) {
       html += this.kv('War Exhaustion', fmt(f.diplomacy.warExhaustion, 0) + '%', f.diplomacy.warExhaustion > 50 ? 'bad' : '');
       html += this.kv('Diplomatic Personality', f.diplomacy.diplomaticPersonality || 'balanced');
+      html += this.kv('Trade Influence', fmt(f.tradeInfluence || 0, 0), (f.tradeInfluence || 0) > 100 ? 'good' : '');
     }
     html += `</div>`;
     if (!f.isBandit && f.diplomacy) {
@@ -5732,6 +6602,15 @@ const UI = {
         html += `<div class="insp-section"><h4>เมืองขึ้น / เจ้าเหนือหัว</h4>`;
         if (overlord) html += this.kv('เจ้าเหนือหัว', getFaction(overlord.overlordFactionId)?.name || '?');
         for (const v of vassals) html += this.kv('เมืองขึ้น', getFaction(v.vassalFactionId)?.name || '?');
+        html += `</div>`;
+      }
+      const guilds = (world.guilds || []).filter(g => g.factionId === f.id);
+      if (guilds.length) {
+        html += `<div class="insp-section"><h4>สมาคมพ่อค้า (Phase 12)</h4>`;
+        for (const g of guilds) {
+          const home = getSettlement(g.homeSettlementId);
+          html += this.kv(home ? this.link('settlement', home.id, g.name) : g.name, `wealth ${fmt(g.wealth)} · rel ${fmt(g.relations[f.id] || 50)}`);
+        }
         html += `</div>`;
       }
       if (f.diplomacy.diplomaticMemory?.length) {
@@ -5878,7 +6757,7 @@ const UI = {
 
 /* ── Sandbox Tools ── */
 const SandboxTools = {
-  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague']),
+  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax']),
 
   activate(tool, btn) {
     // เครื่องมือกดแล้วทำทันที
@@ -5973,6 +6852,23 @@ const SandboxTools = {
           DiplomacySystem.forceVassal(sorted[1], sorted[0]);
           EventSystem.add('politics', `👑 [Sandbox] ${sorted[1].name} เป็นเมืองขึ้นของ${sorted[0].name}`);
         }
+      },
+      fundGuildPatrol: () => {
+        const g = (world.guilds || [])[0];
+        if (g) { g.wealth += 200; MarketTradeSystem.guildPolitics(g); EventSystem.add('system', `🛡 [Sandbox] อุดหนุน${g.name} ปราบโจร`); }
+        else EventSystem.add('system', '✨ [Sandbox] ยังไม่มี guild');
+      },
+      createTradeBoom: () => {
+        for (const s of marketSettlements()) { s.tradeVolume = (s.tradeVolume || 0) + 20; s.prosperity = clamp(s.prosperity + 15, 0, 100); }
+        if (world.marketIndex) { world.marketIndex.tradeHealth = clamp(world.marketIndex.tradeHealth + 20, 0, 100); world.marketIndex.foodIndex = Math.max(0.8, world.marketIndex.foodIndex - 0.2); }
+        EventSystem.add('trade', '📈 [Sandbox] Trade Boom — ตลาดคึกคักทั่วแผ่นดิน');
+        Chronicle.add({ category: 'market', importance: 4, title: '📈 ยุคบูมการค้า', description: 'พลังลึกลับทำให้เส้นทางค้าคึกคักและราคาอาหารลดลงชั่วคราว' });
+      },
+      createMarketCrash: () => {
+        for (const s of marketSettlements()) { s.prices.food *= 1.6; s.priceVolatility = clamp((s.priceVolatility || 0) + 25, 0, 100); }
+        if (world.marketIndex) { world.marketIndex.foodIndex = (world.marketIndex.foodIndex || 1) * 1.5; world.marketIndex.volatility += 15; }
+        EventSystem.add('trade', '📉 [Sandbox] Market Crash — ราคาพุ่งความผันผวนสูง');
+        Chronicle.add({ category: 'market', importance: 4, title: '📉 ตลาดถล่ม', description: 'ราคาอาหารและสินค้าพุ่งสูงอย่างกะทันหัน ความไม่แน่นอนครอบงำ' });
       }
     };
 
@@ -6076,6 +6972,63 @@ const SandboxTools = {
         this.disarm();
         break;
       }
+      case 'createMarketHub':
+        if (pickedSettlement && pickedSettlement.type !== 'camp') {
+          MarketTradeSystem.ensureSettlementMarket(pickedSettlement);
+          pickedSettlement.marketRole.isMarketHub = true;
+          pickedSettlement.marketRole.hubLevel = Math.max(2, pickedSettlement.marketRole.hubLevel || 0);
+          if (!pickedSettlement.buildings.includes('Market')) pickedSettlement.buildings.push('Market');
+          createWarehouse({ settlementId: pickedSettlement.id, ownerType: 'settlement', ownerId: pickedSettlement.id, capacity: 150 });
+          EventSystem.add('trade', `🏦 [Sandbox] ${pickedSettlement.name} กลายเป็นตลาดกลาง`);
+          this.disarm();
+        }
+        break;
+      case 'spawnMerchantGuild':
+        if (pickedSettlement && pickedSettlement.type !== 'camp') {
+          for (let i = 0; i < 4; i++) {
+            const t = createAgent({ locationId: pickedSettlement.id, factionId: pickedSettlement.factionId, profession: 'trader', money: 180 });
+            t.skills.trading = 4; t.memory.tradeProfit = 200;
+          }
+          pickedSettlement.marketRole.isMarketHub = true;
+          pickedSettlement.marketRole.hubLevel = Math.max(1, pickedSettlement.marketRole.hubLevel || 0);
+          pickedSettlement.tradeVolume = 40;
+          MarketTradeSystem.trySpawnGuild(pickedSettlement);
+          if (!MarketTradeSystem.guildAt(pickedSettlement.id)) {
+            const leader = agentsAt(pickedSettlement.id).find(a => a.profession === 'trader');
+            if (leader) createGuild({ homeSettlementId: pickedSettlement.id, factionId: pickedSettlement.factionId, wealth: 300, members: [leader.id] });
+          }
+          EventSystem.add('trade', `🏛 [Sandbox] สมาคมพ่อค้าปรากฏที่${pickedSettlement.name}`);
+          this.disarm();
+        }
+        break;
+      case 'addTradeContract':
+        if (pickedSettlement) {
+          const dest = pick(marketSettlements().filter(x => x.id !== pickedSettlement.id));
+          if (dest) {
+            createTradeContract({
+              issuerType: 'settlement', issuerId: pickedSettlement.id, originId: pickedSettlement.id,
+              destinationId: dest.id, good: 'food', quantity: 12, reward: 45,
+              riskLevel: MarketTradeSystem.contractRisk(pickedSettlement.id, dest.id)
+            });
+            EventSystem.add('trade', `📜 [Sandbox] สร้างสัญญาขนส่งอาหาร ${pickedSettlement.name}→${dest.name}`);
+          }
+          this.disarm();
+        }
+        break;
+      case 'raiseTradeTax':
+        if (pickedSettlement) {
+          pickedSettlement.taxRate = Math.min(0.35, pickedSettlement.taxRate + 0.08);
+          EventSystem.add('politics', `📜 [Sandbox] ขึ้นภาษีการค้า${pickedSettlement.name} เป็น ${fmt(pickedSettlement.taxRate * 100)}%`);
+          this.disarm();
+        }
+        break;
+      case 'lowerTradeTax':
+        if (pickedSettlement) {
+          pickedSettlement.taxRate = Math.max(0.04, pickedSettlement.taxRate - 0.08);
+          EventSystem.add('politics', `📜 [Sandbox] ลดภาษีการค้า${pickedSettlement.name} เป็น ${fmt(pickedSettlement.taxRate * 100)}%`);
+          this.disarm();
+        }
+        break;
     }
   },
 
@@ -6089,7 +7042,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '15.0';
+const SAVE_SCHEMA_VERSION = '15.1';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -6265,10 +7218,15 @@ const SaveSystem = {
     w.eras = w.eras || [];
     w.treaties = w.treaties || [];
     w.vassalContracts = w.vassalContracts || [];
+    w.guilds = w.guilds || [];
+    w.warehouses = w.warehouses || [];
+    w.tradeContracts = w.tradeContracts || [];
+    w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
       bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0,
-      townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0
+      townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0,
+      contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0
     }, w.stats || {});
     if (!w.worldName) w.worldName = data.worldName || 'Living Kingdom';
     if (w.seed == null) w.seed = data.seed || 0;
@@ -6279,6 +7237,9 @@ const SaveSystem = {
     for (const u of w.units) this.migrateUnit(u);
     for (const ar of w.armies) this.migrateArmy(ar);
     for (const f of w.factions) this.migrateFaction(f);
+    for (const wh of w.warehouses) this.migrateWarehouse(wh);
+    for (const g of w.guilds) this.migrateGuild(g);
+    for (const c of w.tradeContracts) this.migrateContract(c);
     data.schemaVersion = SAVE_SCHEMA_VERSION;
     data.world = w;
     return data;
@@ -6301,6 +7262,10 @@ const SaveSystem = {
     s.foodPerCapita = s.foodPerCapita || 0;
     s.recentInbound = s.recentInbound || 0;
     s.prodPotential = s.prodPotential || { food: 0, wood: 0, ore: 0 };
+    if (!s.marketRole) s.marketRole = defaultMarketRole();
+    else s.marketRole = Object.assign(defaultMarketRole(), s.marketRole);
+    if (s.tradeVolume == null) s.tradeVolume = 0;
+    if (s.priceVolatility == null) s.priceVolatility = 0;
   },
 
   migrateRoute(r) {
@@ -6342,6 +7307,14 @@ const SaveSystem = {
     if (a._jitterA == null) { a._jitterA = Math.random() * Math.PI * 2; a._jitterR = rand(0.3, 1); }
     a.currentGoal = a.currentGoal || 'ตั้งตัว';
     a.currentThought = a.currentThought || '...';
+    if (a.guildId == null) a.guildId = null;
+    if (!a.merchantRank) a.merchantRank = a.profession === 'trader' ? 'peddler' : 'peddler';
+    if (a.tradeReputation == null) a.tradeReputation = 50;
+    if (a.contractsCompleted == null) a.contractsCompleted = 0;
+    if (a.contractsFailed == null) a.contractsFailed = 0;
+    if (!a.warehouseIds) a.warehouseIds = [];
+    if (a.contractId == null) a.contractId = null;
+    if (a.pendingContractId == null) a.pendingContractId = null;
   },
 
   migrateUnit(u) {
@@ -6368,6 +7341,33 @@ const SaveSystem = {
     f.warState = !!f.warState;
     f.isBandit = !!f.isBandit;
     ensureFactionDiplomacy(f);
+    if (f.tradeInfluence == null) f.tradeInfluence = 0;
+  },
+
+  migrateWarehouse(wh) {
+    wh.stock = Object.assign(newStock(), wh.stock || {});
+    wh.capacity = wh.capacity || 100;
+    wh.security = wh.security != null ? wh.security : 40;
+    wh.rentIncome = wh.rentIncome || 0;
+  },
+
+  migrateGuild(g) {
+    g.members = g.members || [];
+    g.warehouses = g.warehouses || [];
+    g.contracts = g.contracts || [];
+    g.relations = g.relations || {};
+    g.wealth = g.wealth || 0;
+    g.influence = g.influence || 0;
+    g.reputation = g.reputation != null ? g.reputation : 50;
+    g.policyPreference = Object.assign({ lowTax: true, safeRoutes: true, tradeTreaties: true, antiBandit: true }, g.policyPreference || {});
+    g._bountyDay = g._bountyDay != null ? g._bountyDay : -99;
+  },
+
+  migrateContract(c) {
+    c.status = c.status || 'open';
+    if (c.acceptedByAgentId == null) c.acceptedByAgentId = null;
+    if (c.escortUnitId == null) c.escortUnitId = null;
+    c.createdDay = c.createdDay != null ? c.createdDay : world.day;
   },
 
   applyPostLoad() {
@@ -6388,6 +7388,7 @@ const SaveSystem = {
       }
     }
     DiplomacySystem.syncFromLegacy();
+    if (typeof MarketTradeSystem !== 'undefined') MarketTradeSystem.initWorld();
   },
 
   applyUiPrefs(prefs) {
