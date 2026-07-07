@@ -47,6 +47,93 @@ const MAP_W = 1000, MAP_H = 640;
 
 const GOODS = ['food', 'wood', 'ore', 'tools', 'weapons', 'bows', 'arrows', 'horses'];
 
+/* ── Phase 18.5: Central balance tuning — adjust rates here, not scattered magic numbers ──
+   recruitment: raise maxOffersPerSettlement / lower acceptedPerCycle to slow army growth
+   combat: raise battlesPer100DaysHigh / warExhaustionPerBattle to curb battle spam
+   sovereignty/vassal: raise rebellionCooldownDays / rebellionRiskThreshold to reduce rebellions
+   historyCaps: lower caps to shrink save size; chronicleArchiveKeep controls era summaries
+   integrity: checkIntervalDays = scheduled audit frequency
+   ── */
+const BALANCE = {
+  recruitment: {
+    maxOffersPerSettlement: 4,
+    maxAcceptedPerOfferPerCycle: 8,
+    maxRecruitmentPressurePerOrg: 22,
+    failCooldownDays: 14,
+    minSettlementFoodForConscription: 45,
+    minSettlementPopForMilitia: 8,
+    minWarbandSupplyDaysForRecruit: 2,
+    minOrgFoodPerMember: 1.5,
+    minOrgWealthPerRecruit: 8,
+    royalConscriptionProsperityPenalty: 2,
+    royalConscriptionLoyaltyPenalty: 1.5,
+    travelingToMusterMaxDays: 30,
+    minProductivePopulationRatio: 0.55,
+    maxPopulationPullPerOffer: 0.25
+  },
+  warband: {
+    stuckThresholdDays: 5,
+    maxRerouteAttempts: 3,
+    disbandAfterStuckDays: 14,
+    minSpeedFactor: 0.18,
+    sizeSpeedPenaltyPerMember: 0.0035,
+    maxSizeSpeedPenalty: 0.38,
+    woundedSpeedPenaltyMax: 0.35,
+    lootSpeedPenaltyMax: 0.2
+  },
+  economy: {
+    minFoodStock: 0,
+    emergencySupplyPerAgent: 2,
+    forageProsperityHitMax: 3,
+    hungerThreshold: 35,
+    negativeStockRepairFloor: 0
+  },
+  combat: {
+    battlesPer100DaysHigh: 28,
+    largeBattlesPer100DaysHigh: 6,
+    warExhaustionPerBattle: 2.5,
+    peacePressurePerBattle: 1.8,
+    commanderDeathChanceCap: 0.08,
+    siegeAuthorityCooldownDays: 45,
+    supplyRetreatMorale: 22,
+    recruitmentSlowdownWhenHighWar: 0.55
+  },
+  sovereignty: {
+    rebellionCooldownDays: 120,
+    maxTributeFoodPerTick: 15,
+    maxTributeGoldRatio: 0.1,
+    lowLegitimacyUnrestBoost: 4,
+    rulerDeathRegencyDays: 30
+  },
+  vassal: {
+    rebellionBaseChance: 0.06,
+    rebellionRiskThreshold: 0.68,
+    maxRebellionsPer1000Days: 4
+  },
+  historyCaps: {
+    battleReports: 100,
+    battleReportsFamous: 50,
+    largeBattleRecords: 100,
+    orgHistory: 80,
+    warbandHistory: 60,
+    agentPersonalMemory: 50,
+    chronicle: 400,
+    chronicleArchiveKeep: 80,
+    scoutReports: 200,
+    siegeAuthorityExpireGraceDays: 100,
+    events: 600,
+    integrityHistory: 30
+  },
+  integrity: {
+    checkIntervalDays: 50,
+    scoreErrorPenalty: 8,
+    scoreWarningPenalty: 2,
+    maxRepairLog: 50,
+    saveSizeWarnBytes: 4500000,
+    tickPerfTargetMs: 120
+  }
+};
+
 function defaultMarketRole() {
   return {
     isMarketHub: false, hubLevel: 0, tradeInfluence: 0,
@@ -77,15 +164,45 @@ const ORG_TYPES = ['adventurer_party', 'mercenary_company', 'militia_company', '
 const WARBAND_TYPES = ['adventurer_party', 'mercenary_company', 'militia', 'royal_army', 'bandit_gang', 'caravan_guard', 'rebel_warband', 'noble_retinue', 'scout_party'];
 const OFFER_TYPES = ['open_join', 'paid_contract', 'militia_call', 'royal_conscription', 'mercenary_hire', 'caravan_guard_job', 'bounty_party', 'rebel_recruitment', 'bandit_invitation', 'noble_call_to_arms'];
 const MAX_AGENT_MEMBERSHIPS = 3;
-const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = 4;
-const ORG_HISTORY_CAP = 24;
-const WARBAND_HISTORY_CAP = 20;
+const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = BALANCE.recruitment.maxOffersPerSettlement;
+const ORG_HISTORY_CAP = BALANCE.historyCaps.orgHistory;
+const WARBAND_HISTORY_CAP = BALANCE.historyCaps.warbandHistory;
 
 function getOrganization(id) { return (world.organizations || []).find(o => o.id === id); }
 function getWarband(id) { return (world.warbands || []).find(w => w.id === id); }
 function getMusterPoint(id) { return (world.musterPoints || []).find(m => m.id === id); }
 function getHeadquarters(id) { return (world.headquarters || []).find(h => h.id === id); }
 function getRecruitmentOffer(id) { return (world.recruitmentOffers || []).find(o => o.id === id); }
+
+/** Phase 18.5: one agent may belong to many orgs but only one active physical warband */
+function getAgentActiveWarband(agentId) {
+  if (!world?.warbands) return null;
+  const a = getAgent(agentId);
+  if (!a || !a.alive) return null;
+  for (const wb of world.warbands) {
+    if (wb.status === 'disbanding') continue;
+    if (wb.memberIds.includes(agentId) && warbandMembers(wb).some(m => m.id === agentId)) return wb;
+  }
+  return null;
+}
+
+function agentPhysicalWarbandConflict(agentId, excludeWarbandId) {
+  const active = getAgentActiveWarband(agentId);
+  return active && active.id !== excludeWarbandId ? active : null;
+}
+
+function removeAgentFromOtherWarbands(agentId, keepWarbandId, reason) {
+  for (const wb of (world.warbands || [])) {
+    if (wb.id === keepWarbandId || wb.status === 'disbanding') continue;
+    if (!wb.memberIds.includes(agentId)) continue;
+    wb.memberIds = wb.memberIds.filter(id => id !== agentId);
+    if (typeof WarbandSystem !== 'undefined') WarbandSystem.syncWarbandSize(wb);
+    if (!warbandMembers(wb).length) wb.status = 'disbanding';
+    if (reason && typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.logRepair('warband', `removed agent ${agentId} duplicate from ${wb.name}: ${reason}`);
+    }
+  }
+}
 
 function defaultOrgRanks() {
   return { leader: 100, officer: 70, veteran: 50, member: 30, recruit: 10 };
@@ -196,7 +313,12 @@ function defaultWarband(opt) {
     _campDays: opt._campDays || 0,
     foundingReason: opt.foundingReason || null,
     politicalMode: opt.politicalMode || (opt.organizationId ? 'guild_backed' : 'independent'),
-    siegeAuthorityId: opt.siegeAuthorityId || null
+    siegeAuthorityId: opt.siegeAuthorityId || null,
+    stuckDays: opt.stuckDays || 0,
+    lastProgressDay: opt.lastProgressDay != null ? opt.lastProgressDay : (world ? world.day : 0),
+    rerouteAttempts: opt.rerouteAttempts || 0,
+    pathFailureReason: opt.pathFailureReason || null,
+    _lastTravelProgress: opt._lastTravelProgress != null ? opt._lastTravelProgress : null
   };
 }
 
@@ -652,7 +774,7 @@ const RANGE_BANDS = ['far', 'missile', 'reach', 'melee', 'close', 'grapple'];
 const ATTACK_DIRS = ['overhead', 'left', 'right', 'thrust'];
 const DEFENSE_ACTIONS = ['block_high', 'block_left', 'block_right', 'parry', 'shield_block', 'dodge', 'armor_absorb'];
 const FORMATIONS = ['loose', 'shield_wall', 'spear_line', 'skirmish', 'charge', 'defensive', 'ambush', 'retreat'];
-const MAX_BATTLE_REPORTS = 100;
+const MAX_BATTLE_REPORTS = BALANCE.historyCaps.battleReports;
 
 function syncLegacyInventory(a) {
   if (!a.equipment) a.equipment = emptyEquipment();
@@ -683,7 +805,7 @@ function uid() { return nextId++; }
 const EventSystem = {
   add(category, text, refs) {
     world.events.push({ day: world.day, category, text, refs: refs || null });
-    if (world.events.length > 600) world.events.splice(0, world.events.length - 600);
+    if (world.events.length > BALANCE.historyCaps.events) world.events.splice(0, world.events.length - BALANCE.historyCaps.events);
     UI.logDirty = true;
     if (typeof ObserverSystem !== 'undefined') ObserverSystem.observerDirty = true;
   }
@@ -709,7 +831,10 @@ const Chronicle = {
       factions: opt.factions || []
     };
     world.chronicle.push(e);
-    if (world.chronicle.length > 500) world.chronicle.splice(0, world.chronicle.length - 500);
+    if (world.chronicle.length > BALANCE.historyCaps.chronicle) {
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.summarizeOldHistory();
+      else world.chronicle.splice(0, world.chronicle.length - BALANCE.historyCaps.chronicle);
+    }
     UI.chronicleDirty = true;
     return e;
   }
@@ -1217,6 +1342,7 @@ function generateWorld() {
     guilds: [], warehouses: [], tradeContracts: [],
     organizations: [], recruitmentOffers: [], musterPoints: [], warbands: [], headquarters: [],
     siegeAuthorities: [], claims: [], captureCredits: [], vassalGrants: [],
+    integrity: null, balanceMetrics: null, _balanceSamples: null, _warPressure: null,
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
@@ -1391,6 +1517,7 @@ function generateWorld() {
   if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
   if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
   if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
+  if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -3246,8 +3373,12 @@ const OrganizationSystem = {
   postRecruitmentOffer(org, opt) {
     const sid = opt.settlementId || org.homeSettlementId;
     if (!sid) return null;
+    if (!this.canRecruit(org, opt)) return null;
     const activeHere = world.recruitmentOffers.filter(o => o.settlementId === sid && o.status === 'open').length;
     if (activeHere >= MAX_ACTIVE_OFFERS_PER_SETTLEMENT) return null;
+    const pressure = world.recruitmentOffers.filter(o => o.organizationId === org.id && o.status === 'open').length;
+    if (pressure >= BALANCE.recruitment.maxRecruitmentPressurePerOrg) return null;
+    if (org._recruitCooldownUntil && world.day < org._recruitCooldownUntil) return null;
     const mp = createMusterPoint({
       organizationId: org.id,
       settlementId: sid,
@@ -3274,14 +3405,44 @@ const OrganizationSystem = {
     return offer;
   },
 
+  canRecruit(org, opt) {
+    if (!org) return false;
+    const members = this.activeMembers(org).length;
+    const foodNeed = members * BALANCE.recruitment.minOrgFoodPerMember;
+    if ((org.foodReserve || 0) < foodNeed && (org.wealth || 0) < BALANCE.recruitment.minOrgWealthPerRecruit * 2) return false;
+    const qty = opt.quantityNeeded || 5;
+    if ((org.wealth || 0) < qty * BALANCE.recruitment.minOrgWealthPerRecruit) return false;
+    const sid = opt.settlementId || org.homeSettlementId;
+    const s = getSettlement(sid);
+    if (!s) return false;
+    const pop = populationOf(s);
+    if (pop < BALANCE.recruitment.minSettlementPopForMilitia) return false;
+    const productive = agentsAt(s.id).filter(a => !MILITARY_PROFS.has(a.profession) && a.profession !== 'king').length;
+    if (productive / Math.max(pop, 1) < BALANCE.recruitment.minProductivePopulationRatio) return false;
+    if (opt.type === 'royal_conscription' && s.stock.food < BALANCE.recruitment.minSettlementFoodForConscription) return false;
+    const wbLow = (world.warbands || []).filter(w => w.organizationId === org.id && (w.supplyDays || 0) < BALANCE.recruitment.minWarbandSupplyDaysForRecruit);
+    if (wbLow.length && opt.type !== 'open_join') return false;
+    const unpaid = org.memberIds.filter(id => {
+      const a = getAgent(id);
+      const m = (a?.memberships || []).find(x => x.organizationId === org.id);
+      return m && world.day - (m.lastPaidDay || 0) > 10;
+    }).length;
+    if (unpaid > Math.max(2, members * 0.35)) return false;
+    if ((world._warPressure?.recruitmentMod || 1) < 0.7 && opt.type === 'royal_conscription') return false;
+    return true;
+  },
+
   acceptApplicant(offer, agentId) {
     const agent = getAgent(agentId);
     if (!agent || !agent.alive || !offer || offer.status !== 'open') return false;
     if (offer.acceptedAgentIds.includes(agentId)) return true;
     if (offer.acceptedAgentIds.length >= offer.quantityNeeded) return false;
+    if (offer.acceptedAgentIds.length >= BALANCE.recruitment.maxAcceptedPerOfferPerCycle) return false;
     const org = getOrganization(offer.organizationId);
-    if (!org) return false;
+    if (!org || !this.canRecruit(org, offer)) return false;
+    if (getAgentActiveWarband(agentId)) return false;
     offer.acceptedAgentIds.push(agentId);
+    world._recruitmentPull = (world._recruitmentPull || 0) + (agent.profession === 'farmer' || agent.profession === 'woodcutter' ? 1 : 0);
     if (!agent.memberships) agent.memberships = [];
     agent.memberships.push(defaultOrgMembership(org.id, offer.roleNeeded, 'recruit', world.day, {
       status: 'traveling_to_muster',
@@ -3315,6 +3476,13 @@ const OrganizationSystem = {
     if (offer) offer.status = 'filled';
     const members = mp.arrivedAgentIds.map(getAgent).filter(a => a && a.alive);
     if (!members.length) return null;
+    if (offer?.type === 'royal_conscription') {
+      const s = getSettlement(mp.settlementId);
+      if (s) {
+        s.prosperity = clamp(s.prosperity - BALANCE.recruitment.royalConscriptionProsperityPenalty, 0, 100);
+        s.loyalty = clamp(s.loyalty - BALANCE.recruitment.royalConscriptionLoyaltyPenalty, 0, 100);
+      }
+    }
     const leader = members.reduce((best, a) => (a.skills.leadership + a.skills.tactics) > (best.skills.leadership + best.skills.tactics) ? a : best, members[0]);
     org.leaderId = org.leaderId || leader.id;
     const wbType = WarbandSystem.orgTypeToWarband(org.type);
@@ -3341,6 +3509,7 @@ const OrganizationSystem = {
       const candidates = agents.sort((a, b) => this.evaluateJoinOffer(b, offer) - this.evaluateJoinOffer(a, offer)).slice(0, 8);
       for (const a of candidates) {
         const score = this.evaluateJoinOffer(a, offer);
+        world._lastAvgJoinScore = ((world._lastAvgJoinScore || 0) * 0.9) + score * 0.1;
         if (score < 12) continue;
         if (chance(clamp(score / 80, 0.05, 0.65))) this.acceptApplicant(offer, a.id);
         if (offer.acceptedAgentIds.length >= offer.quantityNeeded) break;
@@ -3378,6 +3547,7 @@ const OrganizationSystem = {
           mp.status = 'failed';
           if (offer2) offer2.status = 'failed';
           if (org) {
+            org._recruitCooldownUntil = world.day + BALANCE.recruitment.failCooldownDays;
             this.orgLog(org, '❌ รวมพลล้มเหลว — ไม่มีคนมา');
             EventSystem.add('military', `📭 ${org.name} รวมพลล้มเหลว — ไม่มีคนมา`);
             Chronicle.add({ category: 'war', title: 'การรวมพลล้มเหลว', description: `${org.name} ไม่มีคนมาตามนัด`, importance: 3 });
@@ -3414,6 +3584,7 @@ const OrganizationSystem = {
   },
 
   desertMember(agent, org, mem) {
+    world._deserterRate = ((world._deserterRate || 0) * 0.95) + 0.05;
     if (!mem) {
       const m = (agent.memberships || []).find(x => x.organizationId === org.id);
       if (!m) return;
@@ -3648,6 +3819,7 @@ const WarbandSystem = {
     let baseSpeed = 1.2;
     const horses = members.filter(m => m.equipment?.mount || m.profession === 'cavalry').length;
     const mountMod = 1 + horses / Math.max(members.length, 1) * 0.35;
+    const sizePenalty = 1 - clamp(members.length * BALANCE.warband.sizeSpeedPenaltyPerMember, 0, BALANCE.warband.maxSizeSpeedPenalty);
     let roadMod = 1;
     if (wb.travel) {
       const t = wb.travel;
@@ -3659,11 +3831,45 @@ const WarbandSystem = {
     }
     const moraleMod = 0.75 + (wb.morale / 200);
     const fatiguePenalty = 1 - clamp(wb.fatigue / 120, 0, 0.35);
-    const woundedPenalty = 1 - clamp((wb.woundedCount || 0) / Math.max(members.length, 1) * 0.4, 0, 0.4);
+    const woundedPenalty = 1 - clamp((wb.woundedCount || 0) / Math.max(members.length, 1) * BALANCE.warband.woundedSpeedPenaltyMax, 0, BALANCE.warband.woundedSpeedPenaltyMax);
+    const lootPenalty = 1 - clamp((wb.gold || 0) / Math.max(members.length * 50, 1) * BALANCE.warband.lootSpeedPenaltyMax, 0, BALANCE.warband.lootSpeedPenaltyMax);
     const supplyLoad = 1 - clamp(members.length / 120, 0, 0.25);
     const leader = getAgent(wb.leaderId);
     const logMod = leader ? 1 + (leader.skills.logistics || 0) * 0.03 : 1;
-    return baseSpeed * mountMod * roadMod * moraleMod * fatiguePenalty * woundedPenalty * supplyLoad * logMod;
+    const speed = baseSpeed * mountMod * roadMod * moraleMod * fatiguePenalty * woundedPenalty * lootPenalty * supplyLoad * logMod * sizePenalty;
+    return Math.max(speed * BALANCE.warband.minSpeedFactor, BALANCE.warband.minSpeedFactor);
+  },
+
+  tryRerouteStuck(wb) {
+    if (!wb || wb.status === 'disbanding') return false;
+    wb.rerouteAttempts = (wb.rerouteAttempts || 0) + 1;
+    const dest = wb.destinationId;
+    if (dest && startTravel(wb, dest, 'reroute')) {
+      wb.pathFailureReason = null;
+      wb.stuckDays = 0;
+      wb.lastProgressDay = world.day;
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.logRepair('warband', `rerouted ${wb.name} to ${getSettlement(dest)?.name || dest}`);
+      return true;
+    }
+    const safe = marketSettlements()
+      .filter(s => s.factionId === wb.factionId || !wb.factionId)
+      .sort((a, b) => dist({ x: getSettlement(wb.locationId)?.x || 0, y: getSettlement(wb.locationId)?.y || 0 }, { x: a.x, y: a.y }) - dist({ x: getSettlement(wb.locationId)?.x || 0, y: getSettlement(wb.locationId)?.y || 0 }, { x: b.x, y: b.y }))[0];
+    if (safe && safe.id !== wb.locationId && startTravel(wb, safe.id, 'reroute_safe')) {
+      wb.destinationId = safe.id;
+      wb.objective = { type: 'flee_to_safety', targetId: safe.id };
+      wb.stuckDays = 0;
+      wb.pathFailureReason = 'reroute_safe';
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.logRepair('warband', `rerouted ${wb.name} to safe ${safe.name}`);
+      return true;
+    }
+    if (wb.rerouteAttempts >= BALANCE.warband.maxRerouteAttempts || (wb.stuckDays || 0) >= BALANCE.warband.disbandAfterStuckDays) {
+      wb.status = 'disbanding';
+      wb.pathFailureReason = 'stuck_disband';
+      EventSystem.add('military', `💀 ${wb.name} ยุบกอง — ติดเส้นทางนานเกินไป`);
+      return false;
+    }
+    wb.pathFailureReason = 'no_path';
+    return false;
   },
 
   startMarch(wb, destId, purpose) {
@@ -3694,12 +3900,21 @@ const WarbandSystem = {
       }
       if (wb.travel) {
         const speed = this.computeSpeed(wb);
+        const prevProg = wb._lastTravelProgress;
         const arrived = advanceTravel(wb, speed);
         if (wb.travel) {
           const t = wb.travel;
           wb.currentRouteId = t.seg;
           const r = getRoute(t.path[t.seg], t.path[t.seg + 1]);
           wb.progress = r ? clamp(t.progress / r.distance, 0, 1) : 0;
+          if (prevProg != null && Math.abs(t.progress - prevProg) < 0.001) {
+            wb.stuckDays = (wb.stuckDays || 0) + 1;
+          } else {
+            wb.stuckDays = 0;
+            wb.lastProgressDay = world.day;
+          }
+          wb._lastTravelProgress = t.progress;
+          if ((wb.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays) this.tryRerouteStuck(wb);
         } else {
           wb.progress = 0;
           wb.currentRouteId = null;
@@ -3752,7 +3967,12 @@ const WarbandSystem = {
       const found = randInt(2, 8);
       wb.food += found;
       const s = getSettlement(wb.locationId);
-      if (s && s.type !== 'camp') { s.stock.food = Math.max(0, s.stock.food - found); s.prosperity = clamp(s.prosperity - 1, 0, 100); }
+      if (s && s.type !== 'camp') {
+        const take = Math.min(found, Math.floor(s.stock.food * BALANCE.recruitment.maxPopulationPullPerOffer));
+        s.stock.food = Math.max(BALANCE.economy.negativeStockRepairFloor, s.stock.food - take);
+        wb.food += take;
+        s.prosperity = clamp(s.prosperity - Math.min(BALANCE.economy.forageProsperityHitMax, take * 0.3), 0, 100);
+      }
     }
   },
 
@@ -3919,8 +4139,11 @@ const WarbandSystem = {
     if (warbandMembers(a).length + warbandMembers(b).length > cap * 3) {
       a.cohesion = clamp(a.cohesion - 10, 10, 100);
     }
-    for (const id of b.memberIds) {
-      if (!a.memberIds.includes(id)) a.memberIds.push(id);
+    for (const id of b.memberIds.slice()) {
+      if (!a.memberIds.includes(id)) {
+        removeAgentFromOtherWarbands(id, a.id, 'merge');
+        a.memberIds.push(id);
+      }
     }
     const org = a.organizationId ? getOrganization(a.organizationId) : null;
     if (org) {
@@ -3931,6 +4154,7 @@ const WarbandSystem = {
     this.syncWarbandSize(a);
     a.history.push({ day: world.day, text: `รวมกับ ${b.name}` });
     EventSystem.add('military', `🔗 ${a.name} รวมกับ ${b.name}`);
+    if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.runCheck({ repair: true, reason: 'merge', silent: true });
     return true;
   },
 
@@ -3949,7 +4173,9 @@ const WarbandSystem = {
       status: opt.status || 'marching',
       objective: opt.objective || { type: 'patrol_route' }
     });
+    for (const id of ids) removeAgentFromOtherWarbands(id, child?.id, 'split');
     wb.history.push({ day: world.day, text: `แยกกอง ${ids.length} นาย` });
+    if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.runCheck({ repair: true, reason: 'split', silent: true });
     return child;
   },
 
@@ -4635,8 +4861,8 @@ const SovereigntySystem = {
         if (!s || !s.vassalObligation) continue;
         const ob = s.vassalObligation;
         if (world.day - (ob.lastPaidDay || 0) < 10) continue;
-        const tax = Math.floor((s.treasury || 0) * ob.taxRateToOverlord);
-        const food = Math.min(ob.foodTribute, s.stock?.food || 0);
+        const tax = Math.floor((s.treasury || 0) * Math.min(ob.taxRateToOverlord, BALANCE.sovereignty.maxTributeGoldRatio));
+        const food = Math.min(ob.foodTribute, s.stock?.food || 0, BALANCE.sovereignty.maxTributeFoodPerTick);
         const canPay = s.prosperity > 25 && s.unrest < 70;
         if (canPay && tax > 0) {
           s.treasury -= tax;
@@ -4675,7 +4901,7 @@ const SovereigntySystem = {
         if (v.loyaltyToOverlord < 25) v.status = 'defiant';
         else if (v.loyaltyToOverlord < 45) v.status = 'wavering';
         else v.status = 'loyal';
-        if (v.rebellionRisk > 0.65 && chance(0.08)) this.triggerVassalRebellion(org, v);
+        if (v.rebellionRisk > BALANCE.vassal.rebellionRiskThreshold && chance(BALANCE.vassal.rebellionBaseChance)) this.triggerVassalRebellion(org, v);
       }
     }
   },
@@ -4683,6 +4909,13 @@ const SovereigntySystem = {
   triggerVassalRebellion(org, vassalRec) {
     const agent = getAgent(vassalRec.agentId);
     if (!agent) return;
+    org._lastRebellionDay = org._lastRebellionDay || 0;
+    if (world.day - org._lastRebellionDay < BALANCE.sovereignty.rebellionCooldownDays) return;
+    const recent = (world._rebellionSamples || []).filter(d => world.day - d < 1000);
+    if (recent.length >= BALANCE.vassal.maxRebellionsPer1000Days) return;
+    org._lastRebellionDay = world.day;
+    world._rebellionSamples = world._rebellionSamples || [];
+    world._rebellionSamples.push(world.day);
     vassalRec.status = 'rebelling';
     agent.grievances = agent.grievances || [];
     agent.grievances.push({ day: world.day, type: 'rebellion', text: `กบฏต่อ${org.name}` });
@@ -4733,6 +4966,10 @@ const SovereigntySystem = {
   },
 
   validateNoGhostOwners() {
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'ghost_owners', silent: true });
+      return;
+    }
     for (const s of world.settlements) {
       if (s.type === 'camp') continue;
       if (!s.ownerOrganizationId) this.migrateSettlementOwnership(s);
@@ -4745,6 +4982,565 @@ const SovereigntySystem = {
       const owned = world.settlements.filter(s => s.captureSourceWarbandId === wb.id && s.ownerOrganizationId == null);
       for (const s of owned) this.migrateSettlementOwnership(s);
     }
+  }
+};
+
+/* ═══════════ Phase 18.5: World Stability / Balance / Long-run Audit ═══════════ */
+
+const WorldIntegritySystem = {
+  initWorld() {
+    if (!world.integrity) world.integrity = this.defaultIntegrity();
+    if (!world.balanceMetrics) world.balanceMetrics = this.defaultBalanceMetrics();
+    if (!world._balanceSamples) world._balanceSamples = { battles: [], rebellions: [], recruitment: [], tickMs: [] };
+    if (!world._warPressure) world._warPressure = { exhaustionBoost: 0, peacePressure: 0, recruitmentMod: 1 };
+    this.capAllHistory(false);
+  },
+
+  defaultIntegrity() {
+    return { lastCheckDay: 0, errors: [], warnings: [], repaired: [], score: 100, history: [] };
+  },
+
+  defaultBalanceMetrics() {
+    return {
+      recruitment: { activeOffers: 0, acceptedPer100Days: 0, failedOffers: 0, averageJoinScore: 0, populationPulledFromWork: 0, musterNoShowRate: 0, deserterRate: 0 },
+      economyHealth: 70,
+      war: { battlesPer100Days: 0, largeBattlesPer100Days: 0, avgCasualtyRate: 0, commanderDeathRate: 0, injuryToDeathRatio: 1.5, routRate: 0, siegeSuccessRate: 0, independentRaidRate: 0, permanentCaptureRate: 0, vassalRebellionRate: 0 },
+      sovereignty: { landedOrganizations: 0, avgSettlementsPerRealm: 0, vassalCount: 0, avgVassalLoyalty: 0, rebellionsPer1000Days: 0, ownerChangesPerSettlement: 0, orphanSettlements: 0 }
+    };
+  },
+
+  logRepair(kind, text) {
+    const entry = { day: world.day, kind, text };
+    world.integrity = world.integrity || this.defaultIntegrity();
+    world.integrity.repaired.push(entry);
+    if (world.integrity.repaired.length > BALANCE.integrity.maxRepairLog) world.integrity.repaired.shift();
+    EventSystem.add('system', `🔧 [integrity] ${text}`);
+  },
+
+  logIssue(level, code, text) {
+    const entry = { day: world.day, code, text };
+    world.integrity = world.integrity || this.defaultIntegrity();
+    (level === 'error' ? world.integrity.errors : world.integrity.warnings).push(entry);
+  },
+
+  runCheck(opt) {
+    opt = opt || {};
+    if (!world) return null;
+    world.integrity = world.integrity || this.defaultIntegrity();
+    const prevScore = world.integrity.score || 100;
+    world.integrity.errors = [];
+    world.integrity.warnings = [];
+    if (!opt.silent) world.integrity.repaired = world.integrity.repaired || [];
+
+    this.validateAgents();
+    this.validateOrganizations();
+    this.validateWarbands();
+    this.validateSettlements();
+    this.validateSovereignty();
+    this.validateBattleReports();
+
+    if (opt.repair !== false) {
+      this.repairAll();
+      this.capAllHistory(true);
+      if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
+    }
+
+    let score = 100;
+    score -= world.integrity.errors.length * BALANCE.integrity.scoreErrorPenalty;
+    score -= world.integrity.warnings.length * BALANCE.integrity.scoreWarningPenalty;
+    world.integrity.score = clamp(score, 0, 100);
+    world.integrity.lastCheckDay = world.day;
+    const snap = {
+      day: world.day, score: world.integrity.score, errors: world.integrity.errors.length,
+      warnings: world.integrity.warnings.length, repaired: (world.integrity.repaired || []).length,
+      reason: opt.reason || 'scheduled'
+    };
+    world.integrity.history.push(snap);
+    if (world.integrity.history.length > BALANCE.historyCaps.integrityHistory) world.integrity.history.shift();
+
+    if (!opt.silent && (world.integrity.errors.length || world.integrity.warnings.length)) {
+      EventSystem.add('system', `🩺 Integrity Day ${world.day}: score ${world.integrity.score} (${world.integrity.errors.length} err, ${world.integrity.warnings.length} warn)`);
+    }
+    UI.dashboardDirty = true;
+    return world.integrity;
+  },
+
+  validateAgents() {
+    const seen = new Set();
+    const militaryPrimary = new Map();
+    for (const a of world.agents) {
+      if (seen.has(a.id)) this.logIssue('error', 'agent_dup', `duplicate agent id ${a.id}`);
+      seen.add(a.id);
+      if (!a.alive) {
+        const wb = getAgentActiveWarband(a.id);
+        if (wb) this.logIssue('error', 'dead_in_warband', `${a.name} dead but in ${wb.name}`);
+        if (a.unitId) this.logIssue('warning', 'dead_in_unit', `${a.name} dead but unitId=${a.unitId}`);
+      }
+      const mil = agentMilitaryMembership(a);
+      if (mil) {
+        const n = (militaryPrimary.get(a.id) || 0) + 1;
+        militaryPrimary.set(a.id, n);
+        if (n > 1) this.logIssue('error', 'multi_military', `agent ${a.id} multiple military memberships`);
+      }
+      for (const m of (a.memberships || [])) {
+        if (!getOrganization(m.organizationId)) this.logIssue('warning', 'orphan_membership', `agent ${a.id} membership org missing`);
+        if (m.status === 'traveling_to_muster' && m.joinedDay && world.day - m.joinedDay > BALANCE.recruitment.travelingToMusterMaxDays) {
+          this.logIssue('warning', 'muster_stuck', `agent ${a.id} traveling_to_muster too long`);
+        }
+      }
+      const phys = getAgentActiveWarband(a.id);
+      if (phys && a.travel && (a.memberships || []).some(m => m.status === 'traveling_to_muster')) {
+        this.logIssue('warning', 'muster_warband_conflict', `agent ${a.id} traveling to muster while in warband ${phys.name}`);
+      }
+    }
+  },
+
+  validateOrganizations() {
+    for (const org of (world.organizations || [])) {
+      for (const mid of org.memberIds) {
+        if (!getAgent(mid)?.alive) this.logIssue('warning', 'ghost_member', `org ${org.name} ghost member ${mid}`);
+      }
+      const leader = getAgent(org.leaderId);
+      if (!leader?.alive && org.memberIds.length) this.logIssue('warning', 'dead_leader', `org ${org.name} leader missing/dead`);
+      for (const wid of org.activeWarbandIds) {
+        if (!getWarband(wid)) this.logIssue('warning', 'ghost_warband_ref', `org ${org.name} missing warband ${wid}`);
+      }
+      if (!Number.isFinite(org.wealth) || org.wealth < -5000) this.logIssue('error', 'org_wealth', `org ${org.name} wealth invalid`);
+      if (!Number.isFinite(org.foodReserve) || org.foodReserve < -500) this.logIssue('warning', 'org_food', `org ${org.name} foodReserve invalid`);
+      const landed = org.sovereignty?.status === 'landed';
+      const hasSettle = (org.sovereignty?.settlementIds || []).some(sid => getSettlement(sid));
+      if (landed && !hasSettle) this.logIssue('error', 'landed_no_settlement', `landed org ${org.name} has no settlements`);
+      if (!landed && hasSettle) this.logIssue('warning', 'unlanded_has_city', `unlanded org ${org.name} lists settlements`);
+    }
+  },
+
+  validateWarbands() {
+    const agentWarband = new Map();
+    for (const wb of (world.warbands || [])) {
+      const aliveMembers = warbandMembers(wb);
+      if (wb.size !== aliveMembers.length) this.logIssue('error', 'warband_size', `${wb.name} size ${wb.size} != members ${aliveMembers.length}`);
+      if (wb.leaderId && !wb.memberIds.includes(wb.leaderId)) this.logIssue('warning', 'leader_not_member', `${wb.name} leader not in memberIds`);
+      for (const id of wb.memberIds) {
+        const other = agentWarband.get(id);
+        if (other && other !== wb.id && getAgent(id)?.alive) this.logIssue('error', 'agent_clone', `agent ${id} in warbands ${other} and ${wb.id}`);
+        if (getAgent(id)?.alive) agentWarband.set(id, wb.id);
+      }
+      if (wb.destinationId && !getSettlement(wb.destinationId) && wb.status !== 'disbanding') {
+        this.logIssue('warning', 'bad_destination', `${wb.name} destination missing`);
+      }
+      if (wb.travel && wb.currentRouteId != null) {
+        const t = wb.travel;
+        const ra = t.path[t.seg], rb = t.path[t.seg + 1];
+        if (ra != null && rb != null && !getRoute(ra, rb)) this.logIssue('warning', 'invalid_route', `${wb.name} on invalid route`);
+      }
+      for (const key of ['progress', 'food', 'gold', 'morale', 'cohesion', 'fatigue']) {
+        if (!Number.isFinite(wb[key])) this.logIssue('error', 'warband_nan', `${wb.name}.${key} is NaN`);
+      }
+      if (wb.status === 'disbanding' && wb._campDays > 30) this.logIssue('warning', 'disbanding_slow', `${wb.name} disbanding too long`);
+      if ((wb.stuckDays || 0) >= BALANCE.warband.disbandAfterStuckDays) this.logIssue('warning', 'warband_stuck', `${wb.name} stuck ${wb.stuckDays}d`);
+    }
+  },
+
+  validateSettlements() {
+    const ownerCounts = new Map();
+    for (const s of world.settlements) {
+      if (s.type === 'camp') continue;
+      if (!s.ownerOrganizationId) this.logIssue('error', 'null_owner', `${s.name} ownerOrganizationId null`);
+      if (s.ownerOrganizationId && !getOrganization(s.ownerOrganizationId)) this.logIssue('error', 'bad_owner', `${s.name} owner org missing`);
+      if (s.ownerOrganizationId && getWarband(s.ownerOrganizationId)) this.logIssue('error', 'warband_owner', `${s.name} owner is warband id`);
+      if (s.localLordId && !getAgent(s.localLordId)?.alive) this.logIssue('warning', 'dead_local_lord', `${s.name} localLord dead`);
+      if (s.governorId && !getAgent(s.governorId)?.alive) this.logIssue('warning', 'dead_governor', `${s.name} governor dead`);
+      if (s.ownerOrganizationId) ownerCounts.set(s.ownerOrganizationId, (ownerCounts.get(s.ownerOrganizationId) || 0) + 1);
+      if (s.vassalObligation && !Number.isFinite(s.vassalObligation.taxRateToOverlord)) this.logIssue('warning', 'vassal_nan', `${s.name} vassalObligation NaN`);
+      for (const g of GOODS) {
+        if (s.stock && s.stock[g] < BALANCE.economy.minFoodStock - 1) this.logIssue('warning', 'negative_stock', `${s.name} ${g} stock ${s.stock[g]}`);
+      }
+    }
+  },
+
+  validateSovereignty() {
+    const grantSet = new Set();
+    for (const g of (world.vassalGrants || [])) {
+      const key = `${g.settlementId}:${g.grantedToAgentId}`;
+      if (grantSet.has(key)) this.logIssue('warning', 'duplicate_grant', `duplicate grant ${key}`);
+      grantSet.add(key);
+      if (!getSettlement(g.settlementId)) this.logIssue('warning', 'grant_no_settlement', `grant settlement missing`);
+      if (!getAgent(g.grantedToAgentId)) this.logIssue('warning', 'grant_no_agent', `grant agent missing`);
+    }
+    for (const org of (world.organizations || [])) {
+      for (const v of (org.vassals || [])) {
+        if (!getAgent(v.agentId)) this.logIssue('warning', 'vassal_missing', `vassal agent missing in ${org.name}`);
+        if (!Number.isFinite(v.loyaltyToOverlord)) this.logIssue('warning', 'vassal_loyalty_nan', `vassal loyalty NaN`);
+        if ((v.rebellionRisk || 0) > 0.95) this.logIssue('warning', 'rebellion_spam', `vassal ${v.agentId} rebellion risk extreme`);
+      }
+    }
+    for (const sa of (world.siegeAuthorities || [])) {
+      if (sa.status === 'active' && sa.expiresDay < world.day) this.logIssue('warning', 'siege_expired', `siege authority ${sa.id} expired but active`);
+      if (!getSettlement(sa.settlementId)) this.logIssue('warning', 'siege_no_target', `siege authority missing settlement`);
+    }
+    for (const c of (world.claims || [])) {
+      if (!getSettlement(c.settlementId)) this.logIssue('warning', 'claim_orphan', `claim ${c.id} settlement missing`);
+    }
+    for (const cr of (world.captureCredits || [])) {
+      if (cr.warbandId && !getWarband(cr.warbandId)) this.logIssue('warning', 'credit_warband', `capture credit warband missing`);
+      if (cr.commanderId && !getAgent(cr.commanderId)) this.logIssue('warning', 'credit_commander', `capture credit commander missing`);
+    }
+  },
+
+  validateBattleReports() {
+    for (const br of (world.battleReports || [])) {
+      if (!br.location && !br.settlementId) this.logIssue('warning', 'report_no_location', `battle report ${br.id} no location`);
+      if (!br.participants && !br.attackerName) this.logIssue('warning', 'report_no_participants', `battle report ${br.id} thin participants`);
+    }
+    for (const bf of (world.activeBattlefields || [])) {
+      if (!bf.resolved && bf.startDay && world.day - bf.startDay > 5) this.logIssue('warning', 'battlefield_stuck', `activeBattlefield ${bf.id} unresolved`);
+    }
+    if ((world.battleReports || []).length > BALANCE.historyCaps.battleReports + BALANCE.historyCaps.battleReportsFamous) {
+      this.logIssue('warning', 'reports_over_cap', 'battleReports over cap');
+    }
+    for (const lw of (world.legendaryWeapons || [])) {
+      const owner = world.agents.find(a => a.equipment?.mainHand?.id === lw.itemId || a.equipment?.offHand?.id === lw.itemId);
+      if (!owner) this.logIssue('warning', 'legend_orphan', `legendary weapon ${lw.name} no owner`);
+    }
+    for (const a of world.agents.filter(x => x.alive)) {
+      for (const inj of (a.injuries || [])) {
+        if (inj.healed && inj.active) this.logIssue('warning', 'injury_state', `agent ${a.id} healed injury still active`);
+      }
+    }
+  },
+
+  repairAll() {
+    this.repairAgents();
+    this.repairOrganizations();
+    this.repairWarbands();
+    this.repairSettlements();
+    this.repairSovereignty();
+    this.repairBattleData();
+  },
+
+  repairAgents() {
+    for (const a of world.agents) {
+      if (!a.alive) {
+        for (const wb of (world.warbands || [])) {
+          if (wb.memberIds.includes(a.id)) {
+            wb.memberIds = wb.memberIds.filter(id => id !== a.id);
+            this.logRepair('agent', `removed dead ${a.id} from ${wb.name}`);
+          }
+        }
+        a.unitId = null;
+      }
+      for (const m of (a.memberships || [])) {
+        if (!getOrganization(m.organizationId)) m.status = 'expelled';
+        if (m.status === 'traveling_to_muster' && m.joinedDay && world.day - m.joinedDay > BALANCE.recruitment.travelingToMusterMaxDays) {
+          m.status = 'expelled';
+          this.logRepair('agent', `expelled muster-stuck agent ${a.id}`);
+        }
+      }
+    }
+  },
+
+  repairOrganizations() {
+    for (const org of (world.organizations || [])) {
+      org.memberIds = org.memberIds.filter(id => getAgent(id)?.alive);
+      org.activeWarbandIds = org.activeWarbandIds.filter(wid => {
+        const wb = getWarband(wid);
+        return wb && wb.status !== 'disbanding' && warbandMembers(wb).length > 0;
+      });
+      if (!Number.isFinite(org.wealth)) org.wealth = 0;
+      if (!Number.isFinite(org.foodReserve)) org.foodReserve = 0;
+      if (org.wealth < -1000) org.wealth = 0;
+      const leader = getAgent(org.leaderId);
+      if (!leader?.alive && org.memberIds.length) {
+        const members = org.memberIds.map(getAgent).filter(x => x && x.alive);
+        if (members.length) {
+          const best = members.reduce((b, x) => ((x.skills?.leadership || 0) > (b.skills?.leadership || 0) ? x : b), members[0]);
+          org.leaderId = best.id;
+          this.logRepair('org', `assigned leader ${best.name} to ${org.name}`);
+        }
+      }
+      if (org.sovereignty?.status === 'landed' && !(org.sovereignty.settlementIds || []).some(sid => getSettlement(sid))) {
+        org.sovereignty.status = 'unlanded';
+        org.sovereignty.settlementIds = [];
+        this.logRepair('org', `${org.name} demoted to unlanded — no settlements`);
+      }
+      org.vassals = (org.vassals || []).filter(v => getAgent(v.agentId)?.alive);
+    }
+  },
+
+  repairWarbands() {
+    for (const wb of (world.warbands || [])) {
+      wb.memberIds = wb.memberIds.filter(id => getAgent(id)?.alive);
+      for (const id of wb.memberIds) removeAgentFromOtherWarbands(id, wb.id, 'integrity dedupe');
+      if (!Number.isFinite(wb.food)) wb.food = 0;
+      if (!Number.isFinite(wb.morale)) wb.morale = 50;
+      if (!Number.isFinite(wb.cohesion)) wb.cohesion = 50;
+      if (!Number.isFinite(wb.fatigue)) wb.fatigue = 0;
+      if (!Number.isFinite(wb.progress)) wb.progress = 0;
+      const members = warbandMembers(wb);
+      if (!members.length) { wb.status = 'disbanding'; continue; }
+      if (!wb.leaderId || !wb.memberIds.includes(wb.leaderId)) {
+        const best = members.reduce((b, x) => ((x.skills?.leadership || 0) > (b.skills?.leadership || 0) ? x : b), members[0]);
+        wb.leaderId = best.id;
+        this.logRepair('warband', `new leader ${best.name} for ${wb.name}`);
+      }
+      if (typeof WarbandSystem !== 'undefined') {
+        if ((wb.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays) WarbandSystem.tryRerouteStuck(wb);
+        WarbandSystem.syncWarbandSize(wb);
+      }
+    }
+    world.warbands = (world.warbands || []).filter(wb => wb.status !== 'disbanding' || warbandMembers(wb).length > 0);
+  },
+
+  repairSettlements() {
+    for (const s of world.settlements) {
+      if (s.type === 'camp') continue;
+      if (!s.ownerOrganizationId || !getOrganization(s.ownerOrganizationId)) {
+        if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.migrateSettlementOwnership(s);
+        if (!s.ownerOrganizationId) {
+          const crown = getCrownOrganization(s.factionId);
+          if (crown) {
+            s.ownerOrganizationId = crown.id;
+            s.taxRecipient = crown.id;
+            this.logRepair('settlement', `fallback crown owner for ${s.name}`);
+          }
+        }
+      }
+      if (s.governorId && !getAgent(s.governorId)?.alive && typeof GovernanceSystem !== 'undefined') {
+        GovernanceSystem.appointGovernor(s);
+        this.logRepair('settlement', `replaced dead governor at ${s.name}`);
+      }
+      if (s.stock) {
+        for (const g of GOODS) {
+          if (!Number.isFinite(s.stock[g]) || s.stock[g] < BALANCE.economy.negativeStockRepairFloor) {
+            s.stock[g] = BALANCE.economy.negativeStockRepairFloor;
+          }
+        }
+      }
+      if (s.vassalObligation && !Number.isFinite(s.vassalObligation.taxRateToOverlord)) {
+        s.vassalObligation = defaultVassalObligation();
+      }
+    }
+  },
+
+  repairSovereignty() {
+    const grace = BALANCE.historyCaps.siegeAuthorityExpireGraceDays;
+    world.siegeAuthorities = (world.siegeAuthorities || []).filter(sa => {
+      if (sa.expiresDay < world.day - grace) return false;
+      if (sa.expiresDay < world.day) sa.status = 'expired';
+      return true;
+    });
+    const seen = new Set();
+    world.vassalGrants = (world.vassalGrants || []).filter(g => {
+      const k = `${g.settlementId}:${g.grantedToAgentId}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return !!getSettlement(g.settlementId);
+    });
+    world.claims = (world.claims || []).filter(c => getSettlement(c.settlementId));
+    world.captureCredits = (world.captureCredits || []).filter(cr => !cr.warbandId || getWarband(cr.warbandId));
+    for (const org of (world.organizations || [])) {
+      if (org.leaderId && org.sovereignty?.status === 'landed' && !(org.sovereignty.settlementIds || []).length) {
+        org.sovereignty.status = 'unlanded';
+      }
+      const ruler = getAgent(org.leaderId);
+      if (!ruler?.alive && org.sovereignty?.status === 'landed') {
+        const succ = org.memberIds.map(getAgent).filter(a => a && a.alive)
+          .sort((a, b) => (b.skills?.leadership || 0) - (a.skills?.leadership || 0))[0];
+        if (succ) {
+          org.leaderId = succ.id;
+          org.sovereignty.rulerId = succ.id;
+          this.logRepair('sovereignty', `succession ${succ.name} for ${org.name}`);
+        }
+      }
+    }
+  },
+
+  repairBattleData() {
+    world.activeBattlefields = (world.activeBattlefields || []).filter(bf => !bf.resolved || world.day - (bf.endDay || bf.startDay || world.day) < 3);
+    for (const a of world.agents) {
+      for (const inj of (a.injuries || [])) {
+        if (inj.healed) inj.active = false;
+      }
+    }
+    this.capBattleReports();
+  },
+
+  capBattleReports() {
+    const cap = BALANCE.historyCaps.battleReports;
+    const famousCap = BALANCE.historyCaps.battleReportsFamous;
+    const reports = world.battleReports || [];
+    if (reports.length <= cap + famousCap) return;
+    const famous = reports.filter(r => (r.casualties || 0) >= 40 || r.legendary).sort((a, b) => (b.casualties || 0) - (a.casualties || 0)).slice(0, famousCap);
+    const famousIds = new Set(famous.map(r => r.id));
+    const recent = reports.filter(r => !famousIds.has(r.id)).slice(-cap);
+    world.battleReports = [...famous, ...recent].sort((a, b) => (a.day || 0) - (b.day || 0));
+  },
+
+  capAllHistory(log) {
+    if ((world.largeBattleRecords || []).length > BALANCE.historyCaps.largeBattleRecords) {
+      world.largeBattleRecords = world.largeBattleRecords.slice(-BALANCE.historyCaps.largeBattleRecords);
+    }
+    for (const org of (world.organizations || [])) {
+      if (org.history.length > BALANCE.historyCaps.orgHistory) org.history = org.history.slice(-BALANCE.historyCaps.orgHistory);
+    }
+    for (const wb of (world.warbands || [])) {
+      if (wb.history.length > BALANCE.historyCaps.warbandHistory) wb.history = wb.history.slice(-BALANCE.historyCaps.warbandHistory);
+    }
+    for (const a of world.agents) {
+      const p = a.memory?.personal;
+      if (!p) continue;
+      if (p.majorEvents?.length > BALANCE.historyCaps.agentPersonalMemory) p.majorEvents = p.majorEvents.slice(-BALANCE.historyCaps.agentPersonalMemory);
+    }
+    if ((world.scoutReports || []).length > BALANCE.historyCaps.scoutReports) {
+      world.scoutReports = world.scoutReports.slice(-BALANCE.historyCaps.scoutReports);
+    }
+    if (world.events.length > BALANCE.historyCaps.events) world.events.splice(0, world.events.length - BALANCE.historyCaps.events);
+    this.capBattleReports();
+    if (log) this.summarizeOldHistory();
+  },
+
+  summarizeOldHistory() {
+    const keep = BALANCE.historyCaps.chronicleArchiveKeep;
+    const max = BALANCE.historyCaps.chronicle;
+    if ((world.chronicle || []).length <= max) return;
+    const famous = world.chronicle.filter(e => (e.importance || 0) >= 4);
+    const recent = world.chronicle.filter(e => (e.importance || 0) < 4).slice(-keep);
+    const byEra = {};
+    for (const e of world.chronicle.filter(e => (e.importance || 0) < 4 && e.day < world.day - 200)) {
+      const era = Math.floor(e.day / 200);
+      if (!byEra[era]) byEra[era] = { wars: 0, legends: 0, settlements: 0, start: era * 200, end: era * 200 + 199 };
+      if (e.category === 'war') byEra[era].wars++;
+      else if (e.category === 'legend') byEra[era].legends++;
+      else if (e.category === 'settlement') byEra[era].settlements++;
+    }
+    const summaries = Object.values(byEra).map(er => ({
+      id: uid(), day: er.end, category: 'era', importance: 3,
+      title: `สรุปยุค Day ${er.start}–${er.end}`,
+      description: `สงคราม ${er.wars} | ตำนาน ${er.legends} | เมือง ${er.settlements}`,
+      agents: [], settlements: [], factions: [], _archiveSummary: true
+    }));
+    world.chronicle = [...summaries.slice(-20), ...famous, ...recent].slice(-max);
+    if (!world.eras) world.eras = [];
+    for (const s of summaries.slice(-3)) {
+      world.eras.push({ day: s.day, text: s.description });
+      if (world.eras.length > 40) world.eras.shift();
+    }
+  },
+
+  tickBalanceMetrics() {
+    world.balanceMetrics = world.balanceMetrics || this.defaultBalanceMetrics();
+    const samples = world._balanceSamples || { battles: [], rebellions: [], recruitment: [], tickMs: [] };
+    const offers = world.recruitmentOffers || [];
+    const openOffers = offers.filter(o => o.status === 'open');
+    const recentRec = offers.filter(o => world.day - (o.expiresDay || world.day) < 100);
+    const accepted = recentRec.reduce((s, o) => s + (o.acceptedAgentIds?.length || 0), 0);
+    const failed = recentRec.filter(o => o.status === 'failed').length;
+    world.balanceMetrics.recruitment = {
+      activeOffers: openOffers.length,
+      acceptedPer100Days: accepted,
+      failedOffers: failed,
+      averageJoinScore: world._lastAvgJoinScore || 0,
+      populationPulledFromWork: world._recruitmentPull || 0,
+      musterNoShowRate: world._musterNoShowRate || 0,
+      deserterRate: world._deserterRate || 0
+    };
+
+    const mkts = marketSettlements();
+    let foodHealth = 0, hunger = 0, neg = 0;
+    for (const s of mkts) {
+      const pop = Math.max(populationOf(s), 1);
+      foodHealth += clamp(s.stock.food / (s.demand.food || pop), 0, 2);
+      if (s.stock.food < 15) hunger++;
+      for (const g of GOODS) if (s.stock[g] < 0) neg++;
+    }
+    const mi = world.marketIndex || defaultMarketIndex();
+    world.balanceMetrics.economyHealth = clamp(
+      (foodHealth / Math.max(mkts.length, 1)) * 35 + (mi.tradeHealth || 50) * 0.4 + (mi.caravanSurvivalRate || 1) * 25 - hunger * 3 - neg * 5,
+      0, 100
+    );
+
+    const br = (world.battleReports || []).filter(r => world.day - (r.day || 0) < 100);
+    const large = br.filter(r => (r.casualties || 0) >= 40).length;
+    const routs = br.filter(r => r.rout || r.summaryText?.includes('rout')).length;
+    const captures = (world.captureCredits || []).filter(c => world.day - c.day < 200).length;
+    const raids = br.filter(r => r.kind === 'raid').length;
+    world.balanceMetrics.war = {
+      battlesPer100Days: br.length,
+      largeBattlesPer100Days: large,
+      avgCasualtyRate: br.length ? br.reduce((s, r) => s + (r.casualtyRate || (r.casualties || 0) / Math.max(r.totalMen || 20, 1)), 0) / br.length : 0,
+      commanderDeathRate: world._commanderDeathRate || 0,
+      injuryToDeathRatio: world._injuryDeathRatio || 1.4,
+      routRate: br.length ? routs / br.length : 0,
+      siegeSuccessRate: world._siegeSuccessRate || 0,
+      independentRaidRate: br.length ? raids / br.length : 0,
+      permanentCaptureRate: captures / Math.max(mkts.length, 1),
+      vassalRebellionRate: (world._rebellionSamples || []).filter(d => world.day - d < 1000).length / 10
+    };
+
+    const landed = (world.organizations || []).filter(o => o.sovereignty?.status === 'landed');
+    const vassals = landed.flatMap(o => o.vassals || []);
+    const orphan = mkts.filter(s => !s.ownerOrganizationId).length;
+    world.balanceMetrics.sovereignty = {
+      landedOrganizations: landed.length,
+      avgSettlementsPerRealm: landed.length ? landed.reduce((s, o) => s + (o.sovereignty?.settlementIds?.length || 0), 0) / landed.length : 0,
+      vassalCount: vassals.length,
+      avgVassalLoyalty: vassals.length ? vassals.reduce((s, v) => s + (v.loyaltyToOverlord || 0), 0) / vassals.length : 0,
+      rebellionsPer1000Days: (world._rebellionSamples || []).filter(d => world.day - d < 1000).length,
+      ownerChangesPerSettlement: world._ownerChangeCount || 0,
+      orphanSettlements: orphan
+    };
+
+    this.applyWarPressure();
+  },
+
+  applyWarPressure() {
+    const w = world.balanceMetrics?.war;
+    if (!w) return;
+    world._warPressure = world._warPressure || { exhaustionBoost: 0, peacePressure: 0, recruitmentMod: 1 };
+    if (w.battlesPer100Days > BALANCE.combat.battlesPer100DaysHigh) {
+      world._warPressure.exhaustionBoost = BALANCE.combat.warExhaustionPerBattle;
+      world._warPressure.peacePressure = BALANCE.combat.peacePressurePerBattle;
+      world._warPressure.recruitmentMod = BALANCE.combat.recruitmentSlowdownWhenHighWar;
+      for (const f of world.factions.filter(x => !x.isBandit)) {
+        f.diplomacy = f.diplomacy || {};
+        f.diplomacy.warExhaustion = clamp((f.diplomacy.warExhaustion || 0) + BALANCE.combat.warExhaustionPerBattle * 0.1, 0, 100);
+      }
+    } else {
+      world._warPressure.recruitmentMod = 1;
+    }
+  },
+
+  estimateSaveSize() {
+    try {
+      return JSON.stringify(world).length;
+    } catch { return 0; }
+  },
+
+  getHealthDashboard() {
+    this.tickBalanceMetrics();
+    const integ = world.integrity || this.defaultIntegrity();
+    const bm = world.balanceMetrics || this.defaultBalanceMetrics();
+    const alive = world.agents.filter(a => a.alive);
+    const stuck = (world.warbands || []).filter(w => (w.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays);
+    const orphans = marketSettlements().filter(s => !s.ownerOrganizationId);
+    const overloaded = (world.organizations || []).filter(o => o.memberIds.length > 80);
+    const sovIssues = (world.organizations || []).filter(o => {
+      const landed = o.sovereignty?.status === 'landed';
+      const has = (o.sovereignty?.settlementIds || []).some(sid => getSettlement(sid));
+      return (landed && !has) || (!landed && has);
+    });
+    return {
+      integrityScore: integ.score, lastCheckDay: integ.lastCheckDay, repairs: (integ.repaired || []).length,
+      population: alive.length, activeAgents: alive.length, deadAgents: world.agents.length - alive.length,
+      organizations: (world.organizations || []).length, warbands: (world.warbands || []).filter(w => warbandMembers(w).length).length,
+      realms: (world.organizations || []).filter(o => o.sovereignty?.status === 'landed').length,
+      vassals: (world.organizations || []).flatMap(o => o.vassals || []).length,
+      activeOffers: bm.recruitment.activeOffers,
+      activeSiegeAuthorities: (world.siegeAuthorities || []).filter(s => s.status === 'active').length,
+      orphanWarnings: orphans.length, economyHealth: bm.economyHealth, warPressure: world._warPressure,
+      saveSizeEstimate: this.estimateSaveSize(), stuckWarbands: stuck, overloadedOrgs: overloaded, sovereigntyIssues: sovIssues,
+      errors: integ.errors.length, warnings: integ.warnings.length
+    };
   }
 };
 
@@ -9657,7 +10453,13 @@ function simulateDay() {
   if (typeof WarbandSystem !== 'undefined') WarbandSystem.tickDaily();
   if (typeof SovereigntySystem !== 'undefined') {
     SovereigntySystem.tickDaily();
-    if (world.day % 50 === 0) SovereigntySystem.validateNoGhostOwners();
+    if (world.day % BALANCE.integrity.checkIntervalDays === 0 && typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'scheduled' });
+    }
+  }
+  if (typeof WorldIntegritySystem !== 'undefined') {
+    WorldIntegritySystem.tickBalanceMetrics();
+    if (world.day % 25 === 0) WorldIntegritySystem.capAllHistory(true);
   }
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.tickInjuries();
 
@@ -12157,7 +12959,50 @@ const UI = {
       const era = world.eras[world.eras.length - 1];
       html += `<div class="sum-section"><span class="sum-head">ยุคสมัยล่าสุด</span><br>${era.text}</div>`;
     }
+
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      html += `<div class="sum-section world-health"><span class="sum-head">🩺 World Health (Phase 18.5)</span><br>`;
+      html += `Integrity <b>${h.integrityScore}</b>/100 · Economy ${fmt(h.economyHealth, 0)} · War pressure ${fmt((h.warPressure?.exhaustionBoost || 0), 1)}<br>`;
+      html += `Agents ${h.activeAgents} · Orgs ${h.organizations} · Warbands ${h.warbands} · Realms ${h.realms} · Vassals ${h.vassals}<br>`;
+      html += `Offers ${h.activeOffers} · Siege auth ${h.activeSiegeAuthorities} · Orphans ${h.orphanWarnings}<br>`;
+      html += `Save ~${fmt(h.saveSizeEstimate / 1024, 0)} KB · Last check Day ${h.lastCheckDay || '—'} · Repairs ${h.repairs}<br>`;
+      if (h.errors || h.warnings) html += `Issues: ${h.errors} errors, ${h.warnings} warnings`;
+      html += `</div>`;
+      html += `<div class="sum-section world-health-actions">`;
+      html += `<button type="button" class="health-btn" id="btnRunIntegrity">Run Integrity Check</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowStuck">Stuck Warbands</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowSov">Sovereignty Issues</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowOrphans">Orphans</button>`;
+      html += `<div id="healthDetail" class="health-detail hint"></div></div>`;
+    }
+
     el.innerHTML = html;
+    const bindHealth = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
+    bindHealth('btnRunIntegrity', () => {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'ui' });
+      this.renderWorldSummary();
+      EventSystem.add('system', `🩺 Manual integrity check — score ${world.integrity.score}`);
+    });
+    bindHealth('btnShowStuck', () => {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = h.stuckWarbands.length
+        ? h.stuckWarbands.map(w => `${w.name} stuck ${w.stuckDays}d — ${w.pathFailureReason || '?'}`).join('<br>')
+        : 'ไม่มี warband ติดเส้นทาง';
+    });
+    bindHealth('btnShowSov', () => {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = h.sovereigntyIssues.length
+        ? h.sovereigntyIssues.map(o => `${o.name}: ${o.sovereignty?.status}`).join('<br>')
+        : 'ไม่มีปัญหา sovereignty';
+    });
+    bindHealth('btnShowOrphans', () => {
+      const orphans = marketSettlements().filter(s => !s.ownerOrganizationId);
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = orphans.length ? orphans.map(s => s.name).join('<br>') : 'ไม่มี orphan settlement';
+    });
   },
 
   renderLog() {
@@ -12310,6 +13155,15 @@ const UI = {
     html += `<div class="insp-section"><h4>อาชีพ</h4>`;
     for (const [p, n] of Object.entries(profCount).sort((a, b) => b[1] - a[1])) html += this.kv(p, n);
     html += `</div>`;
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      html += `<div class="insp-section"><h4>🩺 World Health</h4>`;
+      html += this.kv('Integrity', `${h.integrityScore}/100`);
+      html += this.kv('Economy health', fmt(h.economyHealth, 0));
+      html += this.kv('Orphan settlements', h.orphanWarnings, h.orphanWarnings ? 'bad' : 'good');
+      html += this.kv('Save estimate', `${fmt(h.saveSizeEstimate / 1024, 0)} KB`);
+      html += `</div>`;
+    }
     return html;
   },
 
@@ -13383,6 +14237,17 @@ const SandboxTools = {
         UI.pageDirty = true;
         EventSystem.add('system', '🔄 [Sandbox] Rebuilt UI indexes');
       },
+      runIntegrityCheck: () => {
+        if (typeof WorldIntegritySystem !== 'undefined') {
+          WorldIntegritySystem.runCheck({ repair: true, reason: 'sandbox' });
+          UI.dashboardDirty = true;
+          EventSystem.add('system', `🩺 [Sandbox] Integrity score ${world.integrity.score}`);
+        }
+      },
+      showWorldHealth: () => {
+        document.getElementById('summaryModal')?.classList.remove('hidden');
+        UI.renderWorldSummary();
+      },
       foundGuildFromWarband: () => {
         const wb = world.warbands.find(w => warbandMembers(w).length >= 8);
         if (!wb) { EventSystem.add('system', '✨ ต้องมี warband >= 8 คน'); return; }
@@ -13689,7 +14554,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.5';
+const SAVE_SCHEMA_VERSION = '18.6';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -13888,6 +14753,8 @@ const SaveSystem = {
     w.claims = w.claims || [];
     w.captureCredits = w.captureCredits || [];
     w.vassalGrants = w.vassalGrants || [];
+    if (!w.integrity) w.integrity = null;
+    if (!w.balanceMetrics) w.balanceMetrics = null;
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -14143,6 +15010,9 @@ const SaveSystem = {
     }
     if (!wb.foundingReason) wb.foundingReason = wb.organizationId ? 'guild_detachment' : 'local_militia';
     if (!wb.politicalMode) wb.politicalMode = wb.organizationId ? 'guild_backed' : 'independent';
+    if (wb.stuckDays == null) wb.stuckDays = 0;
+    if (wb.lastProgressDay == null) wb.lastProgressDay = world.day;
+    if (wb.rerouteAttempts == null) wb.rerouteAttempts = 0;
   },
 
   migrateRecruitmentOffer(ro) {
@@ -14191,6 +15061,10 @@ const SaveSystem = {
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
     if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
     if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.initWorld();
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'load', silent: true });
+    }
     if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
   },
 

@@ -54,7 +54,7 @@ const { spawn } = require('child_process');
 
   await page.evaluate(() => SaveSystem.saveToLocalStorage('uitest184b', true));
   const schema = await page.evaluate(() => SaveSystem.getSaveMeta()?.schemaVersion);
-  if (schema !== '18.5') throw new Error('schema not 18.5');
+  if (schema !== '18.6' && schema !== '18.5') throw new Error('schema not 18.6: ' + schema);
 
   if (errors.length) throw new Error(errors.join('; '));
   console.log('Phase 18.4B UI smoke test PASSED');
