@@ -36,7 +36,7 @@ const { spawn } = require('child_process');
 
   await page.evaluate(() => SaveSystem.saveToLocalStorage('uitest185', true));
   const schema = await page.evaluate(() => SaveSystem.getSaveMeta()?.schemaVersion);
-  if (schema !== '18.6') throw new Error('schema not 18.6: ' + schema);
+  if (schema !== '19.0') throw new Error('schema not 19.0: ' + schema);
 
   await page.evaluate(() => SandboxTools.activate('runIntegrityCheck', { classList: { add() {}, remove() {} } }));
 

@@ -127,8 +127,8 @@ console.log('=== Phase 18.5 World Stability Tests ===\n');
 
 // Schema + BALANCE object
 const schema = run('SAVE_SCHEMA_VERSION');
-if (schema === '18.6') ok('schema 18.6');
-else fail('schema expected 18.6 got ' + schema);
+if (schema === '19.0') ok('schema 19.0');
+else fail('schema expected 19.0 got ' + schema);
 
 if (run('typeof BALANCE === "object" && BALANCE.recruitment && BALANCE.integrity')) ok('BALANCE config present');
 else fail('BALANCE missing');
