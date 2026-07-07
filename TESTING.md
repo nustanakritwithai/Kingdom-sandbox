@@ -38,6 +38,7 @@ Core includes:
 | `test-harness-19.js` | Court politics |
 | `test-harness-191-liveness.js` | Phase 19.1 liveness unlock |
 | `test-harness-191-regression.js` | **Regression gate** (caravan/army/ruler/schema) |
+| `test-harness-193-hygiene.js` | Phase 19.3 data hygiene / archive / prune |
 
 UI tests are **recommended** when Chromium is available:
 

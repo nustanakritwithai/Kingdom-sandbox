@@ -63,6 +63,18 @@ function defaultMarketIndex() {
 }
 
 /* ── Phase 19.1: Liveness metrics — วัดว่า "โลกมีชีวิต" ไม่ใช่แค่ไม่พัง ── */
+function defaultDataHygieneMetrics() {
+  return {
+    lastRunDay: 0,
+    treatiesDeduped: 0, treatiesArchived: 0, treatiesPruned: 0,
+    mustersArchived: 0, mustersPruned: 0,
+    offersArchived: 0, offersPruned: 0,
+    tradeContractsArchived: 0, tradeContractsPruned: 0,
+    deadAgentRefsRemoved: 0, stalePendingExpired: 0,
+    saveBytesBefore: 0, saveBytesAfter: 0
+  };
+}
+
 function defaultBalanceMetrics() {
   return {
     liveness: {
@@ -75,7 +87,8 @@ function defaultBalanceMetrics() {
       rulersRecovered: 0, interregnumDays: 0,
       minerCount: 0, crafterCount: 0, woodcutterCount: 0,
       routeDangerAverage: 0
-    }
+    },
+    dataHygiene: defaultDataHygieneMetrics()
   };
 }
 // เข้าถึง liveness counters อย่างปลอดภัย (save เก่าที่ยังไม่ migrate ก็ไม่พัง)
@@ -84,6 +97,17 @@ function LIV() {
   if (!world.balanceMetrics) world.balanceMetrics = defaultBalanceMetrics();
   if (!world.balanceMetrics.liveness) world.balanceMetrics.liveness = defaultBalanceMetrics().liveness;
   return world.balanceMetrics.liveness;
+}
+// Phase 19.3: data hygiene observability
+function DH() {
+  if (!world) return null;
+  if (!world.balanceMetrics) world.balanceMetrics = defaultBalanceMetrics();
+  if (!world.balanceMetrics.dataHygiene) world.balanceMetrics.dataHygiene = defaultDataHygieneMetrics();
+  return world.balanceMetrics.dataHygiene;
+}
+
+function defaultDataArchive() {
+  return { treaties: [], musters: [], recruitment: [], tradeContracts: [] };
 }
 
 /* ── Phase 19.1: Labor market — ค่าแรงพรีเมียมตาม shortage ระดับ realm ── */
@@ -113,6 +137,22 @@ const MAX_AGENT_MEMBERSHIPS = 3;
 const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = 4;
 const ORG_HISTORY_CAP = 24;
 const WARBAND_HISTORY_CAP = 20;
+
+/* ── Phase 19.3: Balance / data hygiene config — archive+prune closed records ไม่กระทบ liveness ── */
+const BALANCE = {
+  dataHygiene: {
+    tickIntervalDays: 30,          // รัน cleanup ทุก N วันใน simulateDay
+    archiveAfterDays: 180,         // closed record เก่ากว่านี้ → archive summary ก่อน prune
+    pruneAfterDays: 365,           // archived record เก่ากว่านี้ → ลบออกจาก live arrays
+    staleMusterDays: 120,          // pending muster เกิน targetDay + N → force expire
+    staleRecruitmentDays: 120,     // open offer ไม่มี progress เกิน N วัน → fail/expire
+    staleTradeContractDays: 365,   // completed/failed/cancelled เก่ากว่านี้ → archive+prune
+    staleTreatyDays: 365,          // expired/broken treaty เก่ากว่านี้ → archive+prune
+    maxArchivedSummaries: 500,     // cap ต่อหมวดใน world.dataArchive
+    maxCleanupPerTick: 200,        // จำกัด records ต่อหมวดต่อ tick (กัน hitch)
+    enableMigrationCleanup: true     // idempotent cleanup หลัง load/migrate
+  }
+};
 
 function getOrganization(id) { return (world.organizations || []).find(o => o.id === id); }
 function getWarband(id) { return (world.warbands || []).find(w => w.id === id); }
@@ -1275,6 +1315,7 @@ function generateWorld() {
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
     militaryNeeds: [],
+    dataArchive: defaultDataArchive(),
     marketIndex: defaultMarketIndex(),
     balanceMetrics: defaultBalanceMetrics(),
     laborMarket: defaultLaborMarket(),
@@ -10075,12 +10116,37 @@ function isVassalOf(fA, fB) {
   return r.vassalOf === fB.id || world.vassalContracts?.some(v => v.vassalFactionId === fA.id && v.overlordFactionId === fB.id && v.active);
 }
 
+function normalizePartyIds(fA, fB) {
+  const a = (fA && fA.id != null) ? fA.id : fA;
+  const b = (fB && fB.id != null) ? fB.id : fB;
+  return a < b ? [a, b] : [b, a];
+}
+
+function getTreatyKey(treaty) {
+  const parts = (treaty.factions || []).slice().sort((x, y) => x - y);
+  return parts.join('-') + ':' + treaty.type;
+}
+
+function findActiveTreaty(fA, fB, type) {
+  const [idA, idB] = normalizePartyIds(fA, fB);
+  return (world.treaties || []).find(t =>
+    t.status === 'active' && t.type === type &&
+    t.factions.includes(idA) && t.factions.includes(idB)
+  ) || null;
+}
+
+function treatyTermsStrength(terms) {
+  if (!terms) return 0;
+  return (terms.tariffReduction || 0) * 100 + Object.keys(terms).length;
+}
+
 function createTreaty(type, fA, fB, duration, terms) {
   if (!world.treaties) world.treaties = [];
+  const [idA, idB] = normalizePartyIds(fA, fB);
   const t = {
     id: uid(),
     type,
-    factions: [fA.id, fB.id],
+    factions: [idA, idB],
     startDay: world.day,
     endDay: duration ? world.day + duration : null,
     terms: terms || {},
@@ -10090,6 +10156,24 @@ function createTreaty(type, fA, fB, duration, terms) {
   };
   world.treaties.push(t);
   return t;
+}
+
+function upsertTreaty(fA, fB, type, duration, terms) {
+  if (!world.treaties) world.treaties = [];
+  const existing = findActiveTreaty(fA, fB, type);
+  const dur = duration || 120;
+  if (existing) {
+    existing.endDay = world.day + dur;
+    existing.startDay = world.day;
+    if (terms && treatyTermsStrength(terms) >= treatyTermsStrength(existing.terms)) {
+      existing.terms = Object.assign({}, existing.terms, terms);
+    }
+    existing.history = existing.history || [];
+    existing.history.push(`Day ${world.day}: ต่ออายุ${type}`);
+    if (existing.history.length > 20) existing.history = existing.history.slice(-20);
+    return existing;
+  }
+  return createTreaty(type, fA, fB, dur, terms);
 }
 
 function setTreaty(fA, fB, type, duration) {
@@ -10105,7 +10189,7 @@ function setTreaty(fA, fB, type, duration) {
     Chronicle.add({ category: 'diplomacy', importance: 4, title: `🤝 สัญญาไม่รุกราน: ${fA.name}–${fB.name}`, description: `ทั้งสองฝ่ายตกลงไม่รุกรานกันเป็นเวลา ${dur} วัน`, factions: [fA.id, fB.id] });
     factionTimeline(fA, `ลงนามสัญญาไม่รุกรานกับ${fB.name}`);
     factionTimeline(fB, `ลงนามสัญญาไม่รุกรานกับ${fA.name}`);
-    return createTreaty('non_aggression', fA, fB, dur);
+    return upsertTreaty(fA, fB, 'non_aggression', dur);
   }
   if (type === 'alliance') {
     rA.allianceUntilDay = until; rB.allianceUntilDay = until;
@@ -10117,7 +10201,7 @@ function setTreaty(fA, fB, type, duration) {
     Chronicle.add({ category: 'diplomacy', importance: 5, title: `🛡 พันธมิตร: ${fA.name}–${fB.name}`, description: 'ทั้งสองฝ่ายร่วมมือป้องกันและสนับสนุนกัน', factions: [fA.id, fB.id] });
     factionTimeline(fA, `สร้างพันธมิตรกับ${fB.name}`);
     factionTimeline(fB, `สร้างพันธมิตรกับ${fA.name}`);
-    return createTreaty('alliance', fA, fB, dur);
+    return upsertTreaty(fA, fB, 'alliance', dur);
   }
   if (type === 'trade') {
     changeRelation(fA, fB, 12, 'ข้อตกลงการค้า');
@@ -10126,14 +10210,14 @@ function setTreaty(fA, fB, type, duration) {
     rB.tradeValue = Math.max(rB.tradeValue, 20);
     EventSystem.add('trade', `📜 ${fA.name} กับ ${fB.name} ลงนามข้อตกลงการค้า`);
     Chronicle.add({ category: 'diplomacy', importance: 3, title: `📜 ข้อตกลงการค้า: ${fA.name}–${fB.name}`, factions: [fA.id, fB.id] });
-    return createTreaty('trade', fA, fB, dur, { tariffReduction: 0.15 });
+    return upsertTreaty(fA, fB, 'trade', dur, { tariffReduction: 0.15 });
   }
   if (type === 'peace') {
     const w = activeWarBetween(fA.id, fB.id);
     if (w) endWar(w, null, `สนธิสัญญาสันติภาพระหว่าง${fA.name}กับ${fB.name}`, { peaceType: 'peace_treaty' });
     changeRelation(fA, fB, 20, 'สงบศึก');
     changeRelation(fB, fA, 20, 'สงบศึก');
-    return createTreaty('peace', fA, fB, dur);
+    return upsertTreaty(fA, fB, 'peace', dur);
   }
   return null;
 }
@@ -10554,6 +10638,386 @@ const DiplomacySystem = {
   linkFaction(f) { return f ? `<span style="color:${f.color}">${f.name}</span>` : '?'; }
 };
 
+/* ═══════════════════ 14.5 Phase 19.3: Data Hygiene System ═══════════════════ */
+
+const DataHygieneSystem = {
+  cfg() { return BALANCE.dataHygiene; },
+
+  ensureArchive() {
+    if (!world.dataArchive) world.dataArchive = defaultDataArchive();
+    for (const k of ['treaties', 'musters', 'recruitment', 'tradeContracts']) {
+      if (!world.dataArchive[k]) world.dataArchive[k] = [];
+    }
+  },
+
+  isArchived(category, id) {
+    this.ensureArchive();
+    return world.dataArchive[category].some(e => e.id === id);
+  },
+
+  archiveRecord(type, record, reason) {
+    this.ensureArchive();
+    const catMap = { treaty: 'treaties', muster: 'musters', recruitment: 'recruitment', tradeContract: 'tradeContracts' };
+    const cat = catMap[type] || type;
+    if (!world.dataArchive[cat]) world.dataArchive[cat] = [];
+    if (this.isArchived(cat, record.id)) return;
+    const summary = { id: record.id, day: world.day, reason, status: record.status };
+    if (type === 'treaty') {
+      summary.type = record.type;
+      summary.factions = (record.factions || []).slice();
+      summary.startDay = record.startDay;
+      summary.endDay = record.endDay;
+    } else if (type === 'muster') {
+      summary.organizationId = record.organizationId;
+      summary.settlementId = record.settlementId;
+      summary.targetDay = record.targetDay;
+    } else if (type === 'recruitment') {
+      summary.organizationId = record.organizationId;
+      summary.settlementId = record.settlementId;
+      summary.offerType = record.type;
+      summary.postedDay = record.postedDay;
+    } else if (type === 'tradeContract') {
+      summary.good = record.good;
+      summary.originId = record.originId;
+      summary.destinationId = record.destinationId;
+      summary.issuerType = record.issuerType;
+      summary.createdDay = record.createdDay;
+    }
+    world.dataArchive[cat].push(summary);
+    const cap = this.cfg().maxArchivedSummaries;
+    if (world.dataArchive[cat].length > cap) {
+      const overflow = world.dataArchive[cat].length - cap;
+      const merged = world.dataArchive[cat].splice(0, Math.min(overflow, 50));
+      const era = {
+        id: 'era-' + world.day + '-' + cat,
+        day: world.day,
+        reason: 'era_merge',
+        status: 'merged',
+        count: merged.length,
+        fromDay: merged[0]?.startDay || merged[0]?.postedDay || merged[0]?.createdDay,
+        toDay: merged[merged.length - 1]?.day || world.day
+      };
+      world.dataArchive[cat].unshift(era);
+    }
+  },
+
+  recordAge(record, dayField) {
+    const d = record[dayField || 'startDay'] != null ? record[dayField || 'startDay'] : record.postedDay;
+    return world.day - (d || 0);
+  },
+
+  closedAge(record) {
+    const end = record.endDay || record.expiresDay || record.targetDay || record.deadlineDay || record.createdDay || record.postedDay || 0;
+    return world.day - end;
+  },
+
+  dedupeActiveTreaties(limit) {
+    const dh = DH();
+    const groups = new Map();
+    const toRemove = [];
+    for (const t of world.treaties || []) {
+      if (t.status !== 'active') continue;
+      const key = getTreatyKey(t);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+    let n = 0;
+    for (const [, list] of groups) {
+      if (list.length <= 1) continue;
+      list.sort((a, b) => (b.startDay || 0) - (a.startDay || 0) || treatyTermsStrength(b.terms) - treatyTermsStrength(a.terms));
+      for (let i = 1; i < list.length; i++) {
+        if (n >= limit) break;
+        const dup = list[i];
+        dup.status = 'broken';
+        dup.brokenBy = dup.brokenBy || list[0].factions[0];
+        if (!this.isArchived('treaties', dup.id)) {
+          this.archiveRecord('treaty', dup, 'dedupe_active');
+          dh.treatiesArchived++;
+        }
+        toRemove.push(dup.id);
+        dh.treatiesDeduped++;
+        n++;
+      }
+    }
+    if (toRemove.length) {
+      const drop = new Set(toRemove);
+      world.treaties = world.treaties.filter(t => !drop.has(t.id));
+    }
+    return n;
+  },
+
+  cleanupTreaties(limit) {
+    const dh = DH();
+    const cfg = this.cfg();
+    let n = 0;
+    this.dedupeActiveTreaties(limit);
+    const toPrune = [];
+    for (const t of world.treaties || []) {
+      if (n >= limit) break;
+      const partiesValid = (t.factions || []).every(fid => getFaction(fid));
+      if (!partiesValid) {
+        if (t.status === 'active') t.status = 'broken';
+        if (!this.isArchived('treaties', t.id)) {
+          this.archiveRecord('treaty', t, 'orphan_parties');
+          dh.treatiesArchived++;
+        }
+        toPrune.push(t.id);
+        n++;
+        continue;
+      }
+      if (t.status !== 'active' && this.closedAge(t) >= cfg.staleTreatyDays) {
+        if (!this.isArchived('treaties', t.id)) {
+          this.archiveRecord('treaty', t, 'stale_closed');
+          dh.treatiesArchived++;
+        }
+        if (this.closedAge(t) >= cfg.pruneAfterDays) {
+          toPrune.push(t.id);
+          dh.treatiesPruned++;
+          n++;
+        }
+      }
+    }
+    if (toPrune.length) {
+      const drop = new Set(toPrune);
+      world.treaties = world.treaties.filter(t => !drop.has(t.id));
+    }
+  },
+
+  musterHasTravelingAgents(mp) {
+    for (const aid of [...(mp.arrivedAgentIds || []), ...(mp.expectedAgentIds || [])]) {
+      const a = getAgent(aid);
+      if (!a || !a.alive) continue;
+      const mem = (a.memberships || []).find(m => m.organizationId === mp.organizationId);
+      if (mem && ['traveling_to_muster', 'active', 'probation'].includes(mem.status)) return true;
+      if (a.travel && mp.locationId && a.locationId !== mp.locationId) return true;
+    }
+    return false;
+  },
+
+  expireMuster(mp, reason) {
+    const dh = DH();
+    if (mp.status === 'pending' || mp.status === 'active') {
+      mp.status = 'failed';
+      dh.stalePendingExpired++;
+    }
+    const offer = world.recruitmentOffers.find(o => o.musterPointId === mp.id);
+    if (offer && offer.status === 'open') offer.status = 'failed';
+    if (!this.isArchived('musters', mp.id)) {
+      this.archiveRecord('muster', mp, reason);
+      dh.mustersArchived++;
+    }
+  },
+
+  cleanupMusterPoints(limit) {
+    const dh = DH();
+    const cfg = this.cfg();
+    let n = 0;
+    const toPrune = [];
+    for (const mp of world.musterPoints || []) {
+      if (n >= limit) break;
+      const org = getOrganization(mp.organizationId);
+      const settle = getSettlement(mp.settlementId);
+      const stalePending = mp.status === 'pending' && world.day > mp.targetDay + cfg.staleMusterDays;
+      const noAgents = !(mp.arrivedAgentIds || []).length && !(mp.expectedAgentIds || []).length;
+      const allDead = (mp.arrivedAgentIds || []).concat(mp.expectedAgentIds || []).filter(id => {
+        const a = getAgent(id);
+        return a && a.alive;
+      }).length === 0 && ((mp.arrivedAgentIds || []).length + (mp.expectedAgentIds || []).length) > 0;
+
+      if (!org || !settle) {
+        this.expireMuster(mp, 'orphan_ref');
+        if (this.closedAge(mp) >= cfg.archiveAfterDays || mp.status !== 'pending') {
+          toPrune.push(mp.id);
+          dh.mustersPruned++;
+          n++;
+        }
+        continue;
+      }
+      if (stalePending && !this.musterHasTravelingAgents(mp)) {
+        this.expireMuster(mp, 'stale_pending');
+      }
+      if (mp.status === 'pending' && noAgents && world.day > mp.targetDay + 30) {
+        this.expireMuster(mp, 'no_agents');
+      }
+      if (mp.status === 'pending' && allDead && world.day > mp.targetDay) {
+        this.expireMuster(mp, 'agents_dead');
+      }
+      if (['complete', 'failed', 'expired'].includes(mp.status)) {
+        const age = world.day - (mp.targetDay || 0);
+        if (age >= cfg.archiveAfterDays) {
+          if (!this.isArchived('musters', mp.id)) {
+            this.archiveRecord('muster', mp, 'closed_old');
+            dh.mustersArchived++;
+          }
+          if (age >= cfg.pruneAfterDays) {
+            toPrune.push(mp.id);
+            dh.mustersPruned++;
+            n++;
+          }
+        }
+      }
+    }
+    if (toPrune.length) {
+      const drop = new Set(toPrune);
+      world.musterPoints = world.musterPoints.filter(mp => !drop.has(mp.id));
+    }
+  },
+
+  cleanupRecruitmentOffers(limit) {
+    const dh = DH();
+    const cfg = this.cfg();
+    let n = 0;
+    const toPrune = [];
+    for (const o of world.recruitmentOffers || []) {
+      if (n >= limit) break;
+      const before = o.acceptedAgentIds.length;
+      o.acceptedAgentIds = (o.acceptedAgentIds || []).filter(id => {
+        const a = getAgent(id);
+        return a && a.alive;
+      });
+      dh.deadAgentRefsRemoved += before - o.acceptedAgentIds.length;
+
+      const org = getOrganization(o.organizationId);
+      const settle = getSettlement(o.settlementId);
+      const mp = o.musterPointId ? getMusterPoint(o.musterPointId) : null;
+
+      if (o.status === 'open') {
+        if (!org || !settle) {
+          o.status = 'expired';
+          if (!this.isArchived('recruitment', o.id)) this.archiveRecord('recruitment', o, 'invalid_target');
+        } else if (world.day - o.postedDay > cfg.staleRecruitmentDays && o.acceptedAgentIds.length === 0) {
+          o.status = 'failed';
+          if (!this.isArchived('recruitment', o.id)) this.archiveRecord('recruitment', o, 'stale_no_progress');
+        } else if (mp && mp.status === 'failed' && o.acceptedAgentIds.length === 0) {
+          o.status = 'failed';
+        }
+      }
+
+      if (['filled', 'failed', 'expired', 'cancelled'].includes(o.status)) {
+        const closedDay = o.expiresDay || o.postedDay || 0;
+        const age = world.day - closedDay;
+        if (age >= cfg.archiveAfterDays) {
+          if (!this.isArchived('recruitment', o.id)) {
+            this.archiveRecord('recruitment', o, 'closed_old');
+            dh.offersArchived++;
+          }
+          if (age >= cfg.pruneAfterDays) {
+            toPrune.push(o.id);
+            dh.offersPruned++;
+            n++;
+          }
+        }
+      }
+    }
+    if (toPrune.length) {
+      const drop = new Set(toPrune);
+      world.recruitmentOffers = world.recruitmentOffers.filter(o => !drop.has(o.id));
+    }
+  },
+
+  contractReferenced(c) {
+    if (c.status === 'open' || c.status === 'accepted') {
+      for (const a of world.agents) {
+        if (a.contractId === c.id) return true;
+      }
+    }
+    return false;
+  },
+
+  cleanupTradeContracts(limit) {
+    const dh = DH();
+    const cfg = this.cfg();
+    let n = 0;
+    const toPrune = [];
+    for (const c of world.tradeContracts || []) {
+      if (n >= limit) break;
+      const origin = getSettlement(c.originId);
+      const dest = getSettlement(c.destinationId);
+      const issuerOk = c.issuerType === 'guild' ? !!getGuild(c.issuerId) : !!getSettlement(c.issuerId);
+
+      if (!origin || !dest || !issuerOk) {
+        if (c.status === 'open' || c.status === 'accepted') c.status = 'cancelled';
+        if (!this.isArchived('tradeContracts', c.id)) {
+          this.archiveRecord('tradeContract', c, 'dangling_ref');
+          dh.tradeContractsArchived++;
+        }
+        toPrune.push(c.id);
+        dh.tradeContractsPruned++;
+        n++;
+        continue;
+      }
+
+      if ((c.status === 'open' || c.status === 'accepted') && world.day > c.deadlineDay + cfg.staleRecruitmentDays) {
+        if (!this.contractReferenced(c)) {
+          c.status = 'failed';
+          if (!this.isArchived('tradeContracts', c.id)) this.archiveRecord('tradeContract', c, 'stale_active');
+        }
+      }
+
+      if (['completed', 'failed', 'cancelled'].includes(c.status) && !this.contractReferenced(c)) {
+        const age = world.day - (c.deadlineDay || c.createdDay || 0);
+        if (age >= cfg.staleTradeContractDays) {
+          if (!this.isArchived('tradeContracts', c.id)) {
+            this.archiveRecord('tradeContract', c, 'closed_old');
+            dh.tradeContractsArchived++;
+          }
+          if (age >= cfg.pruneAfterDays) {
+            toPrune.push(c.id);
+            dh.tradeContractsPruned++;
+            n++;
+          }
+        }
+      }
+    }
+    if (toPrune.length) {
+      const drop = new Set(toPrune);
+      world.tradeContracts = world.tradeContracts.filter(c => !drop.has(c.id));
+      for (const a of world.agents) {
+        if (a.contractId && drop.has(a.contractId)) a.contractId = null;
+      }
+    }
+  },
+
+  getMetrics(w) {
+    const target = w || world;
+    return target?.balanceMetrics?.dataHygiene || defaultDataHygieneMetrics();
+  },
+
+  migrationCleanup() {
+    if (!BALANCE.dataHygiene.enableMigrationCleanup || !world) return;
+    this.ensureArchive();
+    const lim = this.cfg().maxCleanupPerTick * 4;
+    this.dedupeActiveTreaties(lim);
+    this.cleanupMusterPoints(lim);
+    this.cleanupRecruitmentOffers(lim);
+    this.cleanupTradeContracts(lim);
+    this.cleanupTreaties(lim);
+    world._dataHygieneMigrated = world.day;
+  },
+
+  tick(w) {
+    const target = w || world;
+    if (!target) return;
+    const prev = world;
+    world = target;
+    try {
+      const dh = DH();
+      const cfg = this.cfg();
+      if (target.day % cfg.tickIntervalDays !== 0) return;
+      dh.saveBytesBefore = JSON.stringify(target).length;
+      const lim = cfg.maxCleanupPerTick;
+      this.cleanupMusterPoints(lim);
+      this.cleanupRecruitmentOffers(lim);
+      this.cleanupTradeContracts(lim);
+      this.cleanupTreaties(lim);
+      dh.lastRunDay = target.day;
+      dh.saveBytesAfter = JSON.stringify(target).length;
+    } finally {
+      world = prev;
+    }
+  }
+};
+
 /* ═══════════════════ 15. SIMULATION TICK ═══════════════════ */
 
 function simulateDay() {
@@ -10632,6 +11096,7 @@ function simulateDay() {
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
   if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.tickDaily();
+  if (typeof DataHygieneSystem !== 'undefined') DataHygieneSystem.tick();
   if (typeof WarbandSystem !== 'undefined') WarbandSystem.tickDaily();
   if (typeof SovereigntySystem !== 'undefined') {
     SovereigntySystem.tickDaily();
@@ -14686,7 +15151,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '19.1';
+const SAVE_SCHEMA_VERSION = '19.3';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -14888,8 +15353,12 @@ const SaveSystem = {
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     // Phase 19.1
     w.militaryNeeds = w.militaryNeeds || [];
+    w.dataArchive = Object.assign(defaultDataArchive(), w.dataArchive || {});
     w.balanceMetrics = w.balanceMetrics && w.balanceMetrics.liveness
-      ? { liveness: Object.assign(defaultBalanceMetrics().liveness, w.balanceMetrics.liveness) }
+      ? {
+        liveness: Object.assign(defaultBalanceMetrics().liveness, w.balanceMetrics.liveness),
+        dataHygiene: Object.assign(defaultDataHygieneMetrics(), w.balanceMetrics.dataHygiene || {})
+      }
       : defaultBalanceMetrics();
     w.laborMarket = Object.assign(defaultLaborMarket(), w.laborMarket || {});
     w.stats = Object.assign({
@@ -14919,6 +15388,7 @@ const SaveSystem = {
       for (const ro of w.recruitmentOffers) this.migrateRecruitmentOffer(ro);
       for (const mp of w.musterPoints) this.migrateMusterPoint(mp);
       for (const hq of w.headquarters) this.migrateHeadquarters(hq);
+      if (typeof DataHygieneSystem !== 'undefined') DataHygieneSystem.migrationCleanup();
       data.schemaVersion = SAVE_SCHEMA_VERSION;
       data.world = w;
       return data;
@@ -15207,6 +15677,9 @@ const SaveSystem = {
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
     if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
+    if (typeof DataHygieneSystem !== 'undefined' && BALANCE.dataHygiene.enableMigrationCleanup) {
+      DataHygieneSystem.migrationCleanup();
+    }
     if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
     if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
   },
