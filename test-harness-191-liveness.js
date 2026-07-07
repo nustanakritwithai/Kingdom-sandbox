@@ -1,81 +1,24 @@
-/* Phase 19.1 Liveness Unlock — headless test — run: node test-harness-191-liveness.js
-   ตรวจว่าเนื้อเกมครึ่งหลัง "เกิดเองตามธรรมชาติ": army/battle/warband/muster,
-   ผู้นำ faction ฟื้นเสมอ (ไม่อัมพาต), เส้นทางฟื้นจากโจรได้, ไม่มี spawned soldier,
-   engine ยังนิ่ง (0 NaN, save/load ผ่าน schema 19.1) */
+/* Phase 19.1 Liveness Unlock — headless test — run: node test-harness-191-liveness.js */
 'use strict';
-const fs = require('fs');
-const vm = require('vm');
+const {
+  createTestSandbox, seedRandom, run, runDays, findNaN,
+  getCurrentSchemaVersion, saveLoadRoundtrip, createTestReporter
+} = require('./test-utils/dom-mock');
 
-function mockEl() {
-  const el = {
-    addEventListener() {}, textContent: '', innerHTML: '', value: '', title: '',
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    querySelector() { return mockEl(); }, querySelectorAll() { return []; },
-    getContext: () => new Proxy({}, { get: (t, k) =>
-      k === 'measureText' ? () => ({ width: 10 })
-      : k === 'getImageData' ? () => ({ data: new Uint8ClampedArray(4) })
-      : k === 'createRadialGradient' ? () => ({ addColorStop() {} }) : () => {} }),
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 640 }),
-    parentElement: null, files: null, click() {}, style: {}, dataset: {}
-  };
-  el.parentElement = { getBoundingClientRect: () => ({ width: 1000, height: 640 }) };
-  return el;
-}
-
-function makeSandbox() {
-  const storage = {};
-  const els = {};
-  const sandbox = {
-    console, Math: Object.create(Math), Date, JSON, performance: { now: () => Date.now() },
-    Blob: class Blob {}, URL: { createObjectURL: () => 'b', revokeObjectURL() {} },
-    navigator: { clipboard: { writeText: async () => {} } },
-    localStorage: { getItem: k => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v); }, removeItem: k => { delete storage[k]; } },
-    document: { getElementById: id => els[id] || (els[id] = mockEl()), querySelectorAll: () => [], createElement: () => mockEl(), body: mockEl() },
-    requestAnimationFrame: () => {}, confirm: () => true, alert: () => {},
-    window: { innerWidth: 1024, addEventListener() {} }, devicePixelRatio: 1,
-    setTimeout: fn => { fn(); return 0; }, clearTimeout() {}
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(__dirname + '/script.js', 'utf8'), sandbox);
-  sandbox.__storage = storage;
-  return sandbox;
-}
-
-function seeded(sandbox, seed) {
-  vm.runInContext(`(function(){ let s=${seed >>> 0}; Math.random=function(){ s=(1103515245*s+12345)>>>0; return s/4294967296; }; })()`, sandbox);
-}
-const R = (sb, code) => vm.runInContext(code, sb);
-
-function findNaN(root) {
-  const iss = []; const seen = new Set();
-  const walk = (v, p, d) => {
-    if (d > 12) return;
-    if (typeof v === 'number') { if (!Number.isFinite(v)) iss.push(p); return; }
-    if (!v || typeof v !== 'object') return;
-    if (seen.has(v)) return; seen.add(v);
-    if (Array.isArray(v)) v.forEach((x, i) => walk(x, p + '[' + i + ']', d + 1));
-    else for (const k in v) walk(v[k], p + '.' + k, d + 1);
-  };
-  walk(root, 'world', 0); return iss;
-}
-
-let failed = false;
-function ok(m) { console.log('OK:', m); }
-function fail(m) { console.log('FAIL:', m); failed = true; }
+const { ok, fail, finish } = createTestReporter('Phase 19.1 Liveness Tests');
+const schema = getCurrentSchemaVersion(createTestSandbox({ loadGame: true }));
 
 console.log('=== Phase 19.1 Liveness Tests ===\n');
 
-/* ── 1. Leadership recovery: ราชาตายไร้ทายาท → faction มีผู้นำใหม่ภายใน 30 วัน ── */
 (() => {
-  const sb = makeSandbox(); seeded(sb, 3); R(sb, 'generateWorld()');
-  R(sb, `(function(){
+  const sb = createTestSandbox(); seedRandom(sb, 3); run(sb, 'generateWorld()');
+  run(sb, `(function(){
     const f = world.factions.find(x => !x.isBandit);
-    // ฆ่าทุกคนใน faction ที่มีสิทธิ์เป็นผู้นำ ให้เหลือแต่สามัญชน
     for (const a of world.agents) if (a.alive && a.factionId === f.id && (RULER_PROFS.has(a.profession) || a.skills.leadership > 4)) NeedSystem.kill(a, 'ทดสอบ');
     globalThis.__testF = f.id;
   })()`);
-  R(sb, 'for(let i=0;i<30;i++) simulateDay();');
-  const res = R(sb, `(function(){
+  runDays(sb, 30);
+  const res = run(sb, `(function(){
     const f = getFaction(__testF);
     const r = f.rulerId != null ? getAgent(f.rulerId) : null;
     return { hasLeader: !!(r && r.alive), recovered: world.balanceMetrics.liveness.rulersRecovered };
@@ -84,11 +27,10 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('leadership recovery: ' + JSON.stringify(res));
 })();
 
-/* ── 2. ไม่มี dangling rulerId/governorId หลังจำลองยาว ── */
 (() => {
-  const sb = makeSandbox(); seeded(sb, 5); R(sb, 'generateWorld()');
-  R(sb, 'for(let i=0;i<2000;i++) simulateDay();');
-  const dangling = R(sb, `(function(){
+  const sb = createTestSandbox(); seedRandom(sb, 5); run(sb, 'generateWorld()');
+  runDays(sb, 2000);
+  const dangling = run(sb, `(function(){
     let bad = 0;
     for (const f of world.factions) { if (f.rulerId != null) { const r = getAgent(f.rulerId); if (!r || !r.alive) bad++; } }
     for (const s of world.settlements) { if (s.governorId != null) { const g = getAgent(s.governorId); if (!g || !g.alive) bad++; } }
@@ -98,16 +40,14 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('dangling refs: ' + dangling);
 })();
 
-/* ── 3. เกณฑ์ทหารข้ามเมือง: สงครามตอนเมืองหลวงร้าง → มีผู้สมัคร + muster สำเร็จ + ไม่เสกทหาร ── */
 (() => {
-  const sb = makeSandbox(); seeded(sb, 2); R(sb, 'generateWorld()');
-  // นับ createAgent ระหว่างระดมพล — ต้องไม่เสกทหาร
-  R(sb, `(function(){
+  const sb = createTestSandbox(); seedRandom(sb, 2); run(sb, 'generateWorld()');
+  run(sb, `(function(){
     globalThis.__spawns = 0; const _ca = createAgent;
     globalThis.createAgent = function(o){ if (o && o.profession && MILITARY_PROFS.has(o.profession)) __spawns++; return _ca(o); };
   })()`);
-  R(sb, 'for(let i=0;i<2500;i++) simulateDay();');
-  const res = R(sb, `(function(){
+  runDays(sb, 2500);
+  const res = run(sb, `(function(){
     const lv = world.balanceMetrics.liveness;
     const applicants = world.recruitmentOffers.reduce((s,o)=>s+o.acceptedAgentIds.length,0);
     return { musters: lv.successfulMusters, warbands: lv.warbandsFormed, applicants, spawns: __spawns };
@@ -120,13 +60,12 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('spawned soldiers detected: ' + res.spawns);
 })();
 
-/* ── 4. สงครามผลิตกองทัพ+การรบจริง (อย่างน้อย 1 seed จาก 4) ── */
 (() => {
   let anyArmy = false, anyBattle = false, best = {};
   for (const seed of [1, 2, 5, 7]) {
-    const sb = makeSandbox(); seeded(sb, seed); R(sb, 'generateWorld()');
-    R(sb, 'for(let i=0;i<3000;i++) simulateDay();');
-    const r = R(sb, `({ armies: world.balanceMetrics.liveness.armiesCreated, battled: world.wars.filter(w=>w.battles.length>0).length })`);
+    const sb = createTestSandbox(); seedRandom(sb, seed); run(sb, 'generateWorld()');
+    runDays(sb, 3000);
+    const r = run(sb, `({ armies: world.balanceMetrics.liveness.armiesCreated, battled: world.wars.filter(w=>w.battles.length>0).length })`);
     if (r.armies > 0) anyArmy = true;
     if (r.battled > 0) anyBattle = true;
     best[seed] = r;
@@ -137,11 +76,10 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('no wars with battles in any seed');
 })();
 
-/* ── 5. เส้นทางฟื้นจากอันตราย: danger 0.9 + กองลาดตระเวน → ลดลงต่ำกว่า 0.5 ── */
 (() => {
-  const sb = makeSandbox(); seeded(sb, 4); R(sb, 'generateWorld()');
-  R(sb, 'for(let i=0;i<200;i++) simulateDay();');
-  const recovered = R(sb, `(function(){
+  const sb = createTestSandbox(); seedRandom(sb, 4); run(sb, 'generateWorld()');
+  runDays(sb, 200);
+  const recovered = run(sb, `(function(){
     const r = world.routes.find(x => !x.destroyed);
     r.danger = 0.9; r.patrolLevel = 5;
     const start = r.danger;
@@ -152,13 +90,12 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('route did not recover: ' + JSON.stringify(recovered));
 })();
 
-/* ── 6. caravan loss rate ไม่ ~99% (โจรถูกกดพอควร) — อย่างน้อย 2/3 seed ── */
 (() => {
   let good = 0; const rates = {};
   for (const seed of [1, 3, 6]) {
-    const sb = makeSandbox(); seeded(sb, seed); R(sb, 'generateWorld()');
-    R(sb, 'for(let i=0;i<3000;i++) simulateDay();');
-    const rate = R(sb, `(function(){
+    const sb = createTestSandbox(); seedRandom(sb, seed); run(sb, 'generateWorld()');
+    runDays(sb, 3000);
+    const rate = run(sb, `(function(){
       const lv = world.balanceMetrics.liveness;
       const total = lv.caravanTrips + lv.caravanLost;
       return total > 0 ? lv.caravanLost / total : 0;
@@ -170,42 +107,31 @@ console.log('=== Phase 19.1 Liveness Tests ===\n');
   else fail('caravan loss too high ' + JSON.stringify(rates));
 })();
 
-/* ── 7. specialist ไม่สูญพันธุ์ทุก seed (miner+woodcutter+crafter > 0 ในบาง seed) ── */
 (() => {
   let anySpecialist = false; const counts = {};
   for (const seed of [1, 2, 3, 4]) {
-    const sb = makeSandbox(); seeded(sb, seed); R(sb, 'generateWorld()');
-    R(sb, 'for(let i=0;i<3000;i++) simulateDay();');
-    const n = R(sb, `world.agents.filter(a=>a.alive && (a.profession==='miner'||a.profession==='woodcutter'||a.profession==='crafter')).length`);
+    const sb = createTestSandbox(); seedRandom(sb, seed); run(sb, 'generateWorld()');
+    runDays(sb, 3000);
+    const n = run(sb, `world.agents.filter(a=>a.alive && (a.profession==='miner'||a.profession==='woodcutter'||a.profession==='crafter')).length`);
     counts[seed] = n; if (n > 0) anySpecialist = true;
   }
   if (anySpecialist) ok('specialist (miner/woodcutter/crafter) รอดในบาง seed ' + JSON.stringify(counts));
   else fail('specialists extinct in all seeds ' + JSON.stringify(counts));
 })();
 
-/* ── 8. Engine guards: 0 NaN + save/load roundtrip schema 19.1 + จำลองต่อได้ ── */
 (() => {
-  const sb = makeSandbox(); seeded(sb, 6); R(sb, 'generateWorld()');
-  R(sb, 'for(let i=0;i<1500;i++) simulateDay();');
+  const sb = createTestSandbox(); seedRandom(sb, 6); run(sb, 'generateWorld()');
+  runDays(sb, 1500);
   const nan1 = findNaN(sb.world);
   if (!nan1.length) ok('0 NaN หลัง 1500 วัน');
   else fail('NaN found: ' + JSON.stringify(nan1.slice(0, 5)));
 
-  R(sb, 'SaveSystem.saveToLocalStorage("t191", true)');
-  const payload = JSON.parse(sb.__storage['livingKingdomSandbox_save']);
-  if (payload.schemaVersion === '19.1') ok('save schema 19.1');
-  else fail('save schema: ' + payload.schemaVersion);
-
-  const sb2 = makeSandbox(); seeded(sb2, 99);
-  R(sb2, `world = null; SaveSystem.loadFromPayload(${JSON.stringify(payload)});`);
-  const match = R(sb2, 'world.day') === R(sb, 'world.day');
-  let crash = null;
-  try { R(sb2, 'for(let i=0;i<100;i++) simulateDay();'); } catch (e) { crash = e.message; }
-  const nan2 = findNaN(sb2.world);
-  if (match && !crash && !nan2.length) ok('load restore + จำลองต่อ 100 วัน (0 NaN)');
-  else fail('roundtrip: match=' + match + ' crash=' + crash + ' nan=' + nan2.length);
+  try {
+    saveLoadRoundtrip(sb, { simDaysAfter: 100, slot: 't191' });
+    ok('save schema ' + schema + ' + load restore + จำลองต่อ 100 วัน (0 NaN)');
+  } catch (e) {
+    fail('roundtrip: ' + e.message);
+  }
 })();
 
-console.log('');
-if (failed) { console.log('=== SOME PHASE 19.1 TESTS FAILED ==='); process.exit(1); }
-else console.log('=== ALL PHASE 19.1 TESTS PASSED ===');
+finish('\n=== ALL PHASE 19.1 TESTS PASSED ===', '\n=== SOME PHASE 19.1 TESTS FAILED ===');

@@ -99,15 +99,15 @@ const settlement = w.settlements[0];
 const faction = w.factions.find(f => !f.isBandit);
 if (!agent || !settlement || !faction) fail('missing test entities');
 else {
-  const s1 = run(`ObserverSystem.search(${JSON.stringify(agent.name.slice(0, 4))})`);
-  const s2 = run(`ObserverSystem.search(${JSON.stringify(settlement.name.slice(0, 3))})`);
-  const s3 = run(`ObserverSystem.search(${JSON.stringify(faction.name.slice(0, 3))})`);
-  if (!s1.some(r => r.kind === 'agent')) fail('search agent failed');
-  else ok('search finds agent');
-  if (!s2.some(r => r.kind === 'settlement')) fail('search settlement failed');
-  else ok('search finds settlement');
-  if (!s3.some(r => r.kind === 'faction')) fail('search faction failed');
-  else ok('search finds faction');
+  const s1 = run(`ObserverSystem.search(${JSON.stringify(agent.name)})`);
+  const s2 = run(`ObserverSystem.search(${JSON.stringify(settlement.name)})`);
+  const s3 = run(`ObserverSystem.search(${JSON.stringify(faction.name)})`);
+  if (!s1.some(r => r.kind === 'agent' && r.id === agent.id)) fail('search agent failed');
+  else ok('search finds agent by full name');
+  if (!s2.some(r => r.kind === 'settlement' && r.id === settlement.id)) fail('search settlement failed');
+  else ok('search finds settlement by full name');
+  if (!s3.some(r => r.kind === 'faction' && r.id === faction.id)) fail('search faction failed');
+  else ok('search finds faction by full name');
 }
 
 run(`ObserverSystem.startFollow('agent', ${agent.id})`);
@@ -147,9 +147,10 @@ run(`ObserverSystem.applyPrefs(${JSON.stringify(badPrefs)})`);
 if (run('ObserverSystem.follow')) fail('invalid follow should clear');
 else ok('safe fallback when follow target missing after load');
 
+const currentSchema = run('SAVE_SCHEMA_VERSION');
 const payload = run(`SaveSystem.buildSavePayload('test')`);
-if (payload.schemaVersion !== '18.2') fail('schema should be 18.2');
-else ok('save schema 15.1 with observer prefs');
+if (payload.schemaVersion !== currentSchema) fail('schema should be ' + currentSchema);
+else ok('save schema ' + currentSchema + ' with observer prefs');
 if (!payload.uiPrefs.observer) fail('observer prefs missing in save');
 else ok('observer prefs in save payload');
 

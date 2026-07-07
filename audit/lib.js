@@ -1,82 +1,24 @@
-/* Phase 19 audit — shared headless sandbox loader
-   ใช้: const { boot } = require('./lib'); const S = boot(seed);
-   โหลด script.js เข้า Node vm พร้อม DOM mock ครบ + RNG แบบ deterministic (LCG)
-   ไม่แก้ไขไฟล์เกมใดๆ — อ่านอย่างเดียว */
+/* Phase 19 audit — shared headless sandbox loader (uses test-utils/dom-mock) */
 'use strict';
-const fs = require('fs');
-const vm = require('vm');
-const path = require('path');
+const {
+  createTestSandbox, seedRandom, run, runDays, createMockElement
+} = require('../test-utils/dom-mock');
 
-function mockEl() {
-  const el = {
-    addEventListener() {}, textContent: '', innerHTML: '', value: '', title: '',
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    querySelector() { return mockEl(); },
-    querySelectorAll() { return []; },
-    getContext: () => new Proxy({}, {
-      get: (t, k) =>
-        k === 'measureText' ? () => ({ width: 10 })
-        : k === 'getImageData' ? () => ({ data: new Uint8ClampedArray(4) })
-        : k === 'createRadialGradient' ? () => ({ addColorStop() {} })
-        : () => {}
-    }),
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 640 }),
-    parentElement: null, files: null, click() {}, style: {}, dataset: {},
-    appendChild() {}, removeChild() {}, remove() {}, focus() {}, blur() {}
-  };
-  el.parentElement = { getBoundingClientRect: () => ({ width: 1000, height: 640 }) };
-  return el;
-}
-
-/* สร้าง sandbox ใหม่ (แยก world ต่อ instance) */
 function boot(seed) {
-  const storage = {};
-  const els = {};
-  const sandbox = {
-    console, Math: Object.create(Math), Date, JSON,
-    performance: { now: () => Date.now() },
-    Blob: class Blob { constructor(parts) { this._parts = parts; } },
-    URL: { createObjectURL: () => 'blob:audit', revokeObjectURL() {} },
-    navigator: { clipboard: { writeText: async () => {} } },
-    localStorage: {
-      getItem: k => (k in storage ? storage[k] : null),
-      setItem: (k, v) => { storage[k] = String(v); },
-      removeItem: k => { delete storage[k]; }
-    },
-    document: {
-      getElementById: id => els[id] || (els[id] = mockEl()),
-      querySelectorAll: () => [],
-      createElement: () => mockEl(),
-      body: mockEl()
-    },
-    requestAnimationFrame: () => {},
-    confirm: () => true, alert: () => {},
-    window: { innerWidth: 1024, addEventListener() {} },
-    devicePixelRatio: 1,
-    setTimeout: fn => { fn(); return 0; },
-    clearTimeout() {}
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'script.js'), 'utf8'), sandbox);
-
+  const sandbox = createTestSandbox();
   const api = {
-    sandbox, storage,
-    run: code => vm.runInContext(code, sandbox),
-    seedRandom(s) {
-      vm.runInContext(
-        `(function(){ let s=${s >>> 0}; Math.random = function(){ s=(1103515245*s+12345)>>>0; return s/4294967296; }; })()`,
-        sandbox
-      );
-    },
-    genWorld() { return vm.runInContext('generateWorld()', sandbox); },
-    simDay() { return vm.runInContext('simulateDay()', sandbox); },
-    simDays(n) { return vm.runInContext(`(function(){ for(let i=0;i<${n};i++) simulateDay(); return world.day; })()`, sandbox); }
+    sandbox,
+    storage: sandbox.__storage,
+    run: code => run(sandbox, code),
+    seedRandom: s => seedRandom(sandbox, s),
+    genWorld() { return run(sandbox, 'generateWorld()'); },
+    simDay() { return run(sandbox, 'simulateDay()'); },
+    simDays(n) { return runDays(sandbox, n); }
   };
   if (seed !== undefined) { api.seedRandom(seed); api.genWorld(); }
   return api;
 }
 
-/* หา NaN/Infinity ทุกที่ใน world (จำกัดความลึกกัน cycle) */
 const NAN_SNIPPET = `(function(){
   let count = 0; const paths = [];
   const seen = new Set();
@@ -92,7 +34,6 @@ const NAN_SNIPPET = `(function(){
   return { count, paths };
 })()`;
 
-/* ตรวจ dangling reference ระหว่าง entity */
 const INTEGRITY_SNIPPET = `(function(){
   const issues = [];
   const sIds = new Set(world.settlements.map(s => s.id));
@@ -136,4 +77,4 @@ const INTEGRITY_SNIPPET = `(function(){
   return { issues: issues.slice(0, 30), total: issues.length, ghost };
 })()`;
 
-module.exports = { boot, mockEl, NAN_SNIPPET, INTEGRITY_SNIPPET };
+module.exports = { boot, mockEl: createMockElement, NAN_SNIPPET, INTEGRITY_SNIPPET };

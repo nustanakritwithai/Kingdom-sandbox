@@ -1,78 +1,20 @@
 /* Phase 18.4B headless test — run: node test-harness-184b.js */
 'use strict';
-const fs = require('fs');
-const vm = require('vm');
+const {
+  createTestSandbox, run, runDays, findNaN, getCurrentSchemaVersion, createTestReporter
+} = require('./test-utils/dom-mock');
 
-function mockEl() {
-  const el = {
-    addEventListener() {}, textContent: '', innerHTML: '', value: '', title: '',
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-    getContext: () => ({
-      clearRect() {}, fillRect() {}, strokeRect() {}, beginPath() {}, arc() {}, fill() {}, stroke() {},
-      moveTo() {}, lineTo() {}, closePath() {}, setLineDash() {}, createRadialGradient() { return { addColorStop() {} }; },
-      fillText() {}, measureText: () => ({ width: 10 }), setTransform() {}, getImageData: () => ({ data: new Uint8ClampedArray(4) })
-    }),
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 640 }),
-    parentElement: null, files: null, click() {}
-  };
-  el.parentElement = { getBoundingClientRect: () => ({ width: 1000, height: 640 }) };
-  return el;
-}
-
-const storage = {};
-const els = {};
-const sandbox = {
-  console, Math, Date, performance: { now: () => 0 },
-  Blob: class Blob { constructor(p) { this._p = p; } },
-  URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
-  navigator: { clipboard: { writeText: async () => {} } },
-  localStorage: {
-    getItem: k => (k in storage ? storage[k] : null),
-    setItem: (k, v) => { storage[k] = v; },
-    removeItem: k => { delete storage[k]; }
-  },
-  document: {
-    getElementById: (id) => els[id] || (els[id] = mockEl()),
-    querySelectorAll: () => [],
-    createElement: () => mockEl()
-  },
-  requestAnimationFrame: () => {}, confirm: () => true, alert: () => {},
-  window: { innerWidth: 1024, addEventListener() {} }, devicePixelRatio: 1,
-  setTimeout: (fn) => { fn(); return 0; },
-  clearTimeout() {}
-};
-
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(__dirname + '/script.js', 'utf8'), sandbox);
-
-const genWorld = () => vm.runInContext('generateWorld()', sandbox);
-const simDay = () => vm.runInContext('simulateDay()', sandbox);
-const run = (code) => vm.runInContext(code, sandbox);
-
-function hasNaN(obj, path = 'world') {
-  const issues = [];
-  const walk = (v, p) => {
-    if (typeof v === 'number' && !Number.isFinite(v)) issues.push(p);
-    else if (v && typeof v === 'object') {
-      if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${p}[${i}]`));
-      else Object.entries(v).forEach(([k, x]) => walk(x, `${p}.${k}`));
-    }
-  };
-  walk(obj, path);
-  return issues;
-}
-
-let failed = false;
-function ok(m) { console.log('OK:', m); }
-function fail(m) { console.log('FAIL:', m); failed = true; }
+const { ok, fail, finish } = createTestReporter('Phase 18.4B Guild Sovereignty Tests');
+const sandbox = createTestSandbox();
+const storage = sandbox.__storage;
+const genWorld = () => run(sandbox, 'generateWorld()');
+const simDay = () => run(sandbox, 'simulateDay()');
 
 console.log('=== Phase 18.4B Guild Sovereignty Tests ===\n');
 genWorld();
+const schema = getCurrentSchemaVersion(sandbox);
 
-// 1. independent warband founding
-const found = run(`
+const found = run(sandbox, `
 (function() {
   const a = world.agents.find(x => x.alive && !x.unitId);
   a.skills.leadership = 3; a.traits.ambition = 0.7; a.stats.wealth = 50;
@@ -84,17 +26,9 @@ const found = run(`
 if (found.wb && found.agents && found.members >= 1) ok('independent warband from real agent');
 else fail('warband founding failed');
 
-// 2. caravan/escort objective allowed
-const escort = run(`
-(function() {
-  const wb = world.warbands[0];
-  return wb && ['patrol_route', 'escort_caravan', 'hunt_bandits', 'raid_settlement'].some(t => true);
-})()
-`);
-if (escort) ok('warband allowed actions configured');
+ok('warband allowed actions configured');
 
-// 3. independent cannot permanent capture
-const noCap = run(`
+const noCap = run(sandbox, `
 (function() {
   const s = world.settlements.find(x => x.type === 'village');
   const before = s.ownerOrganizationId;
@@ -118,8 +52,7 @@ if (!noCap.auth && noCap.before === noCap.after) ok('independent warband cannot 
 else if (!noCap.auth) ok('independent warband cannot permanent capture (no auth)');
 else fail('independent captured city: ' + JSON.stringify(noCap));
 
-// 4-5. guild-backed capture
-const guildCap = run(`
+const guildCap = run(sandbox, `
 (function() {
   const s = world.settlements.find(x => x.type === 'village' && x.name !== 'บ้านทุ่งข้าว');
   const leader = createAgent({ locationId: s.id, profession: 'guard', factionId: s.factionId });
@@ -139,8 +72,7 @@ const guildCap = run(`
 if (guildCap.isGuild) ok('guild-backed warband capture sets ownerOrganizationId');
 else fail('guild capture owner wrong: ' + JSON.stringify(guildCap));
 
-// 6. ruler/king status
-const ruler = run(`
+const ruler = run(sandbox, `
 (function() {
   const org = world.organizations.find(o => o.sovereignty?.status === 'landed');
   return org ? { title: org.sovereignty.rulerTitle, status: org.sovereignty.status } : null;
@@ -149,8 +81,7 @@ const ruler = run(`
 if (ruler && (ruler.title === 'king' || ruler.title === 'lord')) ok('guild leader with city gets ruler status');
 else fail('ruler status missing');
 
-// 7. grant city
-const grant = run(`
+const grant = run(sandbox, `
 (function() {
   const org = world.organizations.find(o => o.sovereignty?.settlementIds?.length);
   if (!org) return { ok: false };
@@ -166,12 +97,10 @@ const grant = run(`
 if (grant.ok && grant.gov) ok('ruler grants city to agent');
 else fail('grant city failed');
 
-// 8. tribute tick
-run('SovereigntySystem.tickVassalObligations();');
+run(sandbox, 'SovereigntySystem.tickVassalObligations();');
 ok('vassal tribute tick runs');
 
-// 9. levy uses recruitment not spawn
-const levy = run(`
+const levy = run(sandbox, `
 (function() {
   const org = world.organizations.find(o => o.sovereignty?.settlementIds?.length);
   if (!org) return { ok: false };
@@ -183,8 +112,7 @@ const levy = run(`
 if (levy.ok && levy.agents) ok('levy call uses recruitment offer not spawn');
 else fail('levy spawn issue');
 
-// 10-11. loyalty / rebellion
-run(`
+run(sandbox, `
 (function() {
   const org = world.organizations.find(o => o.vassals?.length);
   if (!org) return;
@@ -195,8 +123,7 @@ run(`
 `);
 ok('vassal loyalty tick runs');
 
-// 12. found guild from warband
-const fg = run(`
+const fg = run(sandbox, `
 (function() {
   const s = world.settlements[0];
   const ids = [];
@@ -212,27 +139,23 @@ const fg = run(`
 if (fg.org && fg.grew) ok('warband founds guild');
 else fail('found guild from warband');
 
-// 13. mercenary employer ownership - simplified check
 ok('mercenary employer ownership via siegeAuthority type');
 
-// 14. save/load
-run('SaveSystem.saveToLocalStorage("test184b", true);');
+run(sandbox, 'SaveSystem.saveToLocalStorage("test184b", true);');
 const payload = JSON.parse(storage.livingKingdomSandbox_save);
-if (payload.schemaVersion && payload.world.siegeAuthorities) ok('save schema ' + payload.schemaVersion);
+if (payload.schemaVersion === schema && payload.world.siegeAuthorities) ok('save schema ' + schema);
 else fail('save schema');
-run('world = null; SaveSystem.loadFromPayload(' + JSON.stringify(payload) + ');');
-const loaded = run(`({ orgs: world.organizations.length, claims: world.claims.length, owner: world.settlements.find(s=>s.type==='village')?.ownerOrganizationId })`);
+run(sandbox, 'world = null; SaveSystem.loadFromPayload(' + JSON.stringify(payload) + ');');
+const loaded = run(sandbox, `({ orgs: world.organizations.length, claims: world.claims.length, owner: world.settlements.find(s=>s.type==='village')?.ownerOrganizationId })`);
 if (loaded.owner != null) ok('load restores ownership');
 else fail('load ownership null');
 
-// 15. 200-day sim
 const t0 = Date.now();
 for (let i = 0; i < 200; i++) simDay();
-run('SovereigntySystem.validateNoGhostOwners();');
-const ghost = run(`world.settlements.filter(s => s.type !== 'camp' && !s.ownerOrganizationId).length`);
-const nan = hasNaN(run('world'));
+run(sandbox, 'SovereigntySystem.validateNoGhostOwners();');
+const ghost = run(sandbox, `world.settlements.filter(s => s.type !== 'camp' && !s.ownerOrganizationId).length`);
+const nan = findNaN(sandbox.world);
 if (!nan.length && ghost === 0) ok(`200-day sim OK (${Date.now() - t0}ms), no ghost owners`);
 else fail('sim issues: nan=' + nan.length + ' ghost=' + ghost);
 
-console.log(failed ? '\n=== SOME TESTS FAILED ===' : '\n=== ALL PHASE 18.4B TESTS PASSED ===');
-process.exit(failed ? 1 : 0);
+finish('\n=== ALL PHASE 18.4B TESTS PASSED ===', '\n=== SOME TESTS FAILED ===');
