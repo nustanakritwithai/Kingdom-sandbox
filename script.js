@@ -47,6 +47,111 @@ const MAP_W = 1000, MAP_H = 640;
 
 const GOODS = ['food', 'wood', 'ore', 'tools', 'weapons', 'bows', 'arrows', 'horses'];
 
+/* ── Phase 18.5: Central balance tuning — adjust rates here, not scattered magic numbers ──
+   recruitment: raise maxOffersPerSettlement / lower acceptedPerCycle to slow army growth
+   combat: raise battlesPer100DaysHigh / warExhaustionPerBattle to curb battle spam
+   sovereignty/vassal: raise rebellionCooldownDays / rebellionRiskThreshold to reduce rebellions
+   historyCaps: lower caps to shrink save size; chronicleArchiveKeep controls era summaries
+   integrity: checkIntervalDays = scheduled audit frequency
+   ── */
+const BALANCE = {
+  recruitment: {
+    maxOffersPerSettlement: 4,
+    maxAcceptedPerOfferPerCycle: 8,
+    maxRecruitmentPressurePerOrg: 22,
+    failCooldownDays: 14,
+    minSettlementFoodForConscription: 45,
+    minSettlementPopForMilitia: 8,
+    minWarbandSupplyDaysForRecruit: 2,
+    minOrgFoodPerMember: 1.5,
+    minOrgWealthPerRecruit: 8,
+    royalConscriptionProsperityPenalty: 2,
+    royalConscriptionLoyaltyPenalty: 1.5,
+    travelingToMusterMaxDays: 30,
+    minProductivePopulationRatio: 0.55,
+    maxPopulationPullPerOffer: 0.25
+  },
+  warband: {
+    stuckThresholdDays: 5,
+    maxRerouteAttempts: 3,
+    disbandAfterStuckDays: 14,
+    minSpeedFactor: 0.18,
+    sizeSpeedPenaltyPerMember: 0.0035,
+    maxSizeSpeedPenalty: 0.38,
+    woundedSpeedPenaltyMax: 0.35,
+    lootSpeedPenaltyMax: 0.2
+  },
+  economy: {
+    minFoodStock: 0,
+    emergencySupplyPerAgent: 2,
+    forageProsperityHitMax: 3,
+    hungerThreshold: 35,
+    negativeStockRepairFloor: 0
+  },
+  combat: {
+    battlesPer100DaysHigh: 28,
+    largeBattlesPer100DaysHigh: 6,
+    warExhaustionPerBattle: 2.5,
+    peacePressurePerBattle: 1.8,
+    commanderDeathChanceCap: 0.08,
+    siegeAuthorityCooldownDays: 45,
+    supplyRetreatMorale: 22,
+    recruitmentSlowdownWhenHighWar: 0.55
+  },
+  sovereignty: {
+    rebellionCooldownDays: 120,
+    maxTributeFoodPerTick: 15,
+    maxTributeGoldRatio: 0.1,
+    lowLegitimacyUnrestBoost: 4,
+    rulerDeathRegencyDays: 30
+  },
+  vassal: {
+    rebellionBaseChance: 0.06,
+    rebellionRiskThreshold: 0.68,
+    maxRebellionsPer1000Days: 4
+  },
+  historyCaps: {
+    battleReports: 100,
+    battleReportsFamous: 50,
+    largeBattleRecords: 100,
+    orgHistory: 80,
+    warbandHistory: 60,
+    agentPersonalMemory: 50,
+    chronicle: 400,
+    chronicleArchiveKeep: 80,
+    scoutReports: 200,
+    siegeAuthorityExpireGraceDays: 100,
+    events: 600,
+    integrityHistory: 30
+  },
+  integrity: {
+    checkIntervalDays: 50,
+    scoreErrorPenalty: 8,
+    scoreWarningPenalty: 2,
+    maxRepairLog: 50,
+    saveSizeWarnBytes: 4500000,
+    tickPerfTargetMs: 120
+  },
+  /* Phase 19: court politics — raise decisionInterval to slow court activity; raise civilWarPowerThreshold to reduce civil wars */
+  court: {
+    tickIntervalDays: 3,
+    decisionIntervalMin: 12,
+    decisionIntervalMax: 28,
+    maxFactionsPerRealm: 4,
+    civilWarPowerThreshold: 52,
+    civilWarLoyaltyMax: 38,
+    successionCrisisStability: 42,
+    corruptionTickChance: 0.1,
+    maxCourtHistory: 40,
+    maxCivilWars: 12,
+    maxClaimantsPerRealm: 6,
+    regencyLegitimacyPenalty: 8,
+    officeSalaryPerDay: 0.4,
+    influenceAppointmentThreshold: 35,
+    coupCapitalGuardThreshold: 0.55
+  }
+};
+
 function defaultMarketRole() {
   return {
     isMarketHub: false, hubLevel: 0, tradeInfluence: 0,
@@ -77,15 +182,45 @@ const ORG_TYPES = ['adventurer_party', 'mercenary_company', 'militia_company', '
 const WARBAND_TYPES = ['adventurer_party', 'mercenary_company', 'militia', 'royal_army', 'bandit_gang', 'caravan_guard', 'rebel_warband', 'noble_retinue', 'scout_party'];
 const OFFER_TYPES = ['open_join', 'paid_contract', 'militia_call', 'royal_conscription', 'mercenary_hire', 'caravan_guard_job', 'bounty_party', 'rebel_recruitment', 'bandit_invitation', 'noble_call_to_arms'];
 const MAX_AGENT_MEMBERSHIPS = 3;
-const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = 4;
-const ORG_HISTORY_CAP = 24;
-const WARBAND_HISTORY_CAP = 20;
+const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = BALANCE.recruitment.maxOffersPerSettlement;
+const ORG_HISTORY_CAP = BALANCE.historyCaps.orgHistory;
+const WARBAND_HISTORY_CAP = BALANCE.historyCaps.warbandHistory;
 
 function getOrganization(id) { return (world.organizations || []).find(o => o.id === id); }
 function getWarband(id) { return (world.warbands || []).find(w => w.id === id); }
 function getMusterPoint(id) { return (world.musterPoints || []).find(m => m.id === id); }
 function getHeadquarters(id) { return (world.headquarters || []).find(h => h.id === id); }
 function getRecruitmentOffer(id) { return (world.recruitmentOffers || []).find(o => o.id === id); }
+
+/** Phase 18.5: one agent may belong to many orgs but only one active physical warband */
+function getAgentActiveWarband(agentId) {
+  if (!world?.warbands) return null;
+  const a = getAgent(agentId);
+  if (!a || !a.alive) return null;
+  for (const wb of world.warbands) {
+    if (wb.status === 'disbanding') continue;
+    if (wb.memberIds.includes(agentId) && warbandMembers(wb).some(m => m.id === agentId)) return wb;
+  }
+  return null;
+}
+
+function agentPhysicalWarbandConflict(agentId, excludeWarbandId) {
+  const active = getAgentActiveWarband(agentId);
+  return active && active.id !== excludeWarbandId ? active : null;
+}
+
+function removeAgentFromOtherWarbands(agentId, keepWarbandId, reason) {
+  for (const wb of (world.warbands || [])) {
+    if (wb.id === keepWarbandId || wb.status === 'disbanding') continue;
+    if (!wb.memberIds.includes(agentId)) continue;
+    wb.memberIds = wb.memberIds.filter(id => id !== agentId);
+    if (typeof WarbandSystem !== 'undefined') WarbandSystem.syncWarbandSize(wb);
+    if (!warbandMembers(wb).length) wb.status = 'disbanding';
+    if (reason && typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.logRepair('warband', `removed agent ${agentId} duplicate from ${wb.name}: ${reason}`);
+    }
+  }
+}
 
 function defaultOrgRanks() {
   return { leader: 100, officer: 70, veteran: 50, member: 30, recruit: 10 };
@@ -196,7 +331,12 @@ function defaultWarband(opt) {
     _campDays: opt._campDays || 0,
     foundingReason: opt.foundingReason || null,
     politicalMode: opt.politicalMode || (opt.organizationId ? 'guild_backed' : 'independent'),
-    siegeAuthorityId: opt.siegeAuthorityId || null
+    siegeAuthorityId: opt.siegeAuthorityId || null,
+    stuckDays: opt.stuckDays || 0,
+    lastProgressDay: opt.lastProgressDay != null ? opt.lastProgressDay : (world ? world.day : 0),
+    rerouteAttempts: opt.rerouteAttempts || 0,
+    pathFailureReason: opt.pathFailureReason || null,
+    _lastTravelProgress: opt._lastTravelProgress != null ? opt._lastTravelProgress : null
   };
 }
 
@@ -652,7 +792,7 @@ const RANGE_BANDS = ['far', 'missile', 'reach', 'melee', 'close', 'grapple'];
 const ATTACK_DIRS = ['overhead', 'left', 'right', 'thrust'];
 const DEFENSE_ACTIONS = ['block_high', 'block_left', 'block_right', 'parry', 'shield_block', 'dodge', 'armor_absorb'];
 const FORMATIONS = ['loose', 'shield_wall', 'spear_line', 'skirmish', 'charge', 'defensive', 'ambush', 'retreat'];
-const MAX_BATTLE_REPORTS = 100;
+const MAX_BATTLE_REPORTS = BALANCE.historyCaps.battleReports;
 
 function syncLegacyInventory(a) {
   if (!a.equipment) a.equipment = emptyEquipment();
@@ -683,7 +823,7 @@ function uid() { return nextId++; }
 const EventSystem = {
   add(category, text, refs) {
     world.events.push({ day: world.day, category, text, refs: refs || null });
-    if (world.events.length > 600) world.events.splice(0, world.events.length - 600);
+    if (world.events.length > BALANCE.historyCaps.events) world.events.splice(0, world.events.length - BALANCE.historyCaps.events);
     UI.logDirty = true;
     if (typeof ObserverSystem !== 'undefined') ObserverSystem.observerDirty = true;
   }
@@ -709,7 +849,10 @@ const Chronicle = {
       factions: opt.factions || []
     };
     world.chronicle.push(e);
-    if (world.chronicle.length > 500) world.chronicle.splice(0, world.chronicle.length - 500);
+    if (world.chronicle.length > BALANCE.historyCaps.chronicle) {
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.summarizeOldHistory();
+      else world.chronicle.splice(0, world.chronicle.length - BALANCE.historyCaps.chronicle);
+    }
     UI.chronicleDirty = true;
     return e;
   }
@@ -1217,6 +1360,8 @@ function generateWorld() {
     guilds: [], warehouses: [], tradeContracts: [],
     organizations: [], recruitmentOffers: [], musterPoints: [], warbands: [], headquarters: [],
     siegeAuthorities: [], claims: [], captureCredits: [], vassalGrants: [],
+    integrity: null, balanceMetrics: null, _balanceSamples: null, _warPressure: null,
+    civilWars: [], courtClaimants: [],
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
@@ -1391,6 +1536,8 @@ function generateWorld() {
   if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
   if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
   if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
+  if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.initWorld();
+  if (typeof CourtSystem !== 'undefined') CourtSystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -2152,6 +2299,11 @@ const TextCombatCore = {
       commanderFates: [], pursuitLosses: data.pursuitLosses || 0,
       summaryText: summary, winner: data.attackerWins ? 'attacker' : 'defender'
     };
+    const cwm = getCivilWarBattleMeta({
+      warbandIds: [...attackerUnits, ...defenderUnits].map(u => u._warbandId).filter(Boolean),
+      agentIds: report.commanders
+    });
+    if (cwm) Object.assign(report, cwm);
     world.battleReports.push(report);
     if (world.battleReports.length > MAX_BATTLE_REPORTS) world.battleReports.shift();
     if (data.totalDead >= 6 || ((attackerUnits[0] && defenderUnits[0]) && unitMembers(attackerUnits[0]).length + unitMembers(defenderUnits[0]).length >= 10)) {
@@ -2888,6 +3040,10 @@ const LargeBattlefieldSystem = {
       gridSnapshot: this.gridSnapshot(bf),
       winner: result.attackerWins ? 'attacker' : 'defender'
     };
+    const cwm = getCivilWarBattleMeta({
+      agentIds: [...(bf.commanders?.attackers || []), ...(bf.commanders?.defenders || [])]
+    });
+    if (cwm) Object.assign(report, cwm);
 
     if (!world.battleReports) world.battleReports = [];
     world.battleReports.push(report);
@@ -3246,8 +3402,12 @@ const OrganizationSystem = {
   postRecruitmentOffer(org, opt) {
     const sid = opt.settlementId || org.homeSettlementId;
     if (!sid) return null;
+    if (!this.canRecruit(org, opt)) return null;
     const activeHere = world.recruitmentOffers.filter(o => o.settlementId === sid && o.status === 'open').length;
     if (activeHere >= MAX_ACTIVE_OFFERS_PER_SETTLEMENT) return null;
+    const pressure = world.recruitmentOffers.filter(o => o.organizationId === org.id && o.status === 'open').length;
+    if (pressure >= BALANCE.recruitment.maxRecruitmentPressurePerOrg) return null;
+    if (org._recruitCooldownUntil && world.day < org._recruitCooldownUntil) return null;
     const mp = createMusterPoint({
       organizationId: org.id,
       settlementId: sid,
@@ -3274,14 +3434,44 @@ const OrganizationSystem = {
     return offer;
   },
 
+  canRecruit(org, opt) {
+    if (!org) return false;
+    const members = this.activeMembers(org).length;
+    const foodNeed = members * BALANCE.recruitment.minOrgFoodPerMember;
+    if ((org.foodReserve || 0) < foodNeed && (org.wealth || 0) < BALANCE.recruitment.minOrgWealthPerRecruit * 2) return false;
+    const qty = opt.quantityNeeded || 5;
+    if ((org.wealth || 0) < qty * BALANCE.recruitment.minOrgWealthPerRecruit) return false;
+    const sid = opt.settlementId || org.homeSettlementId;
+    const s = getSettlement(sid);
+    if (!s) return false;
+    const pop = populationOf(s);
+    if (pop < BALANCE.recruitment.minSettlementPopForMilitia) return false;
+    const productive = agentsAt(s.id).filter(a => !MILITARY_PROFS.has(a.profession) && a.profession !== 'king').length;
+    if (productive / Math.max(pop, 1) < BALANCE.recruitment.minProductivePopulationRatio) return false;
+    if (opt.type === 'royal_conscription' && s.stock.food < BALANCE.recruitment.minSettlementFoodForConscription) return false;
+    const wbLow = (world.warbands || []).filter(w => w.organizationId === org.id && (w.supplyDays || 0) < BALANCE.recruitment.minWarbandSupplyDaysForRecruit);
+    if (wbLow.length && opt.type !== 'open_join') return false;
+    const unpaid = org.memberIds.filter(id => {
+      const a = getAgent(id);
+      const m = (a?.memberships || []).find(x => x.organizationId === org.id);
+      return m && world.day - (m.lastPaidDay || 0) > 10;
+    }).length;
+    if (unpaid > Math.max(2, members * 0.35)) return false;
+    if ((world._warPressure?.recruitmentMod || 1) < 0.7 && opt.type === 'royal_conscription') return false;
+    return true;
+  },
+
   acceptApplicant(offer, agentId) {
     const agent = getAgent(agentId);
     if (!agent || !agent.alive || !offer || offer.status !== 'open') return false;
     if (offer.acceptedAgentIds.includes(agentId)) return true;
     if (offer.acceptedAgentIds.length >= offer.quantityNeeded) return false;
+    if (offer.acceptedAgentIds.length >= BALANCE.recruitment.maxAcceptedPerOfferPerCycle) return false;
     const org = getOrganization(offer.organizationId);
-    if (!org) return false;
+    if (!org || !this.canRecruit(org, offer)) return false;
+    if (getAgentActiveWarband(agentId)) return false;
     offer.acceptedAgentIds.push(agentId);
+    world._recruitmentPull = (world._recruitmentPull || 0) + (agent.profession === 'farmer' || agent.profession === 'woodcutter' ? 1 : 0);
     if (!agent.memberships) agent.memberships = [];
     agent.memberships.push(defaultOrgMembership(org.id, offer.roleNeeded, 'recruit', world.day, {
       status: 'traveling_to_muster',
@@ -3315,6 +3505,13 @@ const OrganizationSystem = {
     if (offer) offer.status = 'filled';
     const members = mp.arrivedAgentIds.map(getAgent).filter(a => a && a.alive);
     if (!members.length) return null;
+    if (offer?.type === 'royal_conscription') {
+      const s = getSettlement(mp.settlementId);
+      if (s) {
+        s.prosperity = clamp(s.prosperity - BALANCE.recruitment.royalConscriptionProsperityPenalty, 0, 100);
+        s.loyalty = clamp(s.loyalty - BALANCE.recruitment.royalConscriptionLoyaltyPenalty, 0, 100);
+      }
+    }
     const leader = members.reduce((best, a) => (a.skills.leadership + a.skills.tactics) > (best.skills.leadership + best.skills.tactics) ? a : best, members[0]);
     org.leaderId = org.leaderId || leader.id;
     const wbType = WarbandSystem.orgTypeToWarband(org.type);
@@ -3341,6 +3538,7 @@ const OrganizationSystem = {
       const candidates = agents.sort((a, b) => this.evaluateJoinOffer(b, offer) - this.evaluateJoinOffer(a, offer)).slice(0, 8);
       for (const a of candidates) {
         const score = this.evaluateJoinOffer(a, offer);
+        world._lastAvgJoinScore = ((world._lastAvgJoinScore || 0) * 0.9) + score * 0.1;
         if (score < 12) continue;
         if (chance(clamp(score / 80, 0.05, 0.65))) this.acceptApplicant(offer, a.id);
         if (offer.acceptedAgentIds.length >= offer.quantityNeeded) break;
@@ -3378,6 +3576,7 @@ const OrganizationSystem = {
           mp.status = 'failed';
           if (offer2) offer2.status = 'failed';
           if (org) {
+            org._recruitCooldownUntil = world.day + BALANCE.recruitment.failCooldownDays;
             this.orgLog(org, '❌ รวมพลล้มเหลว — ไม่มีคนมา');
             EventSystem.add('military', `📭 ${org.name} รวมพลล้มเหลว — ไม่มีคนมา`);
             Chronicle.add({ category: 'war', title: 'การรวมพลล้มเหลว', description: `${org.name} ไม่มีคนมาตามนัด`, importance: 3 });
@@ -3414,6 +3613,7 @@ const OrganizationSystem = {
   },
 
   desertMember(agent, org, mem) {
+    world._deserterRate = ((world._deserterRate || 0) * 0.95) + 0.05;
     if (!mem) {
       const m = (agent.memberships || []).find(x => x.organizationId === org.id);
       if (!m) return;
@@ -3648,6 +3848,7 @@ const WarbandSystem = {
     let baseSpeed = 1.2;
     const horses = members.filter(m => m.equipment?.mount || m.profession === 'cavalry').length;
     const mountMod = 1 + horses / Math.max(members.length, 1) * 0.35;
+    const sizePenalty = 1 - clamp(members.length * BALANCE.warband.sizeSpeedPenaltyPerMember, 0, BALANCE.warband.maxSizeSpeedPenalty);
     let roadMod = 1;
     if (wb.travel) {
       const t = wb.travel;
@@ -3659,11 +3860,45 @@ const WarbandSystem = {
     }
     const moraleMod = 0.75 + (wb.morale / 200);
     const fatiguePenalty = 1 - clamp(wb.fatigue / 120, 0, 0.35);
-    const woundedPenalty = 1 - clamp((wb.woundedCount || 0) / Math.max(members.length, 1) * 0.4, 0, 0.4);
+    const woundedPenalty = 1 - clamp((wb.woundedCount || 0) / Math.max(members.length, 1) * BALANCE.warband.woundedSpeedPenaltyMax, 0, BALANCE.warband.woundedSpeedPenaltyMax);
+    const lootPenalty = 1 - clamp((wb.gold || 0) / Math.max(members.length * 50, 1) * BALANCE.warband.lootSpeedPenaltyMax, 0, BALANCE.warband.lootSpeedPenaltyMax);
     const supplyLoad = 1 - clamp(members.length / 120, 0, 0.25);
     const leader = getAgent(wb.leaderId);
     const logMod = leader ? 1 + (leader.skills.logistics || 0) * 0.03 : 1;
-    return baseSpeed * mountMod * roadMod * moraleMod * fatiguePenalty * woundedPenalty * supplyLoad * logMod;
+    const speed = baseSpeed * mountMod * roadMod * moraleMod * fatiguePenalty * woundedPenalty * lootPenalty * supplyLoad * logMod * sizePenalty;
+    return Math.max(speed * BALANCE.warband.minSpeedFactor, BALANCE.warband.minSpeedFactor);
+  },
+
+  tryRerouteStuck(wb) {
+    if (!wb || wb.status === 'disbanding') return false;
+    wb.rerouteAttempts = (wb.rerouteAttempts || 0) + 1;
+    const dest = wb.destinationId;
+    if (dest && startTravel(wb, dest, 'reroute')) {
+      wb.pathFailureReason = null;
+      wb.stuckDays = 0;
+      wb.lastProgressDay = world.day;
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.logRepair('warband', `rerouted ${wb.name} to ${getSettlement(dest)?.name || dest}`);
+      return true;
+    }
+    const safe = marketSettlements()
+      .filter(s => s.factionId === wb.factionId || !wb.factionId)
+      .sort((a, b) => dist({ x: getSettlement(wb.locationId)?.x || 0, y: getSettlement(wb.locationId)?.y || 0 }, { x: a.x, y: a.y }) - dist({ x: getSettlement(wb.locationId)?.x || 0, y: getSettlement(wb.locationId)?.y || 0 }, { x: b.x, y: b.y }))[0];
+    if (safe && safe.id !== wb.locationId && startTravel(wb, safe.id, 'reroute_safe')) {
+      wb.destinationId = safe.id;
+      wb.objective = { type: 'flee_to_safety', targetId: safe.id };
+      wb.stuckDays = 0;
+      wb.pathFailureReason = 'reroute_safe';
+      if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.logRepair('warband', `rerouted ${wb.name} to safe ${safe.name}`);
+      return true;
+    }
+    if (wb.rerouteAttempts >= BALANCE.warband.maxRerouteAttempts || (wb.stuckDays || 0) >= BALANCE.warband.disbandAfterStuckDays) {
+      wb.status = 'disbanding';
+      wb.pathFailureReason = 'stuck_disband';
+      EventSystem.add('military', `💀 ${wb.name} ยุบกอง — ติดเส้นทางนานเกินไป`);
+      return false;
+    }
+    wb.pathFailureReason = 'no_path';
+    return false;
   },
 
   startMarch(wb, destId, purpose) {
@@ -3694,12 +3929,21 @@ const WarbandSystem = {
       }
       if (wb.travel) {
         const speed = this.computeSpeed(wb);
+        const prevProg = wb._lastTravelProgress;
         const arrived = advanceTravel(wb, speed);
         if (wb.travel) {
           const t = wb.travel;
           wb.currentRouteId = t.seg;
           const r = getRoute(t.path[t.seg], t.path[t.seg + 1]);
           wb.progress = r ? clamp(t.progress / r.distance, 0, 1) : 0;
+          if (prevProg != null && Math.abs(t.progress - prevProg) < 0.001) {
+            wb.stuckDays = (wb.stuckDays || 0) + 1;
+          } else {
+            wb.stuckDays = 0;
+            wb.lastProgressDay = world.day;
+          }
+          wb._lastTravelProgress = t.progress;
+          if ((wb.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays) this.tryRerouteStuck(wb);
         } else {
           wb.progress = 0;
           wb.currentRouteId = null;
@@ -3752,7 +3996,12 @@ const WarbandSystem = {
       const found = randInt(2, 8);
       wb.food += found;
       const s = getSettlement(wb.locationId);
-      if (s && s.type !== 'camp') { s.stock.food = Math.max(0, s.stock.food - found); s.prosperity = clamp(s.prosperity - 1, 0, 100); }
+      if (s && s.type !== 'camp') {
+        const take = Math.min(found, Math.floor(s.stock.food * BALANCE.recruitment.maxPopulationPullPerOffer));
+        s.stock.food = Math.max(BALANCE.economy.negativeStockRepairFloor, s.stock.food - take);
+        wb.food += take;
+        s.prosperity = clamp(s.prosperity - Math.min(BALANCE.economy.forageProsperityHitMax, take * 0.3), 0, 100);
+      }
     }
   },
 
@@ -3919,8 +4168,11 @@ const WarbandSystem = {
     if (warbandMembers(a).length + warbandMembers(b).length > cap * 3) {
       a.cohesion = clamp(a.cohesion - 10, 10, 100);
     }
-    for (const id of b.memberIds) {
-      if (!a.memberIds.includes(id)) a.memberIds.push(id);
+    for (const id of b.memberIds.slice()) {
+      if (!a.memberIds.includes(id)) {
+        removeAgentFromOtherWarbands(id, a.id, 'merge');
+        a.memberIds.push(id);
+      }
     }
     const org = a.organizationId ? getOrganization(a.organizationId) : null;
     if (org) {
@@ -3931,6 +4183,7 @@ const WarbandSystem = {
     this.syncWarbandSize(a);
     a.history.push({ day: world.day, text: `รวมกับ ${b.name}` });
     EventSystem.add('military', `🔗 ${a.name} รวมกับ ${b.name}`);
+    if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.runCheck({ repair: true, reason: 'merge', silent: true });
     return true;
   },
 
@@ -3949,7 +4202,9 @@ const WarbandSystem = {
       status: opt.status || 'marching',
       objective: opt.objective || { type: 'patrol_route' }
     });
+    for (const id of ids) removeAgentFromOtherWarbands(id, child?.id, 'split');
     wb.history.push({ day: world.day, text: `แยกกอง ${ids.length} นาย` });
+    if (typeof WorldIntegritySystem !== 'undefined') WorldIntegritySystem.runCheck({ repair: true, reason: 'split', silent: true });
     return child;
   },
 
@@ -4467,6 +4722,7 @@ const SovereigntySystem = {
         agents: [org.leaderId].filter(Boolean), settlements: owned.slice(0, 3)
       });
     }
+    if (typeof CourtSystem !== 'undefined') CourtSystem.ensureCourt(org);
   },
 
   grantSettlement(rulerId, settlementId, targetAgentId, reason) {
@@ -4635,8 +4891,8 @@ const SovereigntySystem = {
         if (!s || !s.vassalObligation) continue;
         const ob = s.vassalObligation;
         if (world.day - (ob.lastPaidDay || 0) < 10) continue;
-        const tax = Math.floor((s.treasury || 0) * ob.taxRateToOverlord);
-        const food = Math.min(ob.foodTribute, s.stock?.food || 0);
+        const tax = Math.floor((s.treasury || 0) * Math.min(ob.taxRateToOverlord, BALANCE.sovereignty.maxTributeGoldRatio));
+        const food = Math.min(ob.foodTribute, s.stock?.food || 0, BALANCE.sovereignty.maxTributeFoodPerTick);
         const canPay = s.prosperity > 25 && s.unrest < 70;
         if (canPay && tax > 0) {
           s.treasury -= tax;
@@ -4675,7 +4931,7 @@ const SovereigntySystem = {
         if (v.loyaltyToOverlord < 25) v.status = 'defiant';
         else if (v.loyaltyToOverlord < 45) v.status = 'wavering';
         else v.status = 'loyal';
-        if (v.rebellionRisk > 0.65 && chance(0.08)) this.triggerVassalRebellion(org, v);
+        if (v.rebellionRisk > BALANCE.vassal.rebellionRiskThreshold && chance(BALANCE.vassal.rebellionBaseChance)) this.triggerVassalRebellion(org, v);
       }
     }
   },
@@ -4683,6 +4939,13 @@ const SovereigntySystem = {
   triggerVassalRebellion(org, vassalRec) {
     const agent = getAgent(vassalRec.agentId);
     if (!agent) return;
+    org._lastRebellionDay = org._lastRebellionDay || 0;
+    if (world.day - org._lastRebellionDay < BALANCE.sovereignty.rebellionCooldownDays) return;
+    const recent = (world._rebellionSamples || []).filter(d => world.day - d < 1000);
+    if (recent.length >= BALANCE.vassal.maxRebellionsPer1000Days) return;
+    org._lastRebellionDay = world.day;
+    world._rebellionSamples = world._rebellionSamples || [];
+    world._rebellionSamples.push(world.day);
     vassalRec.status = 'rebelling';
     agent.grievances = agent.grievances || [];
     agent.grievances.push({ day: world.day, type: 'rebellion', text: `กบฏต่อ${org.name}` });
@@ -4733,6 +4996,10 @@ const SovereigntySystem = {
   },
 
   validateNoGhostOwners() {
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'ghost_owners', silent: true });
+      return;
+    }
     for (const s of world.settlements) {
       if (s.type === 'camp') continue;
       if (!s.ownerOrganizationId) this.migrateSettlementOwnership(s);
@@ -4745,6 +5012,1368 @@ const SovereigntySystem = {
       const owned = world.settlements.filter(s => s.captureSourceWarbandId === wb.id && s.ownerOrganizationId == null);
       for (const s of owned) this.migrateSettlementOwnership(s);
     }
+  }
+};
+
+/* ═══════════ Phase 19: Internal Politics / Court / Succession ═══════════ */
+
+const COURT_OFFICE_TYPES = ['marshal', 'steward', 'treasurer', 'spymaster', 'diplomat', 'quartermaster', 'captain_of_guard', 'guild_chancellor'];
+const COURT_FACTION_AGENDAS = ['lower_taxes', 'demand_land', 'pro_war', 'pro_peace', 'merchant_rights', 'military_rule', 'vassal_autonomy', 'centralization', 'support_claimant', 'remove_official', 'punish_corruption', 'independence'];
+const COURT_OFFICE_LABELS = {
+  marshal: 'นายทหารใหญ่', steward: 'คลังสินค้า', treasurer: 'เหรัญญิก', spymaster: 'หัวหน้าสายลับ',
+  diplomat: 'นักการทูต', quartermaster: 'นายกอง', captain_of_guard: 'ผู้บัญชาการยาม', guild_chancellor: 'รัฐมนตรีสมาคม'
+};
+
+function getCivilWar(id) { return (world.civilWars || []).find(c => c.id === id); }
+function getCourtClaimant(id) { return (world.courtClaimants || []).find(c => c.id === id); }
+
+function getCivilWarBattleMeta(opts = {}) {
+  const warbandIds = opts.warbandIds || [];
+  const agentIds = opts.agentIds || [];
+  for (const cw of (world.civilWars || []).filter(c => c.status === 'active')) {
+    const rebelWbs = cw.rebelWarbandIds || [];
+    const loyalWbs = cw.loyalistWarbandIds || [];
+    const hasRebelWb = warbandIds.some(wid => rebelWbs.includes(wid));
+    const hasLoyalWb = warbandIds.some(wid => loyalWbs.includes(wid));
+    const hasClaimant = agentIds.includes(cw.claimantId);
+    const hasRuler = agentIds.includes(cw.rulerId);
+    const hasSupporter = agentIds.some(id => (cw.supporterIds || []).includes(id));
+    if (!hasRebelWb && !hasLoyalWb && !hasClaimant && !(hasSupporter && hasRuler)) continue;
+    const claimant = getAgent(cw.claimantId);
+    const org = getOrganization(cw.organizationId);
+    let claimantSide = 'mixed';
+    if (hasRebelWb || hasClaimant) claimantSide = 'rebel';
+    else if (hasLoyalWb || hasRuler) claimantSide = 'loyalist';
+    return {
+      civilWar: true,
+      civilWarId: cw.id,
+      organizationId: cw.organizationId,
+      claimantId: cw.claimantId,
+      claimantName: claimant?.name || null,
+      realmName: org?.name || null,
+      claimantSide,
+      politicalConsequence: claimantSide === 'rebel' ? 'rebel_engagement' : claimantSide === 'loyalist' ? 'loyalist_defense' : 'civil_war_clash'
+    };
+  }
+  return null;
+}
+
+function defaultSuccession(org) {
+  const mode = org?.type === 'merchant_guild' ? 'guild_seniority' : org?.type === 'royal_army' ? 'strongest' : 'appointment';
+  return {
+    mode, currentHeirId: null, claimantIds: [], successionStability: 55,
+    lastUpdatedDay: world ? world.day : 0,
+    rules: { minInfluence: 25, preferVassal: true },
+    history: []
+  };
+}
+
+function defaultCourt(org) {
+  return {
+    rulerId: org?.leaderId || null,
+    capitalSettlementId: org?.sovereignty?.capitalSettlementId || org?.homeSettlementId || null,
+    courtMemberIds: [],
+    council: [],
+    offices: [],
+    factions: [],
+    claimants: [],
+    legitimacy: org?.sovereignty?.legitimacy || 50,
+    stability: 58,
+    influenceMap: {},
+    currentCrises: [],
+    decisions: [],
+    succession: defaultSuccession(org),
+    regency: null,
+    history: [],
+    _nextDecisionDay: (world ? world.day : 0) + randInt(BALANCE.court.decisionIntervalMin, BALANCE.court.decisionIntervalMax)
+  };
+}
+
+function defaultCourtOffice(orgId, type, holderId) {
+  const a = getAgent(holderId);
+  return {
+    id: uid(), organizationId: orgId, type,
+    holderId, appointedDay: world.day,
+    loyalty: a ? clamp((a.traits?.loyalty || 0.5) * 100, 20, 90) : 50,
+    competence: a ? clamp((a.skills?.governance || 0) * 8 + (a.skills?.leadership || 0) * 6 + (a.combatStats?.intelligence || 6) * 3, 15, 95) : 40,
+    corruption: a ? clamp((a.traits?.greed || 0.3) * 40 + (a.gov?.corruption || 0) * 30, 0, 80) : 10,
+    influence: 20, ambition: a ? (a.traits?.ambition || 0.4) : 0.4,
+    salary: BALANCE.court.officeSalaryPerDay * 10,
+    lastActionDay: world.day
+  };
+}
+
+function defaultCourtFaction(orgId, leaderId, agenda) {
+  return {
+    id: uid(), organizationId: orgId,
+    name: `กลุ่ม${pick(['อนุรักษ์นิยม', 'ปฏิรูป', 'ทหาร', 'พ่อค้า', 'เจ้าเมือง', 'อิสระ'])}`,
+    leaderId, memberIds: [leaderId],
+    agenda: agenda || 'vassal_autonomy',
+    power: 20, loyaltyToRuler: 45, grievance: 30,
+    status: 'active', createdDay: world.day, history: []
+  };
+}
+
+const CourtSystem = {
+  initWorld() {
+    if (!world.civilWars) world.civilWars = [];
+    if (!world.courtClaimants) world.courtClaimants = [];
+    for (const org of (world.organizations || [])) {
+      if (org.sovereignty?.status === 'landed') this.ensureCourt(org);
+    }
+  },
+
+  ensureCourt(org) {
+    if (!org || org.sovereignty?.status !== 'landed') return null;
+    const owned = (org.sovereignty.settlementIds || []).filter(sid => getSettlement(sid));
+    if (!owned.length) return null;
+    if (!org.court) org.court = defaultCourt(org);
+    org.court.rulerId = org.leaderId;
+    if (!org.court.capitalSettlementId) org.court.capitalSettlementId = org.sovereignty.capitalSettlementId || owned[0];
+    if (!org.court.succession) org.court.succession = defaultSuccession(org);
+    this.rebuildCourtMembers(org);
+    this.refreshInfluenceMap(org);
+    if (!org.court.offices.length) this.autoAppointCoreOffices(org);
+    if (!org.court.succession.currentHeirId) this.chooseHeir(org, org.court.succession.mode, true);
+    return org.court;
+  },
+
+  rebuildCourtMembers(org) {
+    const court = org.court;
+    if (!court) return;
+    const ids = new Set();
+    if (org.leaderId && getAgent(org.leaderId)?.alive) ids.add(org.leaderId);
+    for (const v of (org.vassals || [])) {
+      if (getAgent(v.agentId)?.alive) ids.add(v.agentId);
+    }
+    for (const o of court.offices) {
+      if (getAgent(o.holderId)?.alive) ids.add(o.holderId);
+    }
+    for (const f of court.factions) {
+      for (const mid of f.memberIds) if (getAgent(mid)?.alive) ids.add(mid);
+    }
+    for (const c of court.claimants || []) {
+      if (getAgent(c.agentId)?.alive) ids.add(c.agentId);
+    }
+    for (const mid of org.memberIds) {
+      const a = getAgent(mid);
+      if (!a || !a.alive) continue;
+      if ((a.skills?.leadership || 0) >= 2 || (a.fame || 0) >= 8 || a.profession === 'trader' && (a.money || 0) > 80) ids.add(mid);
+    }
+    for (const wb of (world.warbands || []).filter(w => w.organizationId === org.id)) {
+      if (getAgent(wb.leaderId)?.alive) ids.add(wb.leaderId);
+    }
+    court.courtMemberIds = [...ids];
+  },
+
+  courtInfluence(agent, org) {
+    if (!agent || !agent.alive || !org) return 0;
+    let score = 0;
+    if (agent.id === org.leaderId) score += 80;
+    const office = (org.court?.offices || []).find(o => o.holderId === agent.id);
+    if (office) score += 25 + office.competence * 0.2;
+    score += (agent.fame || 0) * 0.6;
+    score += (agent.skills?.leadership || 0) * 5;
+    score += (agent.stats?.wealth || agent.money || 0) * 0.04;
+    const v = (org.vassals || []).find(x => x.agentId === agent.id);
+    if (v) score += 15 + (v.settlementIds?.length || 0) * 8 + (v.loyaltyToOverlord || 0) * 0.1;
+    const credits = (world.captureCredits || []).filter(c => c.commanderId === agent.id && c.ownerOrganizationId === org.id);
+    score += credits.length * 12;
+    const grants = (world.vassalGrants || []).filter(g => g.grantedToAgentId === agent.id);
+    score += grants.length * 10;
+    const wb = getAgentActiveWarband(agent.id);
+    if (wb && wb.organizationId === org.id) score += warbandMembers(wb).length * 1.5;
+    const ruler = getAgent(org.leaderId);
+    if (ruler && agent.id !== ruler.id) {
+      const rel = getAgentRelation(agent, ruler.id);
+      if (rel) score += rel.trust * 0.15 + rel.loyalty * 0.1 - rel.grudge * 0.12;
+    }
+    const claim = (org.court?.claimants || []).find(c => c.agentId === agent.id);
+    if (claim) score += claim.claimStrength * 0.35;
+    if (org.court?.succession?.currentHeirId === agent.id) score += 30;
+    const mem = (agent.memberships || []).find(m => m.organizationId === org.id);
+    if (mem?.rank === 'officer' || mem?.rank === 'leader') score += 12;
+    return clamp(score, 0, 200);
+  },
+
+  refreshInfluenceMap(org) {
+    if (!org.court) return;
+    const map = {};
+    for (const id of org.court.courtMemberIds) {
+      const a = getAgent(id);
+      if (a?.alive) map[id] = this.courtInfluence(a, org);
+    }
+    org.court.influenceMap = map;
+  },
+
+  autoAppointCoreOffices(org) {
+    const candidates = org.court.courtMemberIds.map(getAgent).filter(a => a && a.alive && a.id !== org.leaderId);
+    const byLead = (a, b) => (b.skills?.leadership || 0) - (a.skills?.leadership || 0);
+    const appoint = (type, filter) => {
+      if (org.court.offices.some(o => o.type === type)) return;
+      const pool = candidates.filter(filter).sort(byLead);
+      if (pool.length) this.appointOffice(org, type, pool[0].id, true);
+    };
+    appoint('marshal', a => MILITARY_PROFS.has(a.profession) || (a.skills?.fighting || 0) >= 2);
+    appoint('steward', a => (a.skills?.governance || 0) >= 1 || a.profession === 'lord');
+    appoint('treasurer', a => a.profession === 'trader' || (a.money || 0) > 50);
+    if (org.type === 'merchant_guild') appoint('guild_chancellor', a => a.profession === 'trader' || (a.skills?.trading || 0) >= 2);
+  },
+
+  appointOffice(org, type, agentId, silent) {
+    if (!org?.court || !COURT_OFFICE_TYPES.includes(type)) return null;
+    const agent = getAgent(agentId);
+    if (!agent || !agent.alive) return null;
+    org.court.offices = org.court.offices.filter(o => o.type !== type);
+    org.court.offices = org.court.offices.filter(o => o.holderId !== agentId);
+    const office = defaultCourtOffice(org.id, type, agentId);
+    org.court.offices.push(office);
+    if (!org.court.courtMemberIds.includes(agentId)) org.court.courtMemberIds.push(agentId);
+    agent.titles = agent.titles || [];
+    agent.titles.push({ day: world.day, title: COURT_OFFICE_LABELS[type] || type, orgId: org.id, type: 'court_office' });
+    this.courtLog(org, `แต่งตั้ง ${agent.name} เป็น${COURT_OFFICE_LABELS[type] || type}`);
+    if (!silent) {
+      Chronicle.add({ category: 'politics', importance: 3, title: `📜 ${agent.name} ดำรงตำแหน่ง${COURT_OFFICE_LABELS[type]}`, description: `ใน${org.name}`, agents: [agentId] });
+      EventSystem.add('politics', `📜 ${org.name} แต่งตั้ง ${agent.name} เป็น${COURT_OFFICE_LABELS[type]}`);
+    }
+    this.refreshInfluenceMap(org);
+    return office;
+  },
+
+  removeOffice(org, officeId, reason) {
+    const office = org.court?.offices.find(o => o.id === officeId);
+    if (!office) return false;
+    org.court.offices = org.court.offices.filter(o => o.id !== officeId);
+    const a = getAgent(office.holderId);
+    if (a) {
+      a.grievances = a.grievances || [];
+      a.grievances.push({ day: world.day, type: 'removed_office', text: reason || 'ถูกปลดจากตำแหน่ง' });
+    }
+    this.courtLog(org, `ปลด${a?.name || '?'} จาก${COURT_OFFICE_LABELS[office.type]}`);
+    return true;
+  },
+
+  chooseHeir(org, mode, silent) {
+    if (!org?.court) return null;
+    const succ = org.court.succession;
+    succ.mode = mode || succ.mode || 'appointment';
+    const candidates = org.court.courtMemberIds.map(getAgent).filter(a => a && a.alive && a.id !== org.leaderId);
+    if (!candidates.length) return null;
+    let pickAgent = null;
+    if (succ.mode === 'strongest') {
+      pickAgent = candidates.sort((a, b) => this.courtInfluence(b, org) - this.courtInfluence(a, org))[0];
+    } else if (succ.mode === 'guild_seniority') {
+      pickAgent = candidates.sort((a, b) => {
+        const ma = (a.memberships || []).find(m => m.organizationId === org.id);
+        const mb = (b.memberships || []).find(m => m.organizationId === org.id);
+        return (mb?.joinedDay || 0) - (ma?.joinedDay || 0);
+      })[0];
+    } else if (succ.mode === 'merit') {
+      pickAgent = candidates.sort((a, b) => {
+        const ca = (world.captureCredits || []).filter(c => c.commanderId === a.id).length;
+        const cb = (world.captureCredits || []).filter(c => c.commanderId === b.id).length;
+        return (cb + b.fame) - (ca + a.fame);
+      })[0];
+    } else {
+      pickAgent = candidates.sort((a, b) => {
+        const la = getAgentRelation(a, org.leaderId)?.loyalty || 50;
+        const lb = getAgentRelation(b, org.leaderId)?.loyalty || 50;
+        return (this.courtInfluence(b, org) + lb) - (this.courtInfluence(a, org) + la);
+      })[0];
+    }
+    if (!pickAgent) return null;
+    succ.currentHeirId = pickAgent.id;
+    succ.lastUpdatedDay = world.day;
+    succ.successionStability = clamp(succ.successionStability + 5, 0, 100);
+    succ.history.push({ day: world.day, text: `ตั้ง ${pickAgent.name} เป็นผู้สืบทอด (${succ.mode})` });
+    if (!silent) {
+      this.courtLog(org, `👑 ตั้ง ${pickAgent.name} เป็นผู้สืบทอด`);
+      Chronicle.add({ category: 'politics', importance: 4, title: `👑 ผู้สืบทอด${org.name}`, description: `${pickAgent.name} ได้รับการแต่งตั้ง`, agents: [pickAgent.id, org.leaderId].filter(Boolean) });
+    }
+    return pickAgent;
+  },
+
+  nameHeir(org, agentId) {
+    const a = getAgent(agentId);
+    if (!a || !a.alive || !org?.court) return false;
+    org.court.succession.currentHeirId = agentId;
+    org.court.succession.lastUpdatedDay = world.day;
+    org.court.succession.mode = 'appointment';
+    this.courtLog(org, `👑 ${a.name} ถูกประกาศเป็นผู้สืบทอด`);
+    Chronicle.add({ category: 'politics', importance: 4, title: `👑 ประกาศผู้สืบทอด`, description: `${a.name} ใน${org.name}`, agents: [agentId] });
+    return true;
+  },
+
+  createClaimant(agent, org, claimType, strength) {
+    if (!agent || !agent.alive || !org) return null;
+    const existing = (org.court?.claimants || []).find(c => c.agentId === agent.id);
+    if (existing) return existing;
+    const rec = {
+      id: uid(), agentId: agent.id, organizationId: org.id,
+      claimStrength: strength != null ? strength : 30 + this.courtInfluence(agent, org) * 0.2,
+      claimType: claimType || 'local_support',
+      supporters: [], militaryBacking: 0, legitimacy: 35,
+      ambition: agent.traits?.ambition || 0.4, status: 'active', createdDay: world.day
+    };
+    if (!org.court) this.ensureCourt(org);
+    org.court.claimants.push(rec);
+    world.courtClaimants.push(rec);
+    if (!org.court.courtMemberIds.includes(agent.id)) org.court.courtMemberIds.push(agent.id);
+    return rec;
+  },
+
+  createFaction(org, leaderId, agenda) {
+    if (!org?.court) return null;
+    if (org.court.factions.filter(f => f.status === 'active').length >= BALANCE.court.maxFactionsPerRealm) return null;
+    const leader = getAgent(leaderId);
+    if (!leader || !leader.alive) return null;
+    const fac = defaultCourtFaction(org.id, leaderId, agenda);
+    org.court.factions.push(fac);
+    this.courtLog(org, `⚡ กลุ่มการเมือง ${fac.name} (${agenda}) โดย ${leader.name}`);
+    Chronicle.add({ category: 'politics', importance: 3, title: `⚡ กลุ่มการเมืองใน${org.name}`, description: `${leader.name}: ${agenda}`, agents: [leaderId] });
+    return fac;
+  },
+
+  courtLog(org, text) {
+    if (!org.court) return;
+    org.court.history.push({ day: world.day, text });
+    if (org.court.history.length > BALANCE.court.maxCourtHistory) org.court.history.shift();
+    OrganizationSystem.orgLog(org, `[Court] ${text}`);
+  },
+
+  logDecision(org, type, detail, importance) {
+    const d = { day: world.day, type, detail };
+    org.court.decisions.push(d);
+    if (org.court.decisions.length > 30) org.court.decisions.shift();
+    this.courtLog(org, `ตัดสิน: ${type} — ${detail}`);
+    if (importance >= 3) Chronicle.add({ category: 'politics', importance, title: `🏛 ${org.name}: ${type}`, description: detail, agents: [org.leaderId].filter(Boolean) });
+  },
+
+  tickDaily() {
+    if (world.day % BALANCE.court.tickIntervalDays !== 0) return;
+    const landed = (world.organizations || []).filter(o => o.sovereignty?.status === 'landed');
+    const slice = Math.max(1, Math.ceil(landed.length / 3));
+    const start = (world.day % 3) * slice;
+    const batch = landed.slice(start, start + slice);
+    for (const org of batch) {
+      this.ensureCourt(org);
+      if (!org.court) continue;
+      this.tickOfficeEffects(org);
+      this.tickCorruption(org);
+      this.tickFactionAI(org);
+      if (world.day >= (org.court._nextDecisionDay || 0)) {
+        this.tickCourtDecision(org);
+        org.court._nextDecisionDay = world.day + randInt(BALANCE.court.decisionIntervalMin, BALANCE.court.decisionIntervalMax);
+      }
+      this.tickRegency(org);
+      this.tickSuccessionStability(org);
+    }
+    this.tickCivilWars();
+    if (world.day % 15 === 0) this.tickRulerAI();
+  },
+
+  tickOfficeEffects(org) {
+    const court = org.court;
+    for (const office of court.offices) {
+      const holder = getAgent(office.holderId);
+      if (!holder?.alive) continue;
+      const comp = office.competence / 100;
+      const corrupt = office.corruption / 100;
+      if (office.type === 'steward') {
+        for (const sid of (org.sovereignty?.settlementIds || [])) {
+          const s = getSettlement(sid);
+          if (!s) continue;
+          s.prosperity = clamp(s.prosperity + comp * 0.15 - corrupt * 0.2, 0, 100);
+        }
+      } else if (office.type === 'treasurer') {
+        if (chance(comp * 0.08)) {
+          org.wealth = (org.wealth || 0) + randInt(1, 4);
+        }
+        if (corrupt > 0.35 && chance(corrupt * 0.06)) {
+          const skim = randInt(2, 8);
+          org.wealth = Math.max(0, (org.wealth || 0) - skim);
+          holder.money = (holder.money || 0) + skim * 0.6;
+          office.corruption = clamp(office.corruption + 2, 0, 100);
+        }
+      } else if (office.type === 'quartermaster') {
+        for (const wb of (world.warbands || []).filter(w => w.organizationId === org.id)) {
+          if (chance(comp * 0.1)) wb.food += randInt(1, 3);
+        }
+      } else if (office.type === 'captain_of_guard') {
+        for (const sid of (org.sovereignty?.settlementIds || [])) {
+          const s = getSettlement(sid);
+          if (s) { s.crime = clamp(s.crime - comp * 0.4, 0, 100); s.security = clamp(s.security + comp * 0.3, 0, 100); }
+        }
+      } else if (office.type === 'marshal') {
+        for (const wb of (world.warbands || []).filter(w => w.organizationId === org.id)) {
+          wb.cohesion = clamp(wb.cohesion + comp * 0.2, 5, 100);
+          wb.morale = clamp(wb.morale + comp * 0.1, 5, 100);
+        }
+      } else if (office.type === 'spymaster' && corrupt > 0.5 && chance(0.05)) {
+        const rival = pick(org.court.courtMemberIds.filter(id => id !== holder.id && id !== org.leaderId).map(getAgent).filter(a => a?.alive) || [null]);
+        if (rival) {
+          rival.grievances = rival.grievances || [];
+          rival.grievances.push({ day: world.day, type: 'framed', text: 'ถูกใส่ร้ายในสำนัก' });
+        }
+      }
+      if (org.wealth >= office.salary) {
+        org.wealth -= office.salary;
+        holder.money = (holder.money || 0) + office.salary * 0.8;
+        office.loyalty = clamp(office.loyalty + 1, 0, 100);
+        const mem = (holder.memberships || []).find(m => m.organizationId === org.id);
+        if (mem) mem.lastPaidDay = world.day;
+      } else {
+        office.loyalty = clamp(office.loyalty - 3, 0, 100);
+        holder.grievances = holder.grievances || [];
+        if (chance(0.15)) holder.grievances.push({ day: world.day, type: 'unpaid_by_court', text: 'ไม่ได้รับเงินเดือนจากสำนัก' });
+      }
+    }
+  },
+
+  tickCorruption(org) {
+    for (const office of (org.court?.offices || [])) {
+      const holder = getAgent(office.holderId);
+      if (!holder?.alive) continue;
+      if (chance(BALANCE.court.corruptionTickChance * (office.corruption / 50))) {
+        office.corruption = clamp(office.corruption + rand(1, 3), 0, 100);
+        org.court.stability = clamp(org.court.stability - 0.5, 0, 100);
+      }
+      const spy = org.court.offices.find(o => o.type === 'spymaster');
+      if (spy && spy.competence > 60 && office.corruption > 50 && chance(0.08)) {
+        this.logDecision(org, 'expose_corruption', `เปิดโปง${holder.name} (${COURT_OFFICE_LABELS[office.type]})`, 3);
+        office.corruption = clamp(office.corruption - 15, 0, 100);
+        org.court.stability = clamp(org.court.stability + 3, 0, 100);
+      }
+    }
+  },
+
+  tickFactionAI(org) {
+    const ruler = getAgent(org.leaderId);
+    if (!ruler?.alive) return;
+    for (const v of (org.vassals || [])) {
+      if (v.loyaltyToOverlord < 40 && v.status !== 'rebelling' && chance(0.04)) {
+        const existing = org.court.factions.find(f => f.leaderId === v.agentId && f.status === 'active');
+        if (!existing) this.createFaction(org, v.agentId, v.loyaltyToOverlord < 25 ? 'independence' : 'vassal_autonomy');
+      }
+    }
+    for (const cr of (world.captureCredits || []).filter(c => c.ownerOrganizationId === org.id && world.day - c.day < 45)) {
+      const cmd = getAgent(cr.commanderId);
+      if (!cmd || cmd.id === org.leaderId) continue;
+      const granted = (world.vassalGrants || []).some(g => g.grantedToAgentId === cmd.id && g.settlementId === cr.settlementId);
+      if (!granted && !org.court.factions.some(f => f.leaderId === cmd.id)) {
+        if (chance(0.06)) this.createFaction(org, cmd.id, 'demand_land');
+        if (chance(0.05)) this.createClaimant(cmd, org, 'conqueror', 40 + (cmd.fame || 0) * 0.3);
+      }
+    }
+    for (const f of org.court.factions) {
+      if (f.status !== 'active') continue;
+      f.power = clamp(f.power + f.memberIds.length * 2 + (100 - f.loyaltyToRuler) * 0.05, 0, 100);
+      if (f.power > BALANCE.court.civilWarPowerThreshold && f.loyaltyToRuler < BALANCE.court.civilWarLoyaltyMax && chance(0.04)) {
+        this.tryCoupOrCivilWar(org, f);
+      }
+    }
+  },
+
+  tickCourtDecision(org) {
+    const ruler = getAgent(org.leaderId);
+    if (!ruler?.alive) return;
+    const court = org.court;
+    const treasuryLow = (org.wealth || 0) < 50;
+    const warHigh = (world._warPressure?.exhaustionBoost || 0) > 2;
+    const factionPressure = court.factions.filter(f => f.status === 'active').reduce((s, f) => s + f.power, 0);
+    if (treasuryLow && chance(0.35)) {
+      this.logDecision(org, 'raise_tax', 'เพิ่มภาษีเพราะคลังขาดแคลน', 2);
+      for (const sid of (org.sovereignty?.settlementIds || [])) {
+        const s = getSettlement(sid);
+        if (s) { s.taxRate = clamp(s.taxRate + 0.02, 0.05, 0.35); s.unrest = clamp(s.unrest + 3, 0, 100); }
+      }
+      court.stability = clamp(court.stability - 2, 0, 100);
+    } else if (factionPressure > 80 && chance(0.3)) {
+      const f = court.factions.find(x => x.status === 'active');
+      if (f?.agenda === 'lower_taxes') {
+        this.logDecision(org, 'lower_tax', 'ลดภาษีตามข้อเรียกร้อง', 3);
+        for (const sid of (org.sovereignty?.settlementIds || [])) {
+          const s = getSettlement(sid);
+          if (s) { s.taxRate = clamp(s.taxRate - 0.02, 0.05, 0.35); f.loyaltyToRuler = clamp(f.loyaltyToRuler + 10, 0, 100); }
+        }
+      } else if (f?.agenda === 'demand_land' && f.leaderId) {
+        const sid = (org.sovereignty?.settlementIds || []).find(id => getSettlement(id)?.type === 'village');
+        if (sid) SovereigntySystem.grantSettlement(ruler.id, sid, f.leaderId, 'court_concession');
+      }
+    } else if (!court.succession.currentHeirId && chance(0.4)) {
+      this.chooseHeir(org, court.succession.mode, false);
+    } else if (warHigh && chance(0.25)) {
+      this.logDecision(org, 'make_peace', 'กดความกดดันให้สงบศึก', 3);
+    } else if (chance(0.2)) {
+      const vacant = COURT_OFFICE_TYPES.find(t => !court.offices.some(o => o.type === t));
+      if (vacant) {
+        const cands = court.courtMemberIds.map(getAgent).filter(a => a?.alive && a.id !== ruler.id)
+          .sort((a, b) => this.courtInfluence(b, org) - this.courtInfluence(a, org));
+        if (cands[0]) this.appointOffice(org, vacant, cands[0].id, false);
+      }
+    }
+    this.refreshInfluenceMap(org);
+  },
+
+  tickRulerAI() {
+    for (const org of (world.organizations || []).filter(o => o.sovereignty?.status === 'landed' && o.court)) {
+      const ruler = getAgent(org.leaderId);
+      if (!ruler?.alive) continue;
+      for (const f of org.court.factions.filter(x => x.status === 'active' && x.loyaltyToRuler < 30)) {
+        if (chance(0.08)) this.logDecision(org, 'punish_vassal', `ลงโทษกลุ่ม${f.name}`, 3);
+        f.power = clamp(f.power - 10, 0, 100);
+      }
+      if (!org.court.succession.currentHeirId) this.chooseHeir(org, org.court.succession.mode, true);
+    }
+  },
+
+  tickRegency(org) {
+    const ruler = getAgent(org.leaderId);
+    const court = org.court;
+    if (!court) return;
+    const needRegency = !ruler?.alive || (ruler && ruler.age < 16) ||
+      (ruler && (ruler.injuries || []).some(i => !i.healed && i.severity > 0.7)) ||
+      (court.legitimacy < 20 && !court.regency);
+    if (needRegency && !court.regency) {
+      const regent = this.pickRegent(org);
+      if (regent) {
+        court.regency = {
+          regentId: regent.id, rulerId: ruler?.id || org.leaderId,
+          startDay: world.day, reason: !ruler?.alive ? 'ruler_dead' : 'incapacitated',
+          legitimacy: clamp(court.legitimacy - BALANCE.court.regencyLegitimacyPenalty, 10, 100),
+          courtSupport: 50, abuseRisk: regent.traits?.ambition || 0.4
+        };
+        this.courtLog(org, `🏛 ${regent.name} เป็นผู้สำเร็จราชการแทน`);
+        Chronicle.add({ category: 'politics', importance: 4, title: `🏛 ผู้สำเร็จราชการ${org.name}`, description: regent.name, agents: [regent.id] });
+      }
+    }
+    if (court.regency) {
+      const regent = getAgent(court.regency.regentId);
+      if (!regent?.alive) { court.regency = null; return; }
+      if ((regent.traits?.ambition || 0) > 0.8 && court.regency.abuseRisk > 0.6 && chance(0.03)) {
+        org.leaderId = regent.id;
+        org.sovereignty.rulerId = regent.id;
+        court.rulerId = regent.id;
+        court.regency = null;
+        this.courtLog(org, `👑 ${regent.name} ยึดอำนาจจากผู้สำเร็จราชการ`);
+        Chronicle.add({ category: 'politics', importance: 5, title: `👑 ยึดอำนาจ!`, description: `${regent.name} แทนที่ผู้นำเดิม`, agents: [regent.id] });
+      }
+    }
+  },
+
+  pickRegent(org) {
+    const heir = getAgent(org.court?.succession?.currentHeirId);
+    if (heir?.alive && heir.id !== org.leaderId) return heir;
+    const marshal = org.court?.offices.find(o => o.type === 'marshal');
+    if (marshal && getAgent(marshal.holderId)?.alive) return getAgent(marshal.holderId);
+    const steward = org.court?.offices.find(o => o.type === 'steward');
+    if (steward && getAgent(steward.holderId)?.alive) return getAgent(steward.holderId);
+    const cands = org.court.courtMemberIds.map(getAgent).filter(a => a?.alive && a.id !== org.leaderId);
+    return cands.sort((a, b) => this.courtInfluence(b, org) - this.courtInfluence(a, org))[0] || null;
+  },
+
+  tickSuccessionStability(org) {
+    const succ = org.court?.succession;
+    if (!succ) return;
+    const heir = getAgent(succ.currentHeirId);
+    const claimants = (org.court.claimants || []).filter(c => c.status === 'active' && c.agentId !== succ.currentHeirId);
+    if (!heir?.alive) succ.successionStability = clamp(succ.successionStability - 5, 0, 100);
+    if (claimants.length > 1) succ.successionStability = clamp(succ.successionStability - 2, 0, 100);
+    if (succ.successionStability < BALANCE.court.successionCrisisStability && !org.court.currentCrises.includes('succession_crisis')) {
+      org.court.currentCrises.push('succession_crisis');
+      Chronicle.add({ category: 'politics', importance: 4, title: `⚠ วิกฤตสืบทอบ${org.name}`, description: 'ผู้สืบทอดไม่ชัดเจน', agents: [org.leaderId].filter(Boolean) });
+    }
+  },
+
+  handleRulerDeath(org, deadRuler) {
+    if (!org?.court) this.ensureCourt(org);
+    if (!org?.court) return;
+    const succ = org.court.succession;
+    const heir = getAgent(succ.currentHeirId);
+    const claimants = (org.court.claimants || []).filter(c => c.status === 'active');
+    if (heir?.alive && claimants.length <= 1) {
+      org.leaderId = heir.id;
+      org.sovereignty.rulerId = heir.id;
+      org.court.rulerId = heir.id;
+      org.court.regency = null;
+      SovereigntySystem.updateOrganizationSovereignty(org);
+      this.courtLog(org, `👑 ${heir.name} สืบทอบอำนาจ`);
+      Chronicle.add({ category: 'politics', importance: 5, title: `👑 ${heir.name} ขึ้นครอง${org.name}`, description: `สืบทอดจาก${deadRuler?.name || 'ผู้นำเดิม'}`, agents: [heir.id] });
+      this.chooseHeir(org, succ.mode, true);
+      return;
+    }
+    if (claimants.length > 1 || (heir && claimants.some(c => c.claimStrength > 40))) {
+      org.court.currentCrises.push('succession_crisis');
+      succ.successionStability = 25;
+      for (const c of claimants) {
+        if (chance(0.35)) this.createFaction(org, c.agentId, 'support_claimant');
+      }
+      this.courtLog(org, '⚠ วิกฤตสืบทอบ — ผู้สืบทอบโต้แย้ง');
+      Chronicle.add({ category: 'politics', importance: 5, title: `⚔ วิกฤตสืบทอบ${org.name}`, description: 'ผู้ขอชิงอำนาจหลายฝ่าย', agents: claimants.map(c => c.agentId) });
+      const regent = this.pickRegent(org);
+      if (regent) {
+        org.court.regency = { regentId: regent.id, rulerId: deadRuler?.id, startDay: world.day, reason: 'succession_crisis', legitimacy: 40, courtSupport: 45, abuseRisk: 0.3 };
+      }
+      return;
+    }
+    const strongest = org.court.courtMemberIds.map(getAgent).filter(a => a?.alive)
+      .sort((a, b) => this.courtInfluence(b, org) - this.courtInfluence(a, org))[0];
+    if (strongest) {
+      org.leaderId = strongest.id;
+      org.sovereignty.rulerId = strongest.id;
+      org.court.rulerId = strongest.id;
+      SovereigntySystem.updateOrganizationSovereignty(org);
+      this.courtLog(org, `👑 ${strongest.name} ขึ้นครองโดยอำนาจ`);
+    }
+  },
+
+  handleAgentDeath(agent) {
+    for (const org of (world.organizations || [])) {
+      if (!org.court) continue;
+      if (org.leaderId === agent.id) {
+        this.handleRulerDeath(org, agent);
+        continue;
+      }
+      if (org.court.succession?.currentHeirId === agent.id) {
+        org.court.succession.currentHeirId = null;
+        org.court.succession.successionStability = clamp(org.court.succession.successionStability - 15, 0, 100);
+        this.chooseHeir(org, org.court.succession.mode, true);
+      }
+      org.court.offices = org.court.offices.filter(o => {
+        if (o.holderId === agent.id) return false;
+        return true;
+      });
+      for (const f of org.court.factions) {
+        f.memberIds = f.memberIds.filter(id => id !== agent.id);
+        if (f.leaderId === agent.id) f.status = 'collapsed';
+      }
+      org.court.claimants = (org.court.claimants || []).filter(c => {
+        if (c.agentId === agent.id) { c.status = 'dead'; return false; }
+        return true;
+      });
+      if (org.court.regency?.regentId === agent.id) org.court.regency = null;
+      this.rebuildCourtMembers(org);
+    }
+    world.courtClaimants = (world.courtClaimants || []).filter(c => getAgent(c.agentId)?.alive);
+  },
+
+  tryCoupOrCivilWar(org, faction) {
+    const claimant = getAgent(faction.leaderId);
+    if (!claimant?.alive) return;
+    const capital = getSettlement(org.court.capitalSettlementId);
+    const guardSupport = capital ? (capital.security || 0) / 100 : 0.3;
+    if (claimant.locationId === org.court.capitalSettlementId && guardSupport < BALANCE.court.coupCapitalGuardThreshold && chance(0.25)) {
+      org.leaderId = claimant.id;
+      org.sovereignty.rulerId = claimant.id;
+      org.court.rulerId = claimant.id;
+      faction.status = 'victorious';
+      SovereigntySystem.updateOrganizationSovereignty(org);
+      this.courtLog(org, `👑 ${claimant.name} ยึดเมืองหลวง (coup)`);
+      Chronicle.add({ category: 'rebellion', importance: 5, title: `👑 รัฐประหารใน${org.name}`, description: claimant.name, agents: [claimant.id] });
+      return;
+    }
+    this.startCivilWar(org, claimant.id, faction.agenda);
+  },
+
+  startCivilWar(org, claimantId, cause) {
+    if ((world.civilWars || []).filter(c => c.status === 'active').length >= BALANCE.court.maxCivilWars) return null;
+    const claimant = getAgent(claimantId);
+    const ruler = getAgent(org.leaderId);
+    if (!claimant?.alive || !ruler?.alive) return null;
+    const existing = (world.civilWars || []).find(c => c.organizationId === org.id && c.status === 'active');
+    if (existing) return existing;
+    const supporterIds = [claimantId];
+    for (const f of (org.court?.factions || []).filter(f => f.leaderId === claimantId || f.agenda === 'support_claimant')) {
+      supporterIds.push(...f.memberIds);
+    }
+    for (const v of (org.vassals || []).filter(v => v.loyaltyToOverlord < 30)) {
+      if (chance(0.4)) supporterIds.push(v.agentId);
+    }
+    const rebels = [...new Set(supporterIds)].map(getAgent).filter(a => a?.alive);
+    const loyalists = org.court.courtMemberIds.map(getAgent).filter(a => a?.alive && !supporterIds.includes(a.id));
+    const rebelWarbandIds = [];
+    const loyalWarbandIds = [];
+    if (rebels.length >= 2) {
+      const loc = claimant.locationId || org.court.capitalSettlementId;
+      const rwb = WarbandSystem.createFromMembers(org, rebels.map(a => a.id), {
+        name: `${org.name} (กบฏ)`, type: 'rebel_warband', locationId: loc, leaderId: claimantId, status: 'marching',
+        objective: { type: 'raid_settlement', targetId: org.court.capitalSettlementId }
+      });
+      if (rwb) rebelWarbandIds.push(rwb.id);
+    }
+    const loyalWbs = (world.warbands || []).filter(w => w.organizationId === org.id && !rebelWarbandIds.includes(w.id));
+    for (const wb of loyalWbs) loyalWarbandIds.push(wb.id);
+    const cw = {
+      id: uid(), organizationId: org.id, claimantId, rulerId: ruler.id,
+      supporterIds: rebels.map(a => a.id), rebelWarbandIds, loyalistWarbandIds: loyalWarbandIds,
+      targetSettlements: (org.sovereignty?.settlementIds || []).slice(),
+      startDay: world.day, status: 'active', cause: cause || 'succession_dispute'
+    };
+    world.civilWars.push(cw);
+    org.court.currentCrises.push('civil_war');
+    OrganizationSystem.postRecruitmentOffer(org, {
+      settlementId: org.court.capitalSettlementId, type: 'royal_conscription', quantityNeeded: 6, roleNeeded: 'soldier'
+    });
+    this.courtLog(org, `⚔ สงครามกลา่ม! ${claimant.name} ชิงอำนาจ`);
+    Chronicle.add({ category: 'war', importance: 5, title: `⚔ สงครามกลา่ม${org.name}`, description: `${claimant.name} ปะทะ ${ruler.name}`, agents: [claimantId, ruler.id] });
+    return cw;
+  },
+
+  tickCivilWars() {
+    for (const cw of (world.civilWars || []).filter(c => c.status === 'active')) {
+      const org = getOrganization(cw.organizationId);
+      if (!org) { cw.status = 'ended'; continue; }
+      const rebels = cw.rebelWarbandIds.map(getWarband).filter(w => w && warbandMembers(w).length);
+      const loyal = cw.loyalistWarbandIds.map(getWarband).filter(w => w && warbandMembers(w).length);
+      if (!rebels.length) {
+        cw.status = 'loyalist_victory';
+        org.court.currentCrises = org.court.currentCrises.filter(c => c !== 'civil_war');
+        this.courtLog(org, 'สงครามกลา่มจบ — ฝ่ายผู้ครองชนะ');
+        continue;
+      }
+      if (!loyal.length && rebels.length) {
+        const claimant = getAgent(cw.claimantId);
+        if (claimant?.alive) {
+          org.leaderId = claimant.id;
+          org.sovereignty.rulerId = claimant.id;
+          org.court.rulerId = claimant.id;
+          SovereigntySystem.updateOrganizationSovereignty(org);
+        }
+        cw.status = 'claimant_victory';
+        org.court.currentCrises = org.court.currentCrises.filter(c => c !== 'civil_war');
+        this.courtLog(org, 'สงครามกลา่มจบ — ผู้ชิงชนะ');
+        Chronicle.add({ category: 'war', importance: 5, title: `👑 ${claimant?.name} ชนะสงครามกลา่ม`, description: org.name, agents: [cw.claimantId] });
+      }
+      if (world.day - cw.startDay > 120) {
+        cw.status = 'stalemate';
+        org.court.currentCrises = org.court.currentCrises.filter(c => c !== 'civil_war');
+      }
+    }
+    world.civilWars = (world.civilWars || []).filter(c => c.status === 'active' || world.day - c.startDay < 30);
+  },
+
+  getMostUnstableCourt() {
+    return (world.organizations || [])
+      .filter(o => o.court)
+      .sort((a, b) => (a.court.stability + (a.court.succession?.successionStability || 0)) - (b.court.stability + (b.court.succession?.successionStability || 0)))[0];
+  },
+
+  migrateCourt(org) {
+    if (org.sovereignty?.status === 'landed') this.ensureCourt(org);
+    else if (org.court) org.court = null;
+  }
+};
+
+/* ═══════════ Phase 18.5: World Stability / Balance / Long-run Audit ═══════════ */
+
+const WorldIntegritySystem = {
+  initWorld() {
+    if (!world.integrity) world.integrity = this.defaultIntegrity();
+    if (!world.balanceMetrics) world.balanceMetrics = this.defaultBalanceMetrics();
+    if (!world._balanceSamples) world._balanceSamples = { battles: [], rebellions: [], recruitment: [], tickMs: [] };
+    if (!world._warPressure) world._warPressure = { exhaustionBoost: 0, peacePressure: 0, recruitmentMod: 1 };
+    this.capAllHistory(false);
+  },
+
+  defaultIntegrity() {
+    return { lastCheckDay: 0, errors: [], warnings: [], repaired: [], score: 100, history: [] };
+  },
+
+  defaultBalanceMetrics() {
+    return {
+      recruitment: { activeOffers: 0, acceptedPer100Days: 0, failedOffers: 0, averageJoinScore: 0, populationPulledFromWork: 0, musterNoShowRate: 0, deserterRate: 0 },
+      economyHealth: 70,
+      war: { battlesPer100Days: 0, largeBattlesPer100Days: 0, avgCasualtyRate: 0, commanderDeathRate: 0, injuryToDeathRatio: 1.5, routRate: 0, siegeSuccessRate: 0, independentRaidRate: 0, permanentCaptureRate: 0, vassalRebellionRate: 0 },
+      sovereignty: { landedOrganizations: 0, avgSettlementsPerRealm: 0, vassalCount: 0, avgVassalLoyalty: 0, rebellionsPer1000Days: 0, ownerChangesPerSettlement: 0, orphanSettlements: 0 }
+    };
+  },
+
+  logRepair(kind, text) {
+    const entry = { day: world.day, kind, text };
+    world.integrity = world.integrity || this.defaultIntegrity();
+    world.integrity.repaired.push(entry);
+    if (world.integrity.repaired.length > BALANCE.integrity.maxRepairLog) world.integrity.repaired.shift();
+    EventSystem.add('system', `🔧 [integrity] ${text}`);
+  },
+
+  logIssue(level, code, text) {
+    const entry = { day: world.day, code, text };
+    world.integrity = world.integrity || this.defaultIntegrity();
+    (level === 'error' ? world.integrity.errors : world.integrity.warnings).push(entry);
+  },
+
+  runCheck(opt) {
+    opt = opt || {};
+    if (!world) return null;
+    world.integrity = world.integrity || this.defaultIntegrity();
+    const prevScore = world.integrity.score || 100;
+    world.integrity.errors = [];
+    world.integrity.warnings = [];
+    if (!opt.silent) world.integrity.repaired = world.integrity.repaired || [];
+
+    this.validateAgents();
+    this.validateOrganizations();
+    this.validateWarbands();
+    this.validateSettlements();
+    this.validateSovereignty();
+    this.validateBattleReports();
+    this.validateCourt();
+
+    if (opt.repair !== false) {
+      this.repairAll();
+      this.capAllHistory(true);
+      if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
+    }
+
+    let score = 100;
+    score -= world.integrity.errors.length * BALANCE.integrity.scoreErrorPenalty;
+    score -= world.integrity.warnings.length * BALANCE.integrity.scoreWarningPenalty;
+    world.integrity.score = clamp(score, 0, 100);
+    world.integrity.lastCheckDay = world.day;
+    const snap = {
+      day: world.day, score: world.integrity.score, errors: world.integrity.errors.length,
+      warnings: world.integrity.warnings.length, repaired: (world.integrity.repaired || []).length,
+      reason: opt.reason || 'scheduled'
+    };
+    world.integrity.history.push(snap);
+    if (world.integrity.history.length > BALANCE.historyCaps.integrityHistory) world.integrity.history.shift();
+
+    if (!opt.silent && (world.integrity.errors.length || world.integrity.warnings.length)) {
+      EventSystem.add('system', `🩺 Integrity Day ${world.day}: score ${world.integrity.score} (${world.integrity.errors.length} err, ${world.integrity.warnings.length} warn)`);
+    }
+    UI.dashboardDirty = true;
+    return world.integrity;
+  },
+
+  validateAgents() {
+    const seen = new Set();
+    const militaryPrimary = new Map();
+    for (const a of world.agents) {
+      if (seen.has(a.id)) this.logIssue('error', 'agent_dup', `duplicate agent id ${a.id}`);
+      seen.add(a.id);
+      if (!a.alive) {
+        const wb = getAgentActiveWarband(a.id);
+        if (wb) this.logIssue('error', 'dead_in_warband', `${a.name} dead but in ${wb.name}`);
+        if (a.unitId) this.logIssue('warning', 'dead_in_unit', `${a.name} dead but unitId=${a.unitId}`);
+      }
+      const mil = agentMilitaryMembership(a);
+      if (mil) {
+        const n = (militaryPrimary.get(a.id) || 0) + 1;
+        militaryPrimary.set(a.id, n);
+        if (n > 1) this.logIssue('error', 'multi_military', `agent ${a.id} multiple military memberships`);
+      }
+      for (const m of (a.memberships || [])) {
+        if (!getOrganization(m.organizationId)) this.logIssue('warning', 'orphan_membership', `agent ${a.id} membership org missing`);
+        if (m.status === 'traveling_to_muster' && m.joinedDay && world.day - m.joinedDay > BALANCE.recruitment.travelingToMusterMaxDays) {
+          this.logIssue('warning', 'muster_stuck', `agent ${a.id} traveling_to_muster too long`);
+        }
+      }
+      const phys = getAgentActiveWarband(a.id);
+      if (phys && a.travel && (a.memberships || []).some(m => m.status === 'traveling_to_muster')) {
+        this.logIssue('warning', 'muster_warband_conflict', `agent ${a.id} traveling to muster while in warband ${phys.name}`);
+      }
+    }
+  },
+
+  validateOrganizations() {
+    for (const org of (world.organizations || [])) {
+      for (const mid of org.memberIds) {
+        if (!getAgent(mid)?.alive) this.logIssue('warning', 'ghost_member', `org ${org.name} ghost member ${mid}`);
+      }
+      const leader = getAgent(org.leaderId);
+      if (!leader?.alive && org.memberIds.length) this.logIssue('warning', 'dead_leader', `org ${org.name} leader missing/dead`);
+      for (const wid of org.activeWarbandIds) {
+        if (!getWarband(wid)) this.logIssue('warning', 'ghost_warband_ref', `org ${org.name} missing warband ${wid}`);
+      }
+      if (!Number.isFinite(org.wealth) || org.wealth < -5000) this.logIssue('error', 'org_wealth', `org ${org.name} wealth invalid`);
+      if (!Number.isFinite(org.foodReserve) || org.foodReserve < -500) this.logIssue('warning', 'org_food', `org ${org.name} foodReserve invalid`);
+      const landed = org.sovereignty?.status === 'landed';
+      const hasSettle = (org.sovereignty?.settlementIds || []).some(sid => getSettlement(sid));
+      if (landed && !hasSettle) this.logIssue('error', 'landed_no_settlement', `landed org ${org.name} has no settlements`);
+      if (!landed && hasSettle) this.logIssue('warning', 'unlanded_has_city', `unlanded org ${org.name} lists settlements`);
+    }
+  },
+
+  validateWarbands() {
+    const agentWarband = new Map();
+    for (const wb of (world.warbands || [])) {
+      const aliveMembers = warbandMembers(wb);
+      if (wb.size !== aliveMembers.length) this.logIssue('error', 'warband_size', `${wb.name} size ${wb.size} != members ${aliveMembers.length}`);
+      if (wb.leaderId && !wb.memberIds.includes(wb.leaderId)) this.logIssue('warning', 'leader_not_member', `${wb.name} leader not in memberIds`);
+      for (const id of wb.memberIds) {
+        const other = agentWarband.get(id);
+        if (other && other !== wb.id && getAgent(id)?.alive) this.logIssue('error', 'agent_clone', `agent ${id} in warbands ${other} and ${wb.id}`);
+        if (getAgent(id)?.alive) agentWarband.set(id, wb.id);
+      }
+      if (wb.destinationId && !getSettlement(wb.destinationId) && wb.status !== 'disbanding') {
+        this.logIssue('warning', 'bad_destination', `${wb.name} destination missing`);
+      }
+      if (wb.travel && wb.currentRouteId != null) {
+        const t = wb.travel;
+        const ra = t.path[t.seg], rb = t.path[t.seg + 1];
+        if (ra != null && rb != null && !getRoute(ra, rb)) this.logIssue('warning', 'invalid_route', `${wb.name} on invalid route`);
+      }
+      for (const key of ['progress', 'food', 'gold', 'morale', 'cohesion', 'fatigue']) {
+        if (!Number.isFinite(wb[key])) this.logIssue('error', 'warband_nan', `${wb.name}.${key} is NaN`);
+      }
+      if (wb.status === 'disbanding' && wb._campDays > 30) this.logIssue('warning', 'disbanding_slow', `${wb.name} disbanding too long`);
+      if ((wb.stuckDays || 0) >= BALANCE.warband.disbandAfterStuckDays) this.logIssue('warning', 'warband_stuck', `${wb.name} stuck ${wb.stuckDays}d`);
+    }
+  },
+
+  validateSettlements() {
+    const ownerCounts = new Map();
+    for (const s of world.settlements) {
+      if (s.type === 'camp') continue;
+      if (!s.ownerOrganizationId) this.logIssue('error', 'null_owner', `${s.name} ownerOrganizationId null`);
+      if (s.ownerOrganizationId && !getOrganization(s.ownerOrganizationId)) this.logIssue('error', 'bad_owner', `${s.name} owner org missing`);
+      if (s.ownerOrganizationId && getWarband(s.ownerOrganizationId)) this.logIssue('error', 'warband_owner', `${s.name} owner is warband id`);
+      if (s.localLordId && !getAgent(s.localLordId)?.alive) this.logIssue('warning', 'dead_local_lord', `${s.name} localLord dead`);
+      if (s.governorId && !getAgent(s.governorId)?.alive) this.logIssue('warning', 'dead_governor', `${s.name} governor dead`);
+      if (s.ownerOrganizationId) ownerCounts.set(s.ownerOrganizationId, (ownerCounts.get(s.ownerOrganizationId) || 0) + 1);
+      if (s.vassalObligation && !Number.isFinite(s.vassalObligation.taxRateToOverlord)) this.logIssue('warning', 'vassal_nan', `${s.name} vassalObligation NaN`);
+      for (const g of GOODS) {
+        if (s.stock && s.stock[g] < BALANCE.economy.minFoodStock - 1) this.logIssue('warning', 'negative_stock', `${s.name} ${g} stock ${s.stock[g]}`);
+      }
+    }
+  },
+
+  validateSovereignty() {
+    const grantSet = new Set();
+    for (const g of (world.vassalGrants || [])) {
+      const key = `${g.settlementId}:${g.grantedToAgentId}`;
+      if (grantSet.has(key)) this.logIssue('warning', 'duplicate_grant', `duplicate grant ${key}`);
+      grantSet.add(key);
+      if (!getSettlement(g.settlementId)) this.logIssue('warning', 'grant_no_settlement', `grant settlement missing`);
+      if (!getAgent(g.grantedToAgentId)) this.logIssue('warning', 'grant_no_agent', `grant agent missing`);
+    }
+    for (const org of (world.organizations || [])) {
+      for (const v of (org.vassals || [])) {
+        if (!getAgent(v.agentId)) this.logIssue('warning', 'vassal_missing', `vassal agent missing in ${org.name}`);
+        if (!Number.isFinite(v.loyaltyToOverlord)) this.logIssue('warning', 'vassal_loyalty_nan', `vassal loyalty NaN`);
+        if ((v.rebellionRisk || 0) > 0.95) this.logIssue('warning', 'rebellion_spam', `vassal ${v.agentId} rebellion risk extreme`);
+      }
+    }
+    for (const sa of (world.siegeAuthorities || [])) {
+      if (sa.status === 'active' && sa.expiresDay < world.day) this.logIssue('warning', 'siege_expired', `siege authority ${sa.id} expired but active`);
+      if (!getSettlement(sa.settlementId)) this.logIssue('warning', 'siege_no_target', `siege authority missing settlement`);
+    }
+    for (const c of (world.claims || [])) {
+      if (!getSettlement(c.settlementId)) this.logIssue('warning', 'claim_orphan', `claim ${c.id} settlement missing`);
+    }
+    for (const cr of (world.captureCredits || [])) {
+      if (cr.warbandId && !getWarband(cr.warbandId)) this.logIssue('warning', 'credit_warband', `capture credit warband missing`);
+      if (cr.commanderId && !getAgent(cr.commanderId)) this.logIssue('warning', 'credit_commander', `capture credit commander missing`);
+    }
+  },
+
+  validateCourt() {
+    for (const org of (world.organizations || [])) {
+      if (org.sovereignty?.status === 'landed' && !org.court) this.logIssue('warning', 'landed_no_court', `landed org ${org.name} missing court`);
+      if (!org.court) continue;
+      const c = org.court;
+      if (!getAgent(c.rulerId)?.alive && getAgent(org.leaderId)?.alive) this.logIssue('warning', 'court_ruler_mismatch', `${org.name} court ruler invalid`);
+      for (const id of c.courtMemberIds) {
+        if (!getAgent(id)) this.logIssue('warning', 'ghost_courtier', `court member ${id} missing`);
+      }
+      for (const o of c.offices) {
+        if (!getAgent(o.holderId)?.alive) this.logIssue('warning', 'dead_office_holder', `office ${o.type} holder dead`);
+      }
+      if (c.succession?.currentHeirId && !getAgent(c.succession.currentHeirId)?.alive) this.logIssue('warning', 'dead_heir', `heir dead in ${org.name}`);
+      if (c.regency?.regentId && !getAgent(c.regency.regentId)?.alive) this.logIssue('warning', 'dead_regent', `regent dead in ${org.name}`);
+      for (const f of c.factions) {
+        if (!getAgent(f.leaderId)?.alive) this.logIssue('warning', 'faction_leader_dead', `faction ${f.id} leader missing`);
+      }
+    }
+    for (const cw of (world.civilWars || []).filter(c => c.status === 'active')) {
+      if (!cw.rebelWarbandIds.length && !cw.loyalistWarbandIds.length) this.logIssue('warning', 'civil_war_no_warbands', `civil war ${cw.id} no warbands`);
+    }
+  },
+
+  repairCourt() {
+    for (const org of (world.organizations || [])) {
+      if (org.sovereignty?.status === 'landed') {
+        if (typeof CourtSystem !== 'undefined') CourtSystem.ensureCourt(org);
+      } else if (org.court) org.court = null;
+      if (!org.court) continue;
+      if (typeof CourtSystem !== 'undefined') CourtSystem.rebuildCourtMembers(org);
+      org.court.courtMemberIds = org.court.courtMemberIds.filter(id => getAgent(id)?.alive);
+      const deadOffices = org.court.offices.filter(o => !getAgent(o.holderId)?.alive);
+      org.court.offices = org.court.offices.filter(o => getAgent(o.holderId)?.alive);
+      for (const o of deadOffices) {
+        const cands = org.court.courtMemberIds.map(getAgent).filter(a => a?.alive && a.id !== org.leaderId);
+        const pool = cands.length ? cands : org.memberIds.map(getAgent).filter(a => a?.alive && a.id !== org.leaderId);
+        if (pool.length && typeof CourtSystem !== 'undefined') {
+          CourtSystem.appointOffice(org, o.type, pool.sort((a, b) => CourtSystem.courtInfluence(b, org) - CourtSystem.courtInfluence(a, org))[0].id, true);
+        }
+      }
+      if (org.court.succession?.currentHeirId && !getAgent(org.court.succession.currentHeirId)?.alive) {
+        if (typeof CourtSystem !== 'undefined') CourtSystem.chooseHeir(org, org.court.succession.mode, true);
+      }
+      if (org.court.regency?.regentId && !getAgent(org.court.regency.regentId)?.alive) org.court.regency = null;
+      org.court.factions = org.court.factions.filter(f => getAgent(f.leaderId)?.alive);
+      for (const cw of (world.civilWars || []).filter(c => c.organizationId === org.id && c.status === 'active')) {
+        if (!cw.rebelWarbandIds.some(wid => getWarband(wid)) && !cw.loyalistWarbandIds.some(wid => getWarband(wid))) cw.status = 'ended';
+      }
+    }
+    world.civilWars = (world.civilWars || []).filter(c => c.status === 'active' || world.day - (c.startDay || 0) < 60);
+  },
+
+  validateBattleReports() {
+    for (const br of (world.battleReports || [])) {
+      if (!br.location && !br.settlementId) this.logIssue('warning', 'report_no_location', `battle report ${br.id} no location`);
+      if (!br.participants && !br.attackerName) this.logIssue('warning', 'report_no_participants', `battle report ${br.id} thin participants`);
+    }
+    for (const bf of (world.activeBattlefields || [])) {
+      if (!bf.resolved && bf.startDay && world.day - bf.startDay > 5) this.logIssue('warning', 'battlefield_stuck', `activeBattlefield ${bf.id} unresolved`);
+    }
+    if ((world.battleReports || []).length > BALANCE.historyCaps.battleReports + BALANCE.historyCaps.battleReportsFamous) {
+      this.logIssue('warning', 'reports_over_cap', 'battleReports over cap');
+    }
+    for (const lw of (world.legendaryWeapons || [])) {
+      const owner = world.agents.find(a => a.equipment?.mainHand?.id === lw.itemId || a.equipment?.offHand?.id === lw.itemId);
+      if (!owner) this.logIssue('warning', 'legend_orphan', `legendary weapon ${lw.name} no owner`);
+    }
+    for (const a of world.agents.filter(x => x.alive)) {
+      for (const inj of (a.injuries || [])) {
+        if (inj.healed && inj.active) this.logIssue('warning', 'injury_state', `agent ${a.id} healed injury still active`);
+      }
+    }
+  },
+
+  repairAll() {
+    this.repairAgents();
+    this.repairOrganizations();
+    this.repairWarbands();
+    this.repairSettlements();
+    this.repairSovereignty();
+    this.repairBattleData();
+    this.repairCourt();
+  },
+
+  repairAgents() {
+    for (const a of world.agents) {
+      if (!a.alive) {
+        for (const wb of (world.warbands || [])) {
+          if (wb.memberIds.includes(a.id)) {
+            wb.memberIds = wb.memberIds.filter(id => id !== a.id);
+            this.logRepair('agent', `removed dead ${a.id} from ${wb.name}`);
+          }
+        }
+        a.unitId = null;
+      }
+      for (const m of (a.memberships || [])) {
+        if (!getOrganization(m.organizationId)) m.status = 'expelled';
+        if (m.status === 'traveling_to_muster' && m.joinedDay && world.day - m.joinedDay > BALANCE.recruitment.travelingToMusterMaxDays) {
+          m.status = 'expelled';
+          this.logRepair('agent', `expelled muster-stuck agent ${a.id}`);
+        }
+      }
+    }
+  },
+
+  repairOrganizations() {
+    for (const org of (world.organizations || [])) {
+      org.memberIds = org.memberIds.filter(id => getAgent(id)?.alive);
+      org.activeWarbandIds = org.activeWarbandIds.filter(wid => {
+        const wb = getWarband(wid);
+        return wb && wb.status !== 'disbanding' && warbandMembers(wb).length > 0;
+      });
+      if (!Number.isFinite(org.wealth)) org.wealth = 0;
+      if (!Number.isFinite(org.foodReserve)) org.foodReserve = 0;
+      if (org.wealth < -1000) org.wealth = 0;
+      const leader = getAgent(org.leaderId);
+      if (!leader?.alive && org.memberIds.length) {
+        const members = org.memberIds.map(getAgent).filter(x => x && x.alive);
+        if (members.length) {
+          const best = members.reduce((b, x) => ((x.skills?.leadership || 0) > (b.skills?.leadership || 0) ? x : b), members[0]);
+          org.leaderId = best.id;
+          this.logRepair('org', `assigned leader ${best.name} to ${org.name}`);
+        }
+      }
+      if (org.sovereignty?.status === 'landed' && !(org.sovereignty.settlementIds || []).some(sid => getSettlement(sid))) {
+        org.sovereignty.status = 'unlanded';
+        org.sovereignty.settlementIds = [];
+        this.logRepair('org', `${org.name} demoted to unlanded — no settlements`);
+      }
+      org.vassals = (org.vassals || []).filter(v => getAgent(v.agentId)?.alive);
+    }
+  },
+
+  repairWarbands() {
+    for (const wb of (world.warbands || [])) {
+      wb.memberIds = wb.memberIds.filter(id => getAgent(id)?.alive);
+      for (const id of wb.memberIds) removeAgentFromOtherWarbands(id, wb.id, 'integrity dedupe');
+      if (!Number.isFinite(wb.food)) wb.food = 0;
+      if (!Number.isFinite(wb.morale)) wb.morale = 50;
+      if (!Number.isFinite(wb.cohesion)) wb.cohesion = 50;
+      if (!Number.isFinite(wb.fatigue)) wb.fatigue = 0;
+      if (!Number.isFinite(wb.progress)) wb.progress = 0;
+      const members = warbandMembers(wb);
+      if (!members.length) { wb.status = 'disbanding'; continue; }
+      if (!wb.leaderId || !wb.memberIds.includes(wb.leaderId)) {
+        const best = members.reduce((b, x) => ((x.skills?.leadership || 0) > (b.skills?.leadership || 0) ? x : b), members[0]);
+        wb.leaderId = best.id;
+        this.logRepair('warband', `new leader ${best.name} for ${wb.name}`);
+      }
+      if (typeof WarbandSystem !== 'undefined') {
+        if ((wb.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays) WarbandSystem.tryRerouteStuck(wb);
+        WarbandSystem.syncWarbandSize(wb);
+      }
+    }
+    world.warbands = (world.warbands || []).filter(wb => wb.status !== 'disbanding' || warbandMembers(wb).length > 0);
+  },
+
+  repairSettlements() {
+    for (const s of world.settlements) {
+      if (s.type === 'camp') continue;
+      if (!s.ownerOrganizationId || !getOrganization(s.ownerOrganizationId)) {
+        if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.migrateSettlementOwnership(s);
+        if (!s.ownerOrganizationId) {
+          const crown = getCrownOrganization(s.factionId);
+          if (crown) {
+            s.ownerOrganizationId = crown.id;
+            s.taxRecipient = crown.id;
+            this.logRepair('settlement', `fallback crown owner for ${s.name}`);
+          }
+        }
+      }
+      if (s.governorId && !getAgent(s.governorId)?.alive && typeof GovernanceSystem !== 'undefined') {
+        GovernanceSystem.appointGovernor(s);
+        this.logRepair('settlement', `replaced dead governor at ${s.name}`);
+      }
+      if (s.stock) {
+        for (const g of GOODS) {
+          if (!Number.isFinite(s.stock[g]) || s.stock[g] < BALANCE.economy.negativeStockRepairFloor) {
+            s.stock[g] = BALANCE.economy.negativeStockRepairFloor;
+          }
+        }
+      }
+      if (s.vassalObligation && !Number.isFinite(s.vassalObligation.taxRateToOverlord)) {
+        s.vassalObligation = defaultVassalObligation();
+      }
+    }
+  },
+
+  repairSovereignty() {
+    const grace = BALANCE.historyCaps.siegeAuthorityExpireGraceDays;
+    world.siegeAuthorities = (world.siegeAuthorities || []).filter(sa => {
+      if (sa.expiresDay < world.day - grace) return false;
+      if (sa.expiresDay < world.day) sa.status = 'expired';
+      return true;
+    });
+    const seen = new Set();
+    world.vassalGrants = (world.vassalGrants || []).filter(g => {
+      const k = `${g.settlementId}:${g.grantedToAgentId}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return !!getSettlement(g.settlementId);
+    });
+    world.claims = (world.claims || []).filter(c => getSettlement(c.settlementId));
+    world.captureCredits = (world.captureCredits || []).filter(cr => !cr.warbandId || getWarband(cr.warbandId));
+    for (const org of (world.organizations || [])) {
+      if (org.leaderId && org.sovereignty?.status === 'landed' && !(org.sovereignty.settlementIds || []).length) {
+        org.sovereignty.status = 'unlanded';
+      }
+      const ruler = getAgent(org.leaderId);
+      if (!ruler?.alive && org.sovereignty?.status === 'landed') {
+        const succ = org.memberIds.map(getAgent).filter(a => a && a.alive)
+          .sort((a, b) => (b.skills?.leadership || 0) - (a.skills?.leadership || 0))[0];
+        if (succ) {
+          org.leaderId = succ.id;
+          org.sovereignty.rulerId = succ.id;
+          this.logRepair('sovereignty', `succession ${succ.name} for ${org.name}`);
+        }
+      }
+    }
+  },
+
+  repairBattleData() {
+    world.activeBattlefields = (world.activeBattlefields || []).filter(bf => !bf.resolved || world.day - (bf.endDay || bf.startDay || world.day) < 3);
+    for (const a of world.agents) {
+      for (const inj of (a.injuries || [])) {
+        if (inj.healed) inj.active = false;
+      }
+    }
+    this.capBattleReports();
+  },
+
+  capBattleReports() {
+    const cap = BALANCE.historyCaps.battleReports;
+    const famousCap = BALANCE.historyCaps.battleReportsFamous;
+    const reports = world.battleReports || [];
+    if (reports.length <= cap + famousCap) return;
+    const famous = reports.filter(r => (r.casualties || 0) >= 40 || r.legendary).sort((a, b) => (b.casualties || 0) - (a.casualties || 0)).slice(0, famousCap);
+    const famousIds = new Set(famous.map(r => r.id));
+    const recent = reports.filter(r => !famousIds.has(r.id)).slice(-cap);
+    world.battleReports = [...famous, ...recent].sort((a, b) => (a.day || 0) - (b.day || 0));
+  },
+
+  capAllHistory(log) {
+    if ((world.largeBattleRecords || []).length > BALANCE.historyCaps.largeBattleRecords) {
+      world.largeBattleRecords = world.largeBattleRecords.slice(-BALANCE.historyCaps.largeBattleRecords);
+    }
+    for (const org of (world.organizations || [])) {
+      if (org.history.length > BALANCE.historyCaps.orgHistory) org.history = org.history.slice(-BALANCE.historyCaps.orgHistory);
+    }
+    for (const wb of (world.warbands || [])) {
+      if (wb.history.length > BALANCE.historyCaps.warbandHistory) wb.history = wb.history.slice(-BALANCE.historyCaps.warbandHistory);
+    }
+    for (const a of world.agents) {
+      const p = a.memory?.personal;
+      if (!p) continue;
+      if (p.majorEvents?.length > BALANCE.historyCaps.agentPersonalMemory) p.majorEvents = p.majorEvents.slice(-BALANCE.historyCaps.agentPersonalMemory);
+    }
+    if ((world.scoutReports || []).length > BALANCE.historyCaps.scoutReports) {
+      world.scoutReports = world.scoutReports.slice(-BALANCE.historyCaps.scoutReports);
+    }
+    if (world.events.length > BALANCE.historyCaps.events) world.events.splice(0, world.events.length - BALANCE.historyCaps.events);
+    this.capBattleReports();
+    if (log) this.summarizeOldHistory();
+  },
+
+  summarizeOldHistory() {
+    const keep = BALANCE.historyCaps.chronicleArchiveKeep;
+    const max = BALANCE.historyCaps.chronicle;
+    if ((world.chronicle || []).length <= max) return;
+    const famous = world.chronicle.filter(e => (e.importance || 0) >= 4);
+    const recent = world.chronicle.filter(e => (e.importance || 0) < 4).slice(-keep);
+    const byEra = {};
+    for (const e of world.chronicle.filter(e => (e.importance || 0) < 4 && e.day < world.day - 200)) {
+      const era = Math.floor(e.day / 200);
+      if (!byEra[era]) byEra[era] = { wars: 0, legends: 0, settlements: 0, start: era * 200, end: era * 200 + 199 };
+      if (e.category === 'war') byEra[era].wars++;
+      else if (e.category === 'legend') byEra[era].legends++;
+      else if (e.category === 'settlement') byEra[era].settlements++;
+    }
+    const summaries = Object.values(byEra).map(er => ({
+      id: uid(), day: er.end, category: 'era', importance: 3,
+      title: `สรุปยุค Day ${er.start}–${er.end}`,
+      description: `สงคราม ${er.wars} | ตำนาน ${er.legends} | เมือง ${er.settlements}`,
+      agents: [], settlements: [], factions: [], _archiveSummary: true
+    }));
+    world.chronicle = [...summaries.slice(-20), ...famous, ...recent].slice(-max);
+    if (!world.eras) world.eras = [];
+    for (const s of summaries.slice(-3)) {
+      world.eras.push({ day: s.day, text: s.description });
+      if (world.eras.length > 40) world.eras.shift();
+    }
+  },
+
+  tickBalanceMetrics() {
+    world.balanceMetrics = world.balanceMetrics || this.defaultBalanceMetrics();
+    const samples = world._balanceSamples || { battles: [], rebellions: [], recruitment: [], tickMs: [] };
+    const offers = world.recruitmentOffers || [];
+    const openOffers = offers.filter(o => o.status === 'open');
+    const recentRec = offers.filter(o => world.day - (o.expiresDay || world.day) < 100);
+    const accepted = recentRec.reduce((s, o) => s + (o.acceptedAgentIds?.length || 0), 0);
+    const failed = recentRec.filter(o => o.status === 'failed').length;
+    world.balanceMetrics.recruitment = {
+      activeOffers: openOffers.length,
+      acceptedPer100Days: accepted,
+      failedOffers: failed,
+      averageJoinScore: world._lastAvgJoinScore || 0,
+      populationPulledFromWork: world._recruitmentPull || 0,
+      musterNoShowRate: world._musterNoShowRate || 0,
+      deserterRate: world._deserterRate || 0
+    };
+
+    const mkts = marketSettlements();
+    let foodHealth = 0, hunger = 0, neg = 0;
+    for (const s of mkts) {
+      const pop = Math.max(populationOf(s), 1);
+      foodHealth += clamp(s.stock.food / (s.demand.food || pop), 0, 2);
+      if (s.stock.food < 15) hunger++;
+      for (const g of GOODS) if (s.stock[g] < 0) neg++;
+    }
+    const mi = world.marketIndex || defaultMarketIndex();
+    world.balanceMetrics.economyHealth = clamp(
+      (foodHealth / Math.max(mkts.length, 1)) * 35 + (mi.tradeHealth || 50) * 0.4 + (mi.caravanSurvivalRate || 1) * 25 - hunger * 3 - neg * 5,
+      0, 100
+    );
+
+    const br = (world.battleReports || []).filter(r => world.day - (r.day || 0) < 100);
+    const large = br.filter(r => (r.casualties || 0) >= 40).length;
+    const routs = br.filter(r => r.rout || r.summaryText?.includes('rout')).length;
+    const captures = (world.captureCredits || []).filter(c => world.day - c.day < 200).length;
+    const raids = br.filter(r => r.kind === 'raid').length;
+    world.balanceMetrics.war = {
+      battlesPer100Days: br.length,
+      largeBattlesPer100Days: large,
+      avgCasualtyRate: br.length ? br.reduce((s, r) => s + (r.casualtyRate || (r.casualties || 0) / Math.max(r.totalMen || 20, 1)), 0) / br.length : 0,
+      commanderDeathRate: world._commanderDeathRate || 0,
+      injuryToDeathRatio: world._injuryDeathRatio || 1.4,
+      routRate: br.length ? routs / br.length : 0,
+      siegeSuccessRate: world._siegeSuccessRate || 0,
+      independentRaidRate: br.length ? raids / br.length : 0,
+      permanentCaptureRate: captures / Math.max(mkts.length, 1),
+      vassalRebellionRate: (world._rebellionSamples || []).filter(d => world.day - d < 1000).length / 10
+    };
+
+    const landed = (world.organizations || []).filter(o => o.sovereignty?.status === 'landed');
+    const vassals = landed.flatMap(o => o.vassals || []);
+    const orphan = mkts.filter(s => !s.ownerOrganizationId).length;
+    world.balanceMetrics.sovereignty = {
+      landedOrganizations: landed.length,
+      avgSettlementsPerRealm: landed.length ? landed.reduce((s, o) => s + (o.sovereignty?.settlementIds?.length || 0), 0) / landed.length : 0,
+      vassalCount: vassals.length,
+      avgVassalLoyalty: vassals.length ? vassals.reduce((s, v) => s + (v.loyaltyToOverlord || 0), 0) / vassals.length : 0,
+      rebellionsPer1000Days: (world._rebellionSamples || []).filter(d => world.day - d < 1000).length,
+      ownerChangesPerSettlement: world._ownerChangeCount || 0,
+      orphanSettlements: orphan
+    };
+
+    this.applyWarPressure();
+  },
+
+  applyWarPressure() {
+    const w = world.balanceMetrics?.war;
+    if (!w) return;
+    world._warPressure = world._warPressure || { exhaustionBoost: 0, peacePressure: 0, recruitmentMod: 1 };
+    if (w.battlesPer100Days > BALANCE.combat.battlesPer100DaysHigh) {
+      world._warPressure.exhaustionBoost = BALANCE.combat.warExhaustionPerBattle;
+      world._warPressure.peacePressure = BALANCE.combat.peacePressurePerBattle;
+      world._warPressure.recruitmentMod = BALANCE.combat.recruitmentSlowdownWhenHighWar;
+      for (const f of world.factions.filter(x => !x.isBandit)) {
+        f.diplomacy = f.diplomacy || {};
+        f.diplomacy.warExhaustion = clamp((f.diplomacy.warExhaustion || 0) + BALANCE.combat.warExhaustionPerBattle * 0.1, 0, 100);
+      }
+    } else {
+      world._warPressure.recruitmentMod = 1;
+    }
+  },
+
+  estimateSaveSize() {
+    try {
+      return JSON.stringify(world).length;
+    } catch { return 0; }
+  },
+
+  getHealthDashboard() {
+    this.tickBalanceMetrics();
+    const integ = world.integrity || this.defaultIntegrity();
+    const bm = world.balanceMetrics || this.defaultBalanceMetrics();
+    const alive = world.agents.filter(a => a.alive);
+    const stuck = (world.warbands || []).filter(w => (w.stuckDays || 0) >= BALANCE.warband.stuckThresholdDays);
+    const orphans = marketSettlements().filter(s => !s.ownerOrganizationId);
+    const overloaded = (world.organizations || []).filter(o => o.memberIds.length > 80);
+    const sovIssues = (world.organizations || []).filter(o => {
+      const landed = o.sovereignty?.status === 'landed';
+      const has = (o.sovereignty?.settlementIds || []).some(sid => getSettlement(sid));
+      return (landed && !has) || (!landed && has);
+    });
+    return {
+      integrityScore: integ.score, lastCheckDay: integ.lastCheckDay, repairs: (integ.repaired || []).length,
+      population: alive.length, activeAgents: alive.length, deadAgents: world.agents.length - alive.length,
+      organizations: (world.organizations || []).length, warbands: (world.warbands || []).filter(w => warbandMembers(w).length).length,
+      realms: (world.organizations || []).filter(o => o.sovereignty?.status === 'landed').length,
+      vassals: (world.organizations || []).flatMap(o => o.vassals || []).length,
+      activeOffers: bm.recruitment.activeOffers,
+      activeSiegeAuthorities: (world.siegeAuthorities || []).filter(s => s.status === 'active').length,
+      orphanWarnings: orphans.length, economyHealth: bm.economyHealth, warPressure: world._warPressure,
+      saveSizeEstimate: this.estimateSaveSize(), stuckWarbands: stuck, overloadedOrgs: overloaded, sovereigntyIssues: sovIssues,
+      errors: integ.errors.length, warnings: integ.warnings.length
+    };
   }
 };
 
@@ -5536,6 +7165,7 @@ const NeedSystem = {
     } else if (chance(0.35)) {
       EventSystem.add('life', `⚰ ${a.name} (${a.profession}) ${causeText}ที่${s ? s.name : 'กลางทาง'}`);
     }
+    if (typeof CourtSystem !== 'undefined') CourtSystem.handleAgentDeath(a);
   }
 };
 
@@ -9657,8 +11287,15 @@ function simulateDay() {
   if (typeof WarbandSystem !== 'undefined') WarbandSystem.tickDaily();
   if (typeof SovereigntySystem !== 'undefined') {
     SovereigntySystem.tickDaily();
-    if (world.day % 50 === 0) SovereigntySystem.validateNoGhostOwners();
+    if (world.day % BALANCE.integrity.checkIntervalDays === 0 && typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'scheduled' });
+    }
   }
+  if (typeof WorldIntegritySystem !== 'undefined') {
+    WorldIntegritySystem.tickBalanceMetrics();
+    if (world.day % 25 === 0) WorldIntegritySystem.capAllHistory(true);
+  }
+  if (typeof CourtSystem !== 'undefined') CourtSystem.tickDaily();
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.tickInjuries();
 
   // เติม garrison จากทหารว่าง
@@ -11241,6 +12878,10 @@ function generateOrganizationSummary(org) {
   s += ` ชื่อเสียง ${fmt(org.reputation || 0)} คลังอาหาร ${fmt(org.foodReserve || 0)}`;
   if (unpaid > 2) s += ` มีความเสี่ยงค่าจ้างค้าง ${unpaid} คน`;
   if (wbs.length) s += ` มี warband ปฏิบัติการ ${wbs.length} กอง`;
+  if (org.court && org.sovereignty?.status === 'landed') {
+    s += ` สำนักเสถียรภาพ ${fmt(org.court.stability)}`;
+    if ((org.court.currentCrises || []).length) s += ` วิกฤต: ${org.court.currentCrises.join(', ')}`;
+  }
   return s + '.';
 }
 
@@ -11592,6 +13233,24 @@ const PageViewSystem = {
       const o = getAgent(+oid);
       return o ? `${this.linkChip('agent', o.id, o.name)} (${v > 0 ? '+' : ''}${fmt(v)})` : '';
     }).join(' ') : '<span class="hint">—</span>');
+    if (typeof CourtSystem !== 'undefined') {
+      const courtOrgs = (world.organizations || []).filter(o => o.court?.courtMemberIds?.includes(a.id));
+      if (courtOrgs.length) {
+        const rows = courtOrgs.map(org => {
+          const inf = CourtSystem.courtInfluence(a, org);
+          const office = org.court.offices.find(o => o.holderId === a.id);
+          const faction = org.court.factions.find(f => f.memberIds.includes(a.id) && f.status === 'active');
+          const isHeir = org.court.succession?.currentHeirId === a.id;
+          let line = `${this.linkChip('organization', org.id, org.name)} — influence ${fmt(inf)}`;
+          if (office) line += ` · ${COURT_OFFICE_LABELS[office.type] || office.type}`;
+          if (isHeir) line += ' · heir';
+          if (faction) line += ` · faction ${faction.name} (${faction.agenda})`;
+          return `<div>${line}</div>`;
+        }).join('');
+        const claim = (world.courtClaimants || []).find(c => c.agentId === a.id && c.status === 'active');
+        html += this.section('H. Politics (Phase 19)', rows + (claim ? `<div>Claimant: ${claim.claimType} (${fmt(claim.claimStrength)})</div>` : ''));
+      }
+    }
     return html;
   },
 
@@ -11648,6 +13307,30 @@ const PageViewSystem = {
     html += this.section('Warbands', wbs.length ? wbs.map(w => this.linkChip('warband', w.id, `${w.name} (${warbandMembers(w).length})`)).join(' ') : '—');
     const offers = (world.recruitmentOffers || []).filter(r => r.organizationId === org.id && r.status === 'open');
     html += this.section('รับสมัคร', offers.length ? offers.map(r => `ต้องการ ${r.quantityNeeded} (${r.type})`).join('<br>') : 'ไม่มีประกาศ');
+    if (org.court && typeof CourtSystem !== 'undefined') {
+      const c = org.court;
+      const heir = getAgent(c.succession?.currentHeirId);
+      html += this.section('Court / สำนัก', [
+        UI.kv('Ruler', getAgent(c.rulerId) ? this.linkChip('agent', c.rulerId, getAgent(c.rulerId).name) : '—'),
+        UI.kv('Heir', heir ? this.linkChip('agent', heir.id, heir.name) : '—'),
+        UI.kv('Legitimacy', fmt(c.legitimacy)),
+        UI.kv('Stability', fmt(c.stability), c.stability < 40 ? 'bad' : 'good'),
+        UI.kv('Succession stability', fmt(c.succession?.successionStability || 0)),
+        UI.kv('Crises', (c.currentCrises || []).join(', ') || '—')
+      ].join(''));
+      if (c.offices?.length) {
+        html += this.section('Council', c.offices.map(o => {
+          const h = getAgent(o.holderId);
+          return `${COURT_OFFICE_LABELS[o.type] || o.type}: ${h ? this.linkChip('agent', h.id, h.name) : '?'}`;
+        }).join('<br>'));
+      }
+      if (c.factions?.filter(f => f.status === 'active').length) {
+        html += this.section('Factions', c.factions.filter(f => f.status === 'active').map(f => {
+          const l = getAgent(f.leaderId);
+          return `${f.name} (${f.agenda}) — ${l ? l.name : '?'}`;
+        }).join('<br>'));
+      }
+    }
     return html;
   },
 
@@ -11718,7 +13401,7 @@ const PageViewSystem = {
   battleCard(br) {
     const sel = this.prefs.combat.selectedId;
     return `<button type="button" class="entity-card${sel === br.id ? ' active' : ''}" data-kind="battle" data-id="${br.id}">
-      <div class="ec-title">${br.large ? '🏟 ' : '⚔ '}${escHtml(br.title || br.location || 'ศึก')}</div>
+      <div class="ec-title">${br.civilWar ? '🏴 ' : ''}${br.large ? '🏟 ' : '⚔ '}${escHtml(br.title || br.location || 'ศึก')}</div>
       <div class="ec-sub">Day ${br.day} · ${escHtml(br.location || '')} · เสียชีวิต ${br.casualties || 0}</div>
       <div class="ec-sub">${escHtml((br.summaryText || '').slice(0, 80))}</div>
     </button>`;
@@ -11735,6 +13418,14 @@ const PageViewSystem = {
       UI.kv('ภูมิประเทศ', br.terrain || '—'), UI.kv('ผู้ชนะ', br.winner === 'attacker' ? 'ฝ่ายบุก' : 'ฝ่ายรับ'),
       UI.kv('เสียชีวิต', br.casualties || 0), UI.kv('บาดเจ็บ', br.wounded || br.injuries || 0)
     ].join(''));
+    if (br.civilWar) {
+      html += this.section('การเมือง / Civil War', [
+        UI.kv('สงครามกลา่ม', br.realmName || getOrganization(br.organizationId)?.name || '—'),
+        UI.kv('ผู้ชิง', br.claimantName ? this.linkChip('agent', br.claimantId, br.claimantName) : '—'),
+        UI.kv('ฝ่ายในศึก', br.claimantSide === 'rebel' ? 'กบฏ/ผู้ชิง' : br.claimantSide === 'loyalist' ? 'ผู้ภักดี' : 'ปะปน'),
+        UI.kv('ผลทางการเมือง', br.politicalConsequence || '—')
+      ].join(''));
+    }
     if (br.gridSnapshot) {
       const grid = br.gridSnapshot.map(row => row.map(c => `[${String(c).padEnd(5).slice(0, 5)}]`).join(' ')).join('\n');
       html += this.section('Battlefield Grid', `<pre class="battle-grid">${escHtml(grid)}</pre>`);
@@ -12157,7 +13848,72 @@ const UI = {
       const era = world.eras[world.eras.length - 1];
       html += `<div class="sum-section"><span class="sum-head">ยุคสมัยล่าสุด</span><br>${era.text}</div>`;
     }
+
+    if (typeof CourtSystem !== 'undefined') {
+      const realms = (world.organizations || []).filter(o => o.court);
+      const crises = realms.filter(o => (o.court.currentCrises || []).length);
+      const civilWars = (world.civilWars || []).filter(c => c.status === 'active');
+      const factions = realms.reduce((n, o) => n + (o.court.factions || []).filter(f => f.status === 'active').length, 0);
+      let topCourtier = null, topInf = 0;
+      for (const org of realms) {
+        for (const id of org.court.courtMemberIds) {
+          if (id === org.leaderId) continue;
+          const inf = CourtSystem.courtInfluence(getAgent(id), org);
+          if (inf > topInf) { topInf = inf; topCourtier = getAgent(id); }
+        }
+      }
+      const unstable = CourtSystem.getMostUnstableCourt();
+      html += `<div class="sum-section"><span class="sum-head">🏛 Court Politics (Phase 19)</span><br>`;
+      html += `Realms with court: ${realms.length} · Succession crises: ${crises.filter(o => o.court.currentCrises.includes('succession_crisis')).length}<br>`;
+      html += `Active factions: ${factions} · Civil wars: ${civilWars.length}<br>`;
+      if (topCourtier) html += `Most influential courtier: ${topCourtier.name} (${fmt(topInf)})<br>`;
+      if (unstable) html += `Most unstable: ${unstable.name} (stability ${fmt(unstable.court.stability)})`;
+      html += `</div>`;
+    }
+
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      html += `<div class="sum-section world-health"><span class="sum-head">🩺 World Health (Phase 18.5)</span><br>`;
+      html += `Integrity <b>${h.integrityScore}</b>/100 · Economy ${fmt(h.economyHealth, 0)} · War pressure ${fmt((h.warPressure?.exhaustionBoost || 0), 1)}<br>`;
+      html += `Agents ${h.activeAgents} · Orgs ${h.organizations} · Warbands ${h.warbands} · Realms ${h.realms} · Vassals ${h.vassals}<br>`;
+      html += `Offers ${h.activeOffers} · Siege auth ${h.activeSiegeAuthorities} · Orphans ${h.orphanWarnings}<br>`;
+      html += `Save ~${fmt(h.saveSizeEstimate / 1024, 0)} KB · Last check Day ${h.lastCheckDay || '—'} · Repairs ${h.repairs}<br>`;
+      if (h.errors || h.warnings) html += `Issues: ${h.errors} errors, ${h.warnings} warnings`;
+      html += `</div>`;
+      html += `<div class="sum-section world-health-actions">`;
+      html += `<button type="button" class="health-btn" id="btnRunIntegrity">Run Integrity Check</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowStuck">Stuck Warbands</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowSov">Sovereignty Issues</button> `;
+      html += `<button type="button" class="health-btn" id="btnShowOrphans">Orphans</button>`;
+      html += `<div id="healthDetail" class="health-detail hint"></div></div>`;
+    }
+
     el.innerHTML = html;
+    const bindHealth = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
+    bindHealth('btnRunIntegrity', () => {
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'ui' });
+      this.renderWorldSummary();
+      EventSystem.add('system', `🩺 Manual integrity check — score ${world.integrity.score}`);
+    });
+    bindHealth('btnShowStuck', () => {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = h.stuckWarbands.length
+        ? h.stuckWarbands.map(w => `${w.name} stuck ${w.stuckDays}d — ${w.pathFailureReason || '?'}`).join('<br>')
+        : 'ไม่มี warband ติดเส้นทาง';
+    });
+    bindHealth('btnShowSov', () => {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = h.sovereigntyIssues.length
+        ? h.sovereigntyIssues.map(o => `${o.name}: ${o.sovereignty?.status}`).join('<br>')
+        : 'ไม่มีปัญหา sovereignty';
+    });
+    bindHealth('btnShowOrphans', () => {
+      const orphans = marketSettlements().filter(s => !s.ownerOrganizationId);
+      const box = document.getElementById('healthDetail');
+      if (box) box.innerHTML = orphans.length ? orphans.map(s => s.name).join('<br>') : 'ไม่มี orphan settlement';
+    });
   },
 
   renderLog() {
@@ -12310,6 +14066,15 @@ const UI = {
     html += `<div class="insp-section"><h4>อาชีพ</h4>`;
     for (const [p, n] of Object.entries(profCount).sort((a, b) => b[1] - a[1])) html += this.kv(p, n);
     html += `</div>`;
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      const h = WorldIntegritySystem.getHealthDashboard();
+      html += `<div class="insp-section"><h4>🩺 World Health</h4>`;
+      html += this.kv('Integrity', `${h.integrityScore}/100`);
+      html += this.kv('Economy health', fmt(h.economyHealth, 0));
+      html += this.kv('Orphan settlements', h.orphanWarnings, h.orphanWarnings ? 'bad' : 'good');
+      html += this.kv('Save estimate', `${fmt(h.saveSizeEstimate / 1024, 0)} KB`);
+      html += `</div>`;
+    }
     return html;
   },
 
@@ -12520,6 +14285,23 @@ const UI = {
         html += `</div>`;
       }
     }
+    if (typeof CourtSystem !== 'undefined') {
+      const courtOrgs = (world.organizations || []).filter(o => o.court?.courtMemberIds?.includes(a.id));
+      if (courtOrgs.length) {
+        html += `<div class="insp-section"><h4>Politics (Phase 19)</h4>`;
+        for (const org of courtOrgs) {
+          const inf = CourtSystem.courtInfluence(a, org);
+          const office = org.court.offices.find(o => o.holderId === a.id);
+          const faction = org.court.factions.find(f => f.memberIds.includes(a.id) && f.status === 'active');
+          const isHeir = org.court.succession?.currentHeirId === a.id;
+          html += this.kv(this.link('organization', org.id, org.name), `influence ${fmt(inf)}${office ? ' · ' + (COURT_OFFICE_LABELS[office.type] || office.type) : ''}${isHeir ? ' · heir' : ''}`);
+          if (faction) html += `<div class="ce-desc">Faction: ${faction.name} (${faction.agenda})</div>`;
+        }
+        const claim = (world.courtClaimants || []).find(c => c.agentId === a.id && c.status === 'active');
+        if (claim) html += this.kv('Claimant', `${claim.claimType} (${fmt(claim.claimStrength)})`, 'warn');
+        html += `</div>`;
+      }
+    }
     return html;
   },
 
@@ -12544,6 +14326,11 @@ const UI = {
     if (s.legitimacy != null) html += this.kv('Legitimacy', fmt(s.legitimacy), s.legitimacy < 35 ? 'bad' : 'good');
     const claims = (world.claims || []).filter(c => c.settlementId === s.id && c.status === 'active');
     if (claims.length) html += this.kv('Claimants', claims.length, 'warn');
+    if (ownerOrg?.court) {
+      const factions = ownerOrg.court.factions.filter(f => f.status === 'active');
+      const lordFaction = localLord ? factions.find(f => f.memberIds.includes(localLord.id)) : null;
+      html += this.kv('Court alignment', lordFaction ? lordFaction.agenda : (localLord ? 'loyal' : 'crown'));
+    }
     if (gov && gov.gov) {
       html += this.kv('· loyalty ของ governor', fmt(gov.gov.loyalty, 2), gov.gov.loyalty < 0.4 ? 'bad' : '');
       html += this.kv('· ambition', fmt(gov.gov.ambition, 2), gov.gov.ambition > 0.7 ? 'warn' : '');
@@ -12998,6 +14785,30 @@ const UI = {
       html += this.kv('Legitimacy', fmt(sov.legitimacy || 0), (sov.legitimacy || 0) < 35 ? 'bad' : 'good');
       html += `</div>`;
     }
+    if (org.court) {
+      const c = org.court;
+      const heir = getAgent(c.succession?.currentHeirId);
+      html += `<div class="insp-section"><h4>Court</h4>`;
+      html += this.kv('Stability', fmt(c.stability), c.stability < 40 ? 'bad' : 'good');
+      html += this.kv('Heir', heir ? this.link('agent', heir.id, heir.name) : '—');
+      html += this.kv('Succession', `${c.succession?.mode || '—'} (${fmt(c.succession?.successionStability || 0)})`);
+      if (c.regency) html += this.kv('Regent', getAgent(c.regency.regentId) ? this.link('agent', c.regency.regentId, getAgent(c.regency.regentId).name) : '—', 'warn');
+      if (c.offices?.length) {
+        html += `<div class="sub-head">Offices</div>`;
+        for (const o of c.offices) {
+          const h = getAgent(o.holderId);
+          html += this.kv(COURT_OFFICE_LABELS[o.type] || o.type, h ? this.link('agent', h.id, h.name) : '?');
+        }
+      }
+      if (c.factions?.filter(f => f.status === 'active').length) {
+        html += `<div class="sub-head">Factions</div>`;
+        for (const f of c.factions.filter(x => x.status === 'active')) {
+          const l = getAgent(f.leaderId);
+          html += this.kv(f.name, `${f.agenda} · power ${fmt(f.power)}`);
+        }
+      }
+      html += `</div>`;
+    }
     const offers = world.recruitmentOffers.filter(o => o.organizationId === org.id && o.status === 'open');
     if (offers.length) {
       html += `<div class="insp-section"><h4>Recruitment</h4>`;
@@ -13383,6 +15194,94 @@ const SandboxTools = {
         UI.pageDirty = true;
         EventSystem.add('system', '🔄 [Sandbox] Rebuilt UI indexes');
       },
+      runIntegrityCheck: () => {
+        if (typeof WorldIntegritySystem !== 'undefined') {
+          WorldIntegritySystem.runCheck({ repair: true, reason: 'sandbox' });
+          UI.dashboardDirty = true;
+          EventSystem.add('system', `🩺 [Sandbox] Integrity score ${world.integrity.score}`);
+        }
+      },
+      showWorldHealth: () => {
+        document.getElementById('summaryModal')?.classList.remove('hidden');
+        UI.renderWorldSummary();
+      },
+      createCourt: () => {
+        const org = world.organizations.find(o => o.sovereignty?.status === 'landed');
+        if (!org) { EventSystem.add('system', '✨ ไม่มี landed org'); return; }
+        CourtSystem.ensureCourt(org);
+        EventSystem.add('system', `🏛 [Sandbox] Court created for ${org.name}`);
+      },
+      appointOffice: () => {
+        const org = world.organizations.find(o => o.court);
+        const agent = world.agents.find(a => a.alive && a.id !== org?.leaderId);
+        if (!org || !agent) return;
+        CourtSystem.appointOffice(org, 'steward', agent.id, false);
+      },
+      nameHeir: () => {
+        const org = world.organizations.find(o => o.court);
+        const agent = org?.court.courtMemberIds.map(getAgent).find(a => a?.alive && a.id !== org.leaderId);
+        if (!org || !agent) return;
+        CourtSystem.nameHeir(org, agent.id);
+        EventSystem.add('system', `👑 [Sandbox] ${agent.name} named heir`);
+      },
+      triggerSuccessionCrisis: () => {
+        const org = world.organizations.find(o => o.court);
+        if (!org) return;
+        org.court.succession.successionStability = 15;
+        org.court.currentCrises.push('succession_crisis');
+        const cands = org.court.courtMemberIds.map(getAgent).filter(a => a?.alive && a.id !== org.leaderId).slice(0, 2);
+        for (const a of cands) CourtSystem.createClaimant(a, org, 'elected_candidate', 45);
+        EventSystem.add('system', `⚠ [Sandbox] Succession crisis in ${org.name}`);
+      },
+      createClaimant: () => {
+        const org = world.organizations.find(o => o.court);
+        const a = world.agents.find(x => x.alive && x.id !== org?.leaderId);
+        if (!org || !a) return;
+        CourtSystem.createClaimant(a, org, 'local_support', 50);
+        EventSystem.add('system', `⚔ [Sandbox] Claimant ${a.name}`);
+      },
+      startCourtFaction: () => {
+        const org = world.organizations.find(o => o.court);
+        const a = org?.vassals?.[0] ? getAgent(org.vassals[0].agentId) : world.agents.find(x => x.alive);
+        if (!org || !a) return;
+        CourtSystem.createFaction(org, a.id, 'vassal_autonomy');
+      },
+      forceRegency: () => {
+        const org = world.organizations.find(o => o.court);
+        const regent = CourtSystem.pickRegent(org);
+        if (!org || !regent) return;
+        org.court.regency = { regentId: regent.id, rulerId: org.leaderId, startDay: world.day, reason: 'sandbox', legitimacy: 45, courtSupport: 50, abuseRisk: 0.3 };
+        EventSystem.add('system', `🏛 [Sandbox] Regency ${regent.name}`);
+      },
+      triggerCoupCheck: () => {
+        const org = world.organizations.find(o => o.court?.factions?.length);
+        const f = org?.court.factions.find(x => x.status === 'active');
+        if (!org || !f) { EventSystem.add('system', '✨ ไม่มี faction'); return; }
+        f.power = 70; f.loyaltyToRuler = 20;
+        CourtSystem.tryCoupOrCivilWar(org, f);
+      },
+      triggerCivilWar: () => {
+        const org = world.organizations.find(o => o.court);
+        const a = org?.court.courtMemberIds.map(getAgent).find(x => x?.alive && x.id !== org.leaderId);
+        if (!org || !a) return;
+        CourtSystem.startCivilWar(org, a.id, 'succession_dispute');
+      },
+      exposeCorruption: () => {
+        const org = world.organizations.find(o => o.court?.offices?.length);
+        const office = org?.court.offices[0];
+        if (!office) return;
+        office.corruption = 75;
+        CourtSystem.tickCorruption(org);
+        EventSystem.add('system', '🔍 [Sandbox] Corruption exposed');
+      },
+      openUnstableCourt: () => {
+        const org = CourtSystem.getMostUnstableCourt();
+        if (!org) return;
+        UI.selected = { kind: 'organization', id: org.id };
+        UI.inspectorDirty = true;
+        PageViewSystem.prefs.organizations.selectedId = org.id;
+        UI.setView('organizations');
+      },
       foundGuildFromWarband: () => {
         const wb = world.warbands.find(w => warbandMembers(w).length >= 8);
         if (!wb) { EventSystem.add('system', '✨ ต้องมี warband >= 8 คน'); return; }
@@ -13689,7 +15588,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.5';
+const SAVE_SCHEMA_VERSION = '19.0';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -13888,6 +15787,10 @@ const SaveSystem = {
     w.claims = w.claims || [];
     w.captureCredits = w.captureCredits || [];
     w.vassalGrants = w.vassalGrants || [];
+    if (!w.integrity) w.integrity = null;
+    if (!w.balanceMetrics) w.balanceMetrics = null;
+    w.civilWars = w.civilWars || [];
+    w.courtClaimants = w.courtClaimants || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -14127,6 +16030,7 @@ const SaveSystem = {
     org.memberIds = org.memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
     if (!org.sovereignty) org.sovereignty = defaultSovereignty(org);
     if (!org.vassals) org.vassals = [];
+    if (typeof CourtSystem !== 'undefined') CourtSystem.migrateCourt(org);
   },
 
   migrateWarband(wb) {
@@ -14143,6 +16047,9 @@ const SaveSystem = {
     }
     if (!wb.foundingReason) wb.foundingReason = wb.organizationId ? 'guild_detachment' : 'local_militia';
     if (!wb.politicalMode) wb.politicalMode = wb.organizationId ? 'guild_backed' : 'independent';
+    if (wb.stuckDays == null) wb.stuckDays = 0;
+    if (wb.lastProgressDay == null) wb.lastProgressDay = world.day;
+    if (wb.rerouteAttempts == null) wb.rerouteAttempts = 0;
   },
 
   migrateRecruitmentOffer(ro) {
@@ -14191,6 +16098,11 @@ const SaveSystem = {
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
     if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
     if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
+    if (typeof CourtSystem !== 'undefined') CourtSystem.initWorld();
+    if (typeof WorldIntegritySystem !== 'undefined') {
+      WorldIntegritySystem.initWorld();
+      WorldIntegritySystem.runCheck({ repair: true, reason: 'load', silent: true });
+    }
     if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
   },
 

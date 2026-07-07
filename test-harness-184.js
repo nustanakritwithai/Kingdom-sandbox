@@ -161,7 +161,7 @@ try {
 // 10. save/load ui prefs
 run('SaveSystem.saveToLocalStorage("test184", true);');
 const payload = JSON.parse(storage.livingKingdomSandbox_save);
-if (payload.schemaVersion === '18.5' && payload.uiPrefs?.pages) ok('save schema 18.5 ui prefs');
+if ((payload.schemaVersion === '18.5' || payload.schemaVersion === '18.6') && payload.uiPrefs?.pages) ok('save schema ' + payload.schemaVersion + ' ui prefs');
 else if (payload.schemaVersion === '18.4' && payload.uiPrefs?.pages) ok('save schema 18.4 ui prefs');
 else fail('save ui prefs missing');
 run('UI.setView("characters"); SaveSystem.loadFromPayload(' + JSON.stringify(payload) + ');');

@@ -218,7 +218,7 @@ ok('mercenary employer ownership via siegeAuthority type');
 // 14. save/load
 run('SaveSystem.saveToLocalStorage("test184b", true);');
 const payload = JSON.parse(storage.livingKingdomSandbox_save);
-if (payload.schemaVersion === '18.5' && payload.world.siegeAuthorities) ok('save schema 18.5');
+if ((payload.schemaVersion === '18.5' || payload.schemaVersion === '18.6') && payload.world.siegeAuthorities) ok('save schema ' + payload.schemaVersion);
 else fail('save schema');
 run('world = null; SaveSystem.loadFromPayload(' + JSON.stringify(payload) + ');');
 const loaded = run(`({ orgs: world.organizations.length, claims: world.claims.length, owner: world.settlements.find(s=>s.type==='village')?.ownerOrganizationId })`);
