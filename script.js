@@ -140,7 +140,11 @@ function defaultOrganization(opt) {
     requirements: opt.requirements || {},
     benefits: opt.benefits || {},
     rules: opt.rules || {},
-    _legacyGuildId: opt._legacyGuildId || null
+    _legacyGuildId: opt._legacyGuildId || null,
+    sovereignty: opt.sovereignty || null,
+    vassals: (opt.vassals || []).slice(),
+    _crownFactionId: opt._crownFactionId || null,
+    _outlawRealm: opt._outlawRealm || false
   };
 }
 
@@ -189,7 +193,10 @@ function defaultWarband(opt) {
     history: (opt.history || []).slice(0, WARBAND_HISTORY_CAP),
     travel: null,
     pursueTargetId: opt.pursueTargetId || null,
-    _campDays: opt._campDays || 0
+    _campDays: opt._campDays || 0,
+    foundingReason: opt.foundingReason || null,
+    politicalMode: opt.politicalMode || (opt.organizationId ? 'guild_backed' : 'independent'),
+    siegeAuthorityId: opt.siegeAuthorityId || null
   };
 }
 
@@ -964,7 +971,14 @@ function createSettlement(opt) {
     // ── Phase 18: terrain / strategic value ──
     terrain: opt.terrain || null,
     strategicValue: opt.strategicValue != null ? opt.strategicValue : null,
-    siegeEquipment: { wallBonus: 0, watchtower: 0 }
+    siegeEquipment: { wallBonus: 0, watchtower: 0 },
+    ownerOrganizationId: opt.ownerOrganizationId || null,
+    localLordId: opt.localLordId || null,
+    vassalObligation: opt.vassalObligation || null,
+    captureSourceWarbandId: null,
+    captureDay: null,
+    taxRecipient: opt.taxRecipient || null,
+    legitimacy: opt.legitimacy != null ? opt.legitimacy : 50
   };
   if (!s.terrain) s.terrain = inferSettlementTerrain(s);
   if (s.strategicValue == null) s.strategicValue = settlementStrategicValue(s);
@@ -1202,6 +1216,7 @@ function generateWorld() {
     treaties: [], vassalContracts: [],
     guilds: [], warehouses: [], tradeContracts: [],
     organizations: [], recruitmentOffers: [], musterPoints: [], warbands: [], headquarters: [],
+    siegeAuthorities: [], claims: [], captureCredits: [], vassalGrants: [],
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
@@ -1375,6 +1390,7 @@ function generateWorld() {
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
   if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
   if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
+  if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
   if (typeof ObserverSystem !== 'undefined') {
     ObserverSystem.follow = null;
     ObserverSystem.updateFollowLabel();
@@ -3881,6 +3897,16 @@ const WarbandSystem = {
 
   tryRaid(wb, s) {
     if (!s || s.type === 'camp') return;
+    if (typeof SovereigntySystem !== 'undefined') {
+      const leader = getAgent(wb.leaderId);
+      const faction = getFaction(wb.factionId) || world.factions.find(f => !f.isBandit);
+      const u = this.warbandAsUnits(wb)[0];
+      const units = u ? [u] : [];
+      SovereigntySystem.resolveSettlementCapture(units, faction, leader, s, { warbandId: wb.id, warband: wb });
+      this.syncWarbandSize(wb);
+      wb.history.push({ day: world.day, text: `โจมตี ${s.name}` });
+      return;
+    }
     const u = this.warbandAsUnits(wb)[0];
     if (u) MilitarySystem.resolveRaid(u, s);
     this.syncWarbandSize(wb);
@@ -3947,6 +3973,778 @@ const WarbandSystem = {
     this.tickSupply();
     if (world.day % 2 === 0) this.tickEncounters();
     this.cleanupOrphans();
+  }
+};
+
+/* ═══════════ Phase 18.4B: Guild Sovereignty / City Ownership ═══════════ */
+
+const WARBAND_FOUNDING_REASONS = ['start_caravan', 'protect_trade_route', 'hunt_bandits', 'escort_contract', 'mercenary_work', 'refugee_survival', 'revenge_party', 'deserter_band', 'local_militia', 'bandit_gang', 'guild_detachment', 'noble_retinue'];
+const INDEPENDENT_WARBAND_TYPES = ['independent_caravan', 'escort_party', 'bounty_party', 'militia_patrol', 'mercenary_band', 'adventurer_party', 'bandit_gang', 'rebel_warband', 'guild_detachment', 'noble_retinue'];
+const REALM_TYPE_MAP = {
+  merchant_guild: 'trade_realm', mercenary_company: 'mercenary_realm', bandit_gang: 'outlaw_realm',
+  rebel_cell: 'rebel_realm', noble_retinue: 'noble_house', royal_army: 'kingdom',
+  militia_company: 'defense_league', caravan_company: 'trade_realm', town_guard: 'defense_league'
+};
+
+function defaultSovereignty(org) {
+  return {
+    status: 'unlanded',
+    realmName: org?.name || 'อาณาจักร',
+    rulerTitle: 'leader',
+    rulerId: org?.leaderId || null,
+    capitalSettlementId: null,
+    settlementIds: [],
+    vassalIds: [],
+    laws: {},
+    taxPolicy: { rate: 0.1, foodShare: 0.05 },
+    levyPolicy: { quotaPerSettlement: 4, callCooldown: 30 },
+    legitimacy: 40,
+    successionMode: 'appointment'
+  };
+}
+
+function defaultVassalObligation() {
+  return {
+    taxRateToOverlord: 0.15,
+    levyQuota: 4,
+    foodTribute: 5,
+    tradeContribution: 0.05,
+    defenseDuty: true,
+    autonomyLevel: 0.5,
+    lastPaidDay: 0,
+    missedPayments: 0
+  };
+}
+
+function defaultVassalRecord(agentId) {
+  return {
+    agentId,
+    settlementIds: [],
+    loyaltyToOverlord: 55,
+    ambition: 0.4,
+    militaryStrength: 0,
+    wealth: 0,
+    localSupport: 50,
+    grievances: [],
+    lastTributeDay: 0,
+    rebellionRisk: 0.05,
+    status: 'loyal'
+  };
+}
+
+function getSiegeAuthority(id) { return (world.siegeAuthorities || []).find(x => x.id === id); }
+function getClaim(id) { return (world.claims || []).find(x => x.id === id); }
+function getVassalGrant(id) { return (world.vassalGrants || []).find(x => x.id === id); }
+function getCaptureCredit(id) { return (world.captureCredits || []).find(x => x.id === id); }
+
+function getCrownOrganization(factionId) {
+  const f = getFaction(factionId);
+  if (!f) return null;
+  let org = (world.organizations || []).find(o => o._crownFactionId === factionId);
+  if (!org) {
+    org = createOrganization({
+      name: `มงกุฎ${f.name}`,
+      type: 'royal_army',
+      leaderId: f.rulerId,
+      founderId: f.rulerId,
+      factionId: f.id,
+      purpose: 'governance',
+      memberIds: f.rulerId ? [f.rulerId] : [],
+      _crownFactionId: f.id
+    });
+    org.sovereignty = defaultSovereignty(org);
+    org.sovereignty.status = 'landed';
+    org.sovereignty.rulerTitle = 'king';
+    SovereigntySystem.syncOrgSettlements(org);
+  }
+  return org;
+}
+
+const SovereigntySystem = {
+  initWorld() {
+    if (!world.siegeAuthorities) world.siegeAuthorities = [];
+    if (!world.claims) world.claims = [];
+    if (!world.captureCredits) world.captureCredits = [];
+    if (!world.vassalGrants) world.vassalGrants = [];
+    for (const org of (world.organizations || [])) {
+      if (!org.sovereignty) org.sovereignty = defaultSovereignty(org);
+      if (!org.vassals) org.vassals = [];
+      this.syncOrgSettlements(org);
+    }
+    for (const s of world.settlements) this.migrateSettlementOwnership(s);
+    for (const a of world.agents) {
+      if (!a.titles) a.titles = [];
+      if (!a.grievances) a.grievances = [];
+      if (!a.captureCreditIds) a.captureCreditIds = [];
+    }
+    for (const wb of (world.warbands || [])) {
+      if (!wb.foundingReason) wb.foundingReason = wb.organizationId ? 'guild_detachment' : 'local_militia';
+    }
+  },
+
+  migrateSettlementOwnership(s) {
+    if (s.type === 'camp') return;
+    if (!s.vassalObligation) s.vassalObligation = defaultVassalObligation();
+    if (s.ownerOrganizationId == null && s.factionId) {
+      const crown = (world.organizations || []).find(o => o._crownFactionId === s.factionId);
+      if (crown) s.ownerOrganizationId = crown.id;
+      else if (!s.ownerOrganizationId) {
+        const org = getCrownOrganization(s.factionId);
+        if (org) s.ownerOrganizationId = org.id;
+      }
+    }
+    if (!s.localLordId && s.governorId) s.localLordId = s.governorId;
+    if (!s.taxRecipient && s.ownerOrganizationId) s.taxRecipient = s.ownerOrganizationId;
+    if (s.ownerOrganizationId == null && s.type !== 'camp') {
+      const org = getCrownOrganization(s.factionId);
+      if (org) {
+        s.ownerOrganizationId = org.id;
+        s.taxRecipient = org.id;
+      }
+    }
+  },
+
+  syncOrgSettlements(org) {
+    if (!org.sovereignty) org.sovereignty = defaultSovereignty(org);
+    const owned = world.settlements.filter(s => s.ownerOrganizationId === org.id && s.type !== 'camp');
+    org.sovereignty.settlementIds = owned.map(s => s.id);
+    if (owned.length > 0) {
+      org.sovereignty.status = 'landed';
+      org.sovereignty.rulerId = org.leaderId;
+      const hasCastle = owned.some(s => s.type === 'castle' || s.type === 'fort');
+      org.sovereignty.rulerTitle = hasCastle || owned.length > 1 ? 'king' : 'lord';
+      org.sovereignty.realmName = org.sovereignty.realmName || org.name;
+      if (!org.sovereignty.capitalSettlementId) {
+        org.sovereignty.capitalSettlementId = owned.find(s => s.type === 'castle')?.id || owned[0]?.id;
+      }
+      org.sovereignty.legitimacy = clamp((org.sovereignty.legitimacy || 40) + owned.length * 2, 20, 95);
+    }
+  },
+
+  canFoundWarband(agent) {
+    if (!agent || !agent.alive) return { ok: false, reason: 'dead' };
+    if (agent.prisoner || agent.stats.health < 20) return { ok: false, reason: 'incapacitated' };
+    const leadership = agent.skills?.leadership || 0;
+    const ambition = agent.traits?.ambition || 0;
+    if (leadership < 1 && ambition < 0.45) return { ok: false, reason: 'not leader material' };
+    const followers = world.agents.filter(a => a.alive && a.id !== agent.id && (a.relationships?.[agent.id] || 0) > 25).length;
+    const wealth = agent.stats?.wealth || 0;
+    if (wealth < 15 && followers < 1) return { ok: false, reason: 'poor and alone' };
+    const mems = agentActiveMemberships(agent);
+    const blocked = mems.some(m => {
+      const org = getOrganization(m.organizationId);
+      return org && ['royal_army', 'town_guard'].includes(org.type) && m.status === 'active';
+    });
+    if (blocked) return { ok: false, reason: 'bound membership' };
+    return { ok: true, leadership, ambition, followers, wealth };
+  },
+
+  foundWarbandFromAgent(agent, reason, opt) {
+    opt = opt || {};
+    const check = this.canFoundWarband(agent);
+    if (!check.ok) return null;
+    reason = reason || 'local_militia';
+    const loc = agent.locationId;
+    const typeMap = {
+      start_caravan: 'independent_caravan', protect_trade_route: 'escort_party', hunt_bandits: 'bounty_party',
+      escort_contract: 'escort_party', mercenary_work: 'mercenary_band', refugee_survival: 'adventurer_party',
+      revenge_party: 'adventurer_party', deserter_band: 'bandit_gang', local_militia: 'militia_patrol',
+      bandit_gang: 'bandit_gang', guild_detachment: 'guild_detachment', noble_retinue: 'noble_retinue'
+    };
+    const wbType = typeMap[reason] || 'adventurer_party';
+    const followers = world.agents.filter(a => a.alive && !a.unitId && a.locationId === loc && (a.relationships?.[agent.id] || 0) > 20).slice(0, 4);
+    const memberIds = [agent.id, ...followers.map(f => f.id)];
+    const org = opt.organizationId ? getOrganization(opt.organizationId) : null;
+    const wb = WarbandSystem.createFromMembers(org, memberIds, {
+      name: opt.name || `กองของ${agent.name.split(' ')[0]}`,
+      type: wbType === 'independent_caravan' ? 'caravan_guard' : wbType === 'militia_patrol' ? 'militia' : wbType === 'mercenary_band' ? 'mercenary_company' : wbType === 'bandit_gang' ? 'bandit_gang' : 'adventurer_party',
+      locationId: loc,
+      leaderId: agent.id,
+      status: 'marching',
+      objective: { type: reason === 'hunt_bandits' ? 'hunt_bandits' : reason === 'start_caravan' ? 'escort_caravan' : 'patrol_route' },
+      food: memberIds.length * 3,
+      gold: Math.floor(agent.stats?.wealth || 0) * 0.2
+    });
+    if (wb) {
+      wb.foundingReason = reason;
+      wb.politicalMode = org ? 'guild_backed' : 'independent';
+      if (org && !org.activeWarbandIds.includes(wb.id)) org.activeWarbandIds.push(wb.id);
+      EventSystem.add('military', `⚔ ${agent.name} ตั้งกอง ${wb.name} (${reason})`);
+      Chronicle.add({ category: 'military', importance: 2, title: `⚔ ก่อตั้งกอง ${wb.name}`, description: `${agent.name} รวม ${memberIds.length} คน`, agents: [agent.id] });
+    }
+    return wb;
+  },
+
+  getWarbandAuthority(wb) {
+    if (!wb) return { mode: 'independent', canRaid: true, canSiege: false, canCapture: false, canHoldCity: false, captureOwnerOrgId: null };
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    const leader = getAgent(wb.leaderId);
+    const sa = wb.siegeAuthorityId ? getSiegeAuthority(wb.siegeAuthorityId) : null;
+    let mode = wb.politicalMode || 'independent';
+    if (org) {
+      if (org.type === 'royal_army') mode = 'royal_army';
+      else if (org.type === 'rebel_cell') mode = 'rebel_claimant';
+      else if (sa?.type === 'mercenary_contract') mode = 'mercenary_contract';
+      else mode = 'guild_backed';
+    }
+    if (wb.type === 'bandit_gang' && !org) mode = 'independent';
+    const canRaid = true;
+    let canSiege = false, canCapture = false, canHoldCity = false, captureOwnerOrgId = null, employerOrgId = null;
+    if (mode === 'royal_army' && org) {
+      canSiege = canCapture = canHoldCity = true;
+      captureOwnerOrgId = org.id;
+    } else if (mode === 'guild_backed' && org) {
+      const war = world.wars.find(w => !w.endDay && (w.attackerId === org.factionId || w.defenderId === org.factionId));
+      const hasGoal = war?.goal === 'capture_settlement' || org.purpose === 'conquest';
+      const officer = leader && org.memberIds.includes(leader.id) && (leader.skills?.leadership || 0) >= 2;
+      canSiege = !!(sa || hasGoal || officer);
+      canCapture = !!(sa || hasGoal);
+      canHoldCity = canCapture;
+      captureOwnerOrgId = org.id;
+    } else if (mode === 'mercenary_contract' && sa) {
+      canSiege = canCapture = true;
+      canHoldCity = true;
+      captureOwnerOrgId = sa.employerOrganizationId || sa.organizationId;
+      employerOrgId = captureOwnerOrgId;
+    } else if (mode === 'rebel_claimant' && org) {
+      const claim = (world.claims || []).find(c => c.organizationId === org.id && c.status === 'active');
+      canSiege = canCapture = !!claim;
+      canHoldCity = canCapture;
+      captureOwnerOrgId = org.id;
+    } else if (mode === 'independent' && org?.type === 'bandit_gang' && (org.sovereignty?.status === 'landed' || org._outlawRealm)) {
+      canSiege = canCapture = canHoldCity = true;
+      captureOwnerOrgId = org.id;
+    }
+    return { mode, canRaid, canSiege, canCapture, canHoldCity, captureOwnerOrgId, employerOrgId, organizationId: org?.id, siegeAuthority: sa };
+  },
+
+  canCaptureSettlement(wb, settlement) {
+    if (!wb || !settlement || settlement.type === 'camp') return false;
+    const auth = this.getWarbandAuthority(wb);
+    if (!auth.canCapture) return false;
+    if (auth.siegeAuthority && auth.siegeAuthority.targetSettlementId && auth.siegeAuthority.targetSettlementId !== settlement.id) return false;
+    if (auth.siegeAuthority && auth.siegeAuthority.status !== 'active') return false;
+  return true;
+  },
+
+  createSiegeAuthority(opt) {
+    opt = opt || {};
+    const sa = {
+      id: uid(),
+      type: opt.type || 'guild',
+      organizationId: opt.organizationId || null,
+      employerOrganizationId: opt.employerOrganizationId || null,
+      rulerId: opt.rulerId || null,
+      warGoalId: opt.warGoalId || null,
+      claimStrength: opt.claimStrength || 50,
+      authorizedWarbandIds: (opt.authorizedWarbandIds || []).slice(),
+      targetSettlementId: opt.targetSettlementId || null,
+      createdDay: world.day,
+      expiresDay: opt.expiresDay || world.day + 60,
+      status: 'active'
+    };
+    if (!world.siegeAuthorities) world.siegeAuthorities = [];
+    world.siegeAuthorities.push(sa);
+    for (const wid of sa.authorizedWarbandIds) {
+      const wb = getWarband(wid);
+      if (wb) wb.siegeAuthorityId = sa.id;
+    }
+    return sa;
+  },
+
+  authorizeWarbandSiege(org, warband, targetSettlementId) {
+    if (!org || !warband) return null;
+    const sa = this.createSiegeAuthority({
+      type: org.type === 'mercenary_company' ? 'mercenary_contract' : 'guild',
+      organizationId: org.id,
+      employerOrganizationId: org.id,
+      rulerId: org.leaderId,
+      authorizedWarbandIds: [warband.id],
+      targetSettlementId,
+      claimStrength: 60 + (org.reputation || 0) * 0.2
+    });
+    warband.siegeAuthorityId = sa.id;
+    warband.politicalMode = 'guild_backed';
+    OrganizationSystem.orgLog(org, `อนุมัติให้ ${warband.name} ล้อม${getSettlement(targetSettlementId)?.name || 'เป้าหมาย'}`);
+    return sa;
+  },
+
+  resolveSettlementCapture(attUnits, attFaction, commander, s, ctx) {
+    ctx = ctx || {};
+    const wb = ctx.warbandId ? getWarband(ctx.warbandId) : (ctx.warband || null);
+    const army = ctx.armyId ? getArmy(ctx.armyId) : null;
+    if (wb && !this.canCaptureSettlement(wb, s)) {
+      const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
+      const defUnits = garrison ? [garrison] : [];
+      let defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 + (s.type === 'fort' ? 50 : s.type === 'castle' ? 90 : 0);
+      const u = WarbandSystem.warbandAsUnits(wb)[0];
+      const att = u ? [u] : attUnits;
+      const result = MilitarySystem.battle(att, defUnits, {
+        defenseBonus, label: s.name, kind: 'capture', settlementId: s.id,
+        atkFactionId: attFaction?.id, defFactionId: s.factionId
+      });
+      if (result.attackerWins) this.handleUnauthorizedVictory(wb, s, commander || getAgent(wb.leaderId), result);
+      else EventSystem.add('war', `🛡 ${s.name} ต้าน${wb.name}ไว้ได้`);
+      return false;
+    }
+    if (wb && this.canCaptureSettlement(wb, s)) {
+      const captured = MilitarySystem._resolveCaptureBattle(attUnits, attFaction, commander, s);
+      if (captured) return this.applyPermanentCapture({ warband: wb, commander, settlement: s, attFaction });
+      return false;
+    }
+    if (army || !wb) {
+      const org = attFaction ? getCrownOrganization(attFaction.id) : null;
+      if (org && army) {
+        const sa = this.createSiegeAuthority({
+          type: 'kingdom', organizationId: org.id, rulerId: commander?.id,
+          authorizedWarbandIds: [], targetSettlementId: s.id, expiresDay: world.day + 30
+        });
+      }
+      const captured = MilitarySystem._resolveCaptureBattle(attUnits, attFaction, commander, s);
+      if (captured && org) return this.applyPermanentCapture({ warband: null, commander, settlement: s, attFaction, ownerOrg: org, army });
+      return captured;
+    }
+    return false;
+  },
+
+  handleUnauthorizedVictory(wb, s, commander, battleResult) {
+    const leader = commander || getAgent(wb?.leaderId);
+    const lootGold = Math.floor((s.treasury || 0) * 0.15);
+    s.treasury = Math.max(0, (s.treasury || 0) - lootGold);
+    s.stock.food = Math.max(0, (s.stock.food || 0) - randInt(5, 20));
+    s.raidedRecently = (s.raidedRecently || 0) + 1;
+    s.timesRaided++;
+    if (leader) {
+      leader.stats.wealth = (leader.stats.wealth || 0) + lootGold;
+      addDeed(leader, `ปล้น${s.name} (ไม่มีสิทธิ์ถือครอง)`, 5);
+    }
+    wb.history.push({ day: world.day, text: `ปล้น${s.name} แล้วถอนตัว — ไม่มีสิทธิ์ถือครอง` });
+    EventSystem.add('war', `⚠ ${wb.name} ชนะที่${s.name} แต่ไม่มีสิทธิ์ถือครอง — ปล้นแล้วถอนตัว`);
+    Chronicle.add({
+      category: 'war', importance: 3,
+      title: `⚠ ${wb.name} ปล้น${s.name}`,
+      description: 'กองไม่มี siege authority จึงไม่เปลี่ยนเจ้าของถาวร',
+      agents: leader ? [leader.id] : [], settlements: [s.id]
+    });
+    if (leader && chance(0.25)) this.createClaim({
+      claimantAgentId: leader.id, settlementId: s.id,
+      type: 'conqueror', strength: 35 + (leader.fame || 0) * 0.5,
+      reason: 'ยึดได้แต่ไม่ได้รับรางวัล'
+    });
+    const check = this.canFoundGuildFromWarband(wb);
+    if (check.ok && chance(0.15)) this.foundGuildFromWarband(wb);
+    else if (chance(0.1) && leader) {
+      leader.grievances = leader.grievances || [];
+      leader.grievances.push({ day: world.day, type: 'denied_capture', settlementId: s.id, text: `ถูกปฏิเสธสิทธิ์ถือ${s.name}` });
+    }
+    return false;
+  },
+
+  applyPermanentCapture(ctx) {
+    const { warband: wb, commander, settlement: s, attFaction, ownerOrg, army } = ctx;
+    const auth = wb ? this.getWarbandAuthority(wb) : null;
+    let ownerOrgId = ownerOrg?.id || auth?.captureOwnerOrgId;
+    let org = ownerOrgId ? getOrganization(ownerOrgId) : null;
+    if (!org && attFaction) org = getCrownOrganization(attFaction.id);
+    if (!org) return false;
+    ownerOrgId = org.id;
+    const leader = commander || getAgent(wb?.leaderId) || getAgent(org.leaderId);
+    const oldFaction = getFaction(s.factionId);
+    if (s.ownerId && getAgent(s.ownerId)) s.pastRulers.push(getAgent(s.ownerId).name);
+    s.factionId = org.factionId || attFaction?.id || s.factionId;
+    s.ownerOrganizationId = ownerOrgId;
+    s.taxRecipient = ownerOrgId;
+    s.rulerId = org.leaderId;
+    s.governorId = leader?.id || org.leaderId;
+    s.localLordId = s.governorId;
+    s.captureSourceWarbandId = wb?.id || null;
+    s.captureDay = world.day;
+    s.lastCapturedDay = world.day;
+    s.timesCaptured++;
+    s.loyalty = 28;
+    s.unrest = clamp((s.unrest || 0) + 12, 0, 100);
+    s.vassalObligation = s.vassalObligation || defaultVassalObligation();
+    const lootGold = Math.floor((s.treasury || 0) * 0.25);
+    s.treasury -= lootGold;
+    org.wealth = (org.wealth || 0) + lootGold;
+    const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
+    if (garrison) {
+      for (const m of unitMembers(garrison)) { m.unitId = null; m.profession = 'unemployed'; }
+      world.units = world.units.filter(x => x.id !== garrison.id);
+      s.garrisonUnitId = null;
+    }
+    const credit = this.recordCaptureCredit({
+      settlementId: s.id, warbandId: wb?.id, commanderId: leader?.id,
+      ownerOrganizationId: ownerOrgId,
+      participatingAgentIds: wb ? wb.memberIds.slice() : (army ? army.unitIds.flatMap(uid => unitMembers(getUnit(uid)).map(m => m.id)) : []),
+      siegeAuthorityId: wb?.siegeAuthorityId || null
+    });
+    this.createClaim({
+      organizationId: org.id, settlementId: s.id, claimantAgentId: org.leaderId,
+      type: 'conqueror', strength: 55, reason: `ยึด${s.name}โดย${org.name}`
+    });
+    if (leader && leader.id !== org.leaderId) {
+      leader.fame = (leader.fame || 0) + 8;
+      addDeed(leader, `นำกองยึด${s.name}ให้${org.name}`, 12);
+      if (chance(0.35)) this.grantSettlement(org.leaderId, s.id, leader.id, 'capture_reward');
+    }
+    this.updateOrganizationSovereignty(org);
+    EventSystem.add('war', `🏰 ${org.name} ยึด${s.name}ถาวร${leader ? ` — เครดิต ${leader.name}` : ''}`);
+    settlementHistory(s, `เป็นของ${org.name} โดย${leader?.name || 'กองทัพ'}`);
+    Chronicle.add({
+      category: 'war', importance: 5,
+      title: `🏰 ${s.name} ตกเป็นของ${org.name}`,
+      description: `${leader?.name || org.name} ยึดเมืองให้องค์กร — ไม่ใช่ warband ส่วนตัว`,
+      agents: [leader?.id, org.leaderId].filter(Boolean), settlements: [s.id]
+    });
+    if (oldFaction && !oldFaction.isBandit) checkFactionCollapse(oldFaction);
+    const war = oldFaction ? activeWarBetween(org.factionId, oldFaction.id) : null;
+    if (war) war.captured.push({ day: world.day, id: s.id, name: s.name, byFactionId: org.factionId, organizationId: org.id });
+    if (typeof ObserverSystem !== 'undefined') {
+      ObserverSystem.onMajorEvent('city_captured', `${s.name} ของ${org.name}`, { settlements: [s.id], agents: [leader?.id].filter(Boolean) });
+    }
+    if (typeof AgentMemorySystem !== 'undefined' && leader) AgentMemorySystem.onCityCaptured(s, leader.id, oldFaction?.id);
+    if (typeof UIIndexes !== 'undefined') UIIndexes.markDirty();
+    return true;
+  },
+
+  recordCaptureCredit(opt) {
+    const credit = {
+      id: uid(),
+      settlementId: opt.settlementId,
+      day: world.day,
+      warbandId: opt.warbandId || null,
+      commanderId: opt.commanderId || null,
+      participatingAgentIds: (opt.participatingAgentIds || []).slice(),
+      ownerOrganizationId: opt.ownerOrganizationId,
+      casualties: opt.casualties || 0,
+      notableAgents: opt.notableAgents || [],
+      siegeAuthorityId: opt.siegeAuthorityId || null
+    };
+    if (!world.captureCredits) world.captureCredits = [];
+    world.captureCredits.push(credit);
+    if (world.captureCredits.length > 200) world.captureCredits.shift();
+    const cmd = getAgent(opt.commanderId);
+    if (cmd) {
+      cmd.captureCreditIds = cmd.captureCreditIds || [];
+      cmd.captureCreditIds.push(credit.id);
+      cmd.fame = (cmd.fame || 0) + 5;
+    }
+    return credit;
+  },
+
+  updateOrganizationSovereignty(org) {
+    if (!org) return;
+    if (!org.sovereignty) org.sovereignty = defaultSovereignty(org);
+    this.syncOrgSettlements(org);
+    const owned = org.sovereignty.settlementIds || [];
+    if (owned.length === 0) {
+      org.sovereignty.status = 'unlanded';
+      return;
+    }
+    org.sovereignty.status = 'landed';
+    org.sovereignty.rulerId = org.leaderId;
+    const leader = getAgent(org.leaderId);
+    const hasCastle = owned.some(id => ['castle', 'fort'].includes(getSettlement(id)?.type));
+    const wasUnlanded = org._wasLanded !== true;
+    org.sovereignty.rulerTitle = hasCastle || owned.length > 1 ? 'king' : 'lord';
+    org.sovereignty.realmType = REALM_TYPE_MAP[org.type] || 'realm';
+    if (!org.sovereignty.capitalSettlementId) org.sovereignty.capitalSettlementId = owned.find(id => getSettlement(id)?.type === 'castle') || owned[0];
+    if (leader) {
+      leader.titles = leader.titles || [];
+      const title = org.sovereignty.rulerTitle === 'king' ? `ราชาแห่ง${org.sovereignty.realmName}` : `เจ้าเมือง${org.name}`;
+      if (!leader.titles.some(t => t.settlementId || t.orgId === org.id)) {
+        leader.titles.push({ day: world.day, title, orgId: org.id, type: org.sovereignty.rulerTitle });
+      }
+      if (!RULER_PROFS.has(leader.profession)) { leader.profession = 'lord'; leader.rank = 'lord'; }
+    }
+    if (wasUnlanded && owned.length >= 1) {
+      org._wasLanded = true;
+      Chronicle.add({
+        category: 'legend', importance: 5,
+        title: `👑 ${org.name} กลายเป็นรัฐ`,
+        description: `${leader?.name || 'ผู้นำ'} ได้รับการเรียกขานเป็น${org.sovereignty.rulerTitle === 'king' ? 'ราชา' : 'เจ้าเมือง'}`,
+        agents: [org.leaderId].filter(Boolean), settlements: owned.slice(0, 3)
+      });
+    }
+  },
+
+  grantSettlement(rulerId, settlementId, targetAgentId, reason) {
+    const ruler = getAgent(rulerId);
+    const target = getAgent(targetAgentId);
+    const s = getSettlement(settlementId);
+    if (!ruler || !target || !target.alive || !s) return null;
+    const org = getOrganization(s.ownerOrganizationId);
+    if (!org || org.leaderId !== rulerId) return null;
+    const grant = {
+      id: uid(),
+      settlementId: s.id,
+      ownerOrganizationId: org.id,
+      overlordId: rulerId,
+      grantedToAgentId: targetAgentId,
+      grantedDay: world.day,
+      title: `เจ้าเมือง${s.name}`,
+      taxShare: 0.7,
+      levyObligation: defaultVassalObligation().levyQuota,
+      autonomy: 0.55,
+      loyalty: 60,
+      reason: reason || 'grant'
+    };
+    if (!world.vassalGrants) world.vassalGrants = [];
+    world.vassalGrants.push(grant);
+    s.governorId = targetAgentId;
+    s.localLordId = targetAgentId;
+    s.vassalObligation = Object.assign(defaultVassalObligation(), s.vassalObligation, {
+      taxRateToOverlord: 0.12,
+      autonomyLevel: grant.autonomy,
+      lastPaidDay: world.day
+    });
+    target.titles = target.titles || [];
+    target.titles.push({ day: world.day, title: grant.title, settlementId: s.id, orgId: org.id, type: 'vassal_lord' });
+    if (!target.memberships) target.memberships = [];
+    if (!target.memberships.some(m => m.organizationId === org.id)) {
+      target.memberships.push(defaultOrgMembership(org.id, 'lord', 'officer', world.day, { status: 'active', loyalty: 65, reasonJoined: reason }));
+    } else {
+      const m = target.memberships.find(x => x.organizationId === org.id);
+      if (m) { m.role = 'lord'; m.rank = 'officer'; }
+    }
+    if (!org.vassals) org.vassals = [];
+    let vr = org.vassals.find(v => v.agentId === targetAgentId);
+    if (!vr) { vr = defaultVassalRecord(targetAgentId); org.vassals.push(vr); }
+    vr.settlementIds = [...new Set([...vr.settlementIds, s.id])];
+    vr.loyaltyToOverlord = clamp(vr.loyaltyToOverlord + 15, 0, 100);
+    vr.status = 'loyal';
+    OrganizationSystem.orgLog(org, `มอบ${s.name}ให้${target.name}`);
+    Chronicle.add({
+      category: 'politics', importance: 4,
+      title: `🏛 มอบ${s.name}ให้${target.name}`,
+      description: `${ruler.name} แต่งตั้งเจ้าเมืองภายใต้${org.name}`,
+      agents: [rulerId, targetAgentId], settlements: [s.id]
+    });
+    return grant;
+  },
+
+  revokeGrant(grantId) {
+    const g = getVassalGrant(grantId);
+    if (!g) return false;
+    const s = getSettlement(g.settlementId);
+    const org = getOrganization(g.ownerOrganizationId);
+    if (s) { s.governorId = org?.leaderId; s.localLordId = org?.leaderId; }
+    g.status = 'revoked';
+    g.revokedDay = world.day;
+    Chronicle.add({ category: 'politics', importance: 3, title: `📜 เพิกถอน${s?.name}`, description: `ยกเลิกการมอบเมือง`, settlements: [g.settlementId] });
+    return true;
+  },
+
+  createClaim(opt) {
+    const c = {
+      id: uid(),
+      claimantAgentId: opt.claimantAgentId || null,
+      settlementId: opt.settlementId || null,
+      organizationId: opt.organizationId || null,
+      type: opt.type || 'conqueror',
+      strength: opt.strength || 30,
+      createdDay: world.day,
+      reason: opt.reason || '',
+      status: 'active'
+    };
+    if (!world.claims) world.claims = [];
+    world.claims.push(c);
+    return c;
+  },
+
+  canFoundGuildFromWarband(wb) {
+    const n = warbandMembers(wb).length;
+    const leader = getAgent(wb?.leaderId);
+    if (!wb || !leader || n < 8) return { ok: false, reason: 'too small' };
+    if (wb.organizationId && getOrganization(wb.organizationId)?.type !== 'adventurer_party') return { ok: false, reason: 'already guild' };
+    const wealth = (wb.gold || 0) + (leader.stats?.wealth || 0);
+    if ((leader.skills?.leadership || 0) < 2 && (leader.traits?.ambition || 0) < 0.55) return { ok: false, reason: 'weak leader' };
+    if (wealth < 40 && n < 12) return { ok: false, reason: 'poor' };
+    return { ok: true, leader, size: n };
+  },
+
+  foundGuildFromWarband(wb) {
+    const check = this.canFoundGuildFromWarband(wb);
+    if (!check.ok) return null;
+    const leader = check.leader;
+    const typeMap = {
+      bandit_gang: 'bandit_gang', caravan_guard: 'caravan_company', mercenary_company: 'mercenary_company',
+      militia: 'militia_company', rebel_warband: 'rebel_cell', adventurer_party: 'adventurer_party'
+    };
+    const orgType = typeMap[wb.type] || 'adventurer_party';
+    const org = createOrganization({
+      name: `${wb.name} สมาคม`,
+      type: orgType,
+      founderId: leader.id,
+      leaderId: leader.id,
+      factionId: wb.factionId,
+      homeSettlementId: wb.locationId,
+      memberIds: wb.memberIds.slice(),
+      wealth: wb.gold || 0,
+      foodReserve: wb.food || 0,
+      purpose: wb.type === 'bandit_gang' ? 'outlaw' : 'trade'
+    });
+    wb.organizationId = org.id;
+    wb.politicalMode = 'guild_backed';
+    if (!org.activeWarbandIds.includes(wb.id)) org.activeWarbandIds.push(wb.id);
+    for (const id of wb.memberIds) {
+      const a = getAgent(id);
+      if (!a) continue;
+      if (!a.memberships) a.memberships = [];
+      if (!a.memberships.some(m => m.organizationId === org.id)) {
+        a.memberships.push(defaultOrgMembership(org.id, id === leader.id ? 'leader' : 'member', id === leader.id ? 'leader' : 'member', world.day));
+      }
+    }
+    createHeadquarters({ organizationId: org.id, settlementId: wb.locationId, type: orgType === 'bandit_gang' ? 'hideout' : 'guild_hall', beds: 6, security: 40, upkeepCost: 2 });
+    OrganizationSystem.orgLog(org, `ก่อตั้งจากกอง ${wb.name}`);
+    Chronicle.add({ category: 'guild', importance: 4, title: `🏛 ${org.name} ก่อตั้งจากกอง`, description: `${leader.name} รวม ${wb.memberIds.length} คน`, agents: [leader.id] });
+    return org;
+  },
+
+  convertBanditToOutlawRealm(org) {
+    if (!org || org.type !== 'bandit_gang') return false;
+    org._outlawRealm = true;
+    org.sovereignty = org.sovereignty || defaultSovereignty(org);
+    org.sovereignty.realmType = 'outlaw_realm';
+    org.purpose = 'outlaw';
+    this.updateOrganizationSovereignty(org);
+    Chronicle.add({ category: 'rebellion', importance: 4, title: `☠ ${org.name} กลายเป็น Outlaw Realm`, description: 'กลุ่มโจรยกระดับเป็นรัฐนอกกฎหมาย' });
+    return true;
+  },
+
+  callVassalLevy(org, settlementId) {
+    const s = getSettlement(settlementId);
+    if (!s || s.ownerOrganizationId !== org.id) return null;
+    const lord = getAgent(s.localLordId || s.governorId);
+    if (!lord) return null;
+    return OrganizationSystem.postRecruitmentOffer(org, {
+      settlementId: s.id,
+      type: 'militia_call',
+      roleNeeded: 'militia',
+      quantityNeeded: s.vassalObligation?.levyQuota || 4,
+      issuerId: lord.id
+    });
+  },
+
+  tickVassalObligations() {
+    for (const org of (world.organizations || [])) {
+      if (!org.sovereignty || org.sovereignty.status !== 'landed') continue;
+      for (const sid of org.sovereignty.settlementIds || []) {
+        const s = getSettlement(sid);
+        if (!s || !s.vassalObligation) continue;
+        const ob = s.vassalObligation;
+        if (world.day - (ob.lastPaidDay || 0) < 10) continue;
+        const tax = Math.floor((s.treasury || 0) * ob.taxRateToOverlord);
+        const food = Math.min(ob.foodTribute, s.stock?.food || 0);
+        const canPay = s.prosperity > 25 && s.unrest < 70;
+        if (canPay && tax > 0) {
+          s.treasury -= tax;
+          org.wealth = (org.wealth || 0) + tax;
+          s.stock.food -= food;
+          org.foodReserve = (org.foodReserve || 0) + food;
+          ob.lastPaidDay = world.day;
+          ob.missedPayments = 0;
+        } else {
+          ob.missedPayments = (ob.missedPayments || 0) + 1;
+          s.unrest = clamp(s.unrest + 3, 0, 100);
+        }
+      }
+    }
+  },
+
+  tickVassalLoyalty() {
+    for (const org of (world.organizations || [])) {
+      if (!org.vassals?.length) continue;
+      const overlord = getAgent(org.leaderId);
+      for (const v of org.vassals) {
+        const agent = getAgent(v.agentId);
+        if (!agent || !agent.alive) { v.status = 'inactive'; continue; }
+        let loyalty = v.loyaltyToOverlord || 50;
+        const rel = overlord ? (agent.relationships?.[overlord.id] || 0) : 0;
+        loyalty += rel * 0.05;
+        for (const sid of v.settlementIds) {
+          const s = getSettlement(sid);
+          if (s?.vassalObligation?.missedPayments > 2) loyalty -= 5;
+          if (s?.unrest > 60) loyalty -= 3;
+        }
+        if ((agent.grievances || []).some(g => g.type === 'denied_capture' || g.type === 'high_tribute')) loyalty -= 8;
+        if ((agent.traits?.ambition || 0) > 0.75) loyalty -= 4;
+        v.loyaltyToOverlord = clamp(loyalty, 0, 100);
+        v.rebellionRisk = clamp((100 - v.loyaltyToOverlord) / 100 + (agent.traits?.ambition || 0) * 0.3, 0, 1);
+        if (v.loyaltyToOverlord < 25) v.status = 'defiant';
+        else if (v.loyaltyToOverlord < 45) v.status = 'wavering';
+        else v.status = 'loyal';
+        if (v.rebellionRisk > 0.65 && chance(0.08)) this.triggerVassalRebellion(org, v);
+      }
+    }
+  },
+
+  triggerVassalRebellion(org, vassalRec) {
+    const agent = getAgent(vassalRec.agentId);
+    if (!agent) return;
+    vassalRec.status = 'rebelling';
+    agent.grievances = agent.grievances || [];
+    agent.grievances.push({ day: world.day, type: 'rebellion', text: `กบฏต่อ${org.name}` });
+    for (const sid of vassalRec.settlementIds) {
+      const s = getSettlement(sid);
+      if (s) { s.unrest = clamp(s.unrest + 25, 0, 100); s.loyalty = clamp(s.loyalty - 20, 0, 100); }
+    }
+    EventSystem.add('politics', `🔥 ${agent.name} กบฏต่อ${org.name}!`);
+    Chronicle.add({ category: 'rebellion', importance: 4, title: `🔥 Vassal กบฏ`, description: `${agent.name} ปฏิเสธอำนาจ${org.name}`, agents: [agent.id] });
+  },
+
+  tickDaily() {
+    if (world.day % 10 === 0) this.tickVassalObligations();
+    if (world.day % 10 === 3) this.tickVassalLoyalty();
+    if (world.day % 15 === 0) this.tickWarbandFoundingAI();
+    if (world.day % 20 === 0) this.tickGuildLeaderAI();
+    for (const sa of (world.siegeAuthorities || [])) {
+      if (sa.expiresDay < world.day) sa.status = 'expired';
+    }
+  },
+
+  tickWarbandFoundingAI() {
+    const candidates = world.agents.filter(a => a.alive && !a.unitId && (a.skills?.leadership || 0) >= 2 && !(world.warbands || []).some(w => w.leaderId === a.id));
+    if (!candidates.length || chance(0.7)) return;
+    const a = pick(candidates);
+    const check = this.canFoundWarband(a);
+    if (!check.ok) return;
+    const reason = a.profession === 'bandit' ? 'bandit_gang' : a.profession === 'trader' ? 'start_caravan' : pick(['hunt_bandits', 'local_militia', 'mercenary_work']);
+    if (chance(0.12)) this.foundWarbandFromAgent(a, reason);
+  },
+
+  tickGuildLeaderAI() {
+    for (const org of (world.organizations || []).filter(o => o.sovereignty?.status === 'landed')) {
+      const leader = getAgent(org.leaderId);
+      if (!leader) continue;
+      const credits = (world.captureCredits || []).filter(c => c.ownerOrganizationId === org.id && world.day - c.day < 30);
+      for (const cr of credits) {
+        const cmd = getAgent(cr.commanderId);
+        if (!cmd || cmd.id === leader.id) continue;
+        const granted = (world.vassalGrants || []).some(g => g.grantedToAgentId === cmd.id && g.settlementId === cr.settlementId);
+        if (!granted && chance(0.25)) this.grantSettlement(leader.id, cr.settlementId, cmd.id, 'capture_reward');
+        else if (!granted && chance(0.15)) {
+          cmd.grievances = cmd.grievances || [];
+          cmd.grievances.push({ day: world.day, type: 'denied_reward', settlementId: cr.settlementId, text: `ไม่ได้รับ${getSettlement(cr.settlementId)?.name}` });
+        }
+      }
+    }
+  },
+
+  validateNoGhostOwners() {
+    for (const s of world.settlements) {
+      if (s.type === 'camp') continue;
+      if (!s.ownerOrganizationId) this.migrateSettlementOwnership(s);
+      if (!s.ownerOrganizationId) {
+        const org = getCrownOrganization(s.factionId);
+        if (org) { s.ownerOrganizationId = org.id; s.taxRecipient = org.id; }
+      }
+    }
+    for (const wb of (world.warbands || [])) {
+      const owned = world.settlements.filter(s => s.captureSourceWarbandId === wb.id && s.ownerOrganizationId == null);
+      for (const s of owned) this.migrateSettlementOwnership(s);
+    }
   }
 };
 
@@ -7246,7 +8044,32 @@ const MilitarySystem = {
   },
 
   /* ── กองทัพโจมตีเพื่อยึดครอง ── */
-  resolveCapture(attUnits, attFaction, commander, s) {
+  resolveCapture(attUnits, attFaction, commander, s, ctx) {
+    if (typeof SovereigntySystem !== 'undefined') {
+      return SovereigntySystem.resolveSettlementCapture(attUnits, attFaction, commander, s, ctx || {});
+    }
+    return this._resolveCaptureBattle(attUnits, attFaction, commander, s);
+  },
+
+  _resolveCaptureBattle(attUnits, attFaction, commander, s) {
+    const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
+    const defUnits = garrison ? [garrison] : [];
+    let defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 +
+      (s.type === 'fort' ? 50 : s.type === 'castle' ? 90 : 0);
+    const ar = attUnits[0]?.armyId ? getArmy(attUnits[0].armyId) : null;
+    if (ar && typeof CampaignWarfareSystem !== 'undefined') defenseBonus += CampaignWarfareSystem.siegeDefenseBonus(s, ar);
+    const oldFaction = getFaction(s.factionId);
+    const hateOpen = oldFaction && (s.sentiment?.hatedFactions?.[oldFaction.id] || 0) > 25;
+    const gatesOpen = (s.unrest > 65 && s.loyalty < 30 || hateOpen) && chance(0.4 + (hateOpen ? 0.25 : 0));
+    const result = gatesOpen ? { attackerWins: true, atkResult: { dead: 0 }, defResult: { dead: 0 } }
+      : this.battle(attUnits, defUnits, {
+          defenseBonus, label: s.name, kind: 'capture', settlementId: s.id,
+          atkFactionId: attFaction?.id, defFactionId: s.factionId
+        });
+    return !!result.attackerWins;
+  },
+
+  _legacyResolveCapture(attUnits, attFaction, commander, s) {
     const garrison = s.garrisonUnitId ? getUnit(s.garrisonUnitId) : null;
     const defUnits = garrison ? [garrison] : [];
     let defenseBonus = (s.buildings.includes('Wall') ? 60 : 0) + s.security * 0.5 +
@@ -7573,7 +8396,7 @@ const MilitarySystem = {
             continue;
           }
           const oldFactionId = target.factionId;
-          const captured = this.resolveCapture(units, faction, commander || getAgent(units[0].leaderId), target);
+          const captured = this.resolveCapture(units, faction, commander || getAgent(units[0].leaderId), target, { armyId: ar?.id });
           target.siege = null;
           if (captured) {
             const war = oldFactionId ? activeWarBetween(ar.factionId, oldFactionId) : null;
@@ -7617,7 +8440,7 @@ const MilitarySystem = {
         const oldFactionId = s.factionId;
         s.siege = null;
         if (faction && commander) {
-          const captured = this.resolveCapture(ar.unitIds.map(getUnit).filter(Boolean), faction, commander, s);
+          const captured = this.resolveCapture(ar.unitIds.map(getUnit).filter(Boolean), faction, commander, s, { armyId: ar.id });
           if (captured) {
             const war = oldFactionId ? activeWarBetween(ar.factionId, oldFactionId) : null;
             if (war) endWar(war, ar.factionId, `${s.name}ยอมจำนนหลังถูกล้อม ${siegeDays} วัน`);
@@ -8832,6 +9655,10 @@ function simulateDay() {
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
   if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.tickDaily();
   if (typeof WarbandSystem !== 'undefined') WarbandSystem.tickDaily();
+  if (typeof SovereigntySystem !== 'undefined') {
+    SovereigntySystem.tickDaily();
+    if (world.day % 50 === 0) SovereigntySystem.validateNoGhostOwners();
+  }
   if (typeof TextCombatCore !== 'undefined') TextCombatCore.tickInjuries();
 
   // เติม garrison จากทหารว่าง
@@ -11674,6 +12501,25 @@ const UI = {
       }
       html += `</div>`;
     }
+    if (a.titles?.length) {
+      html += `<div class="insp-section"><h4>Titles & Claims</h4>`;
+      for (const t of a.titles.slice(-5).reverse()) html += this.kv(t.title || t.type, `Day ${t.day}`);
+      html += `</div>`;
+    }
+    const claims = (world.claims || []).filter(c => c.claimantAgentId === a.id && c.status === 'active');
+    if (claims.length) {
+      html += `<div class="insp-section"><h4>Claims</h4>`;
+      for (const c of claims) html += this.kv(getSettlement(c.settlementId)?.name || '?', `${c.type} (${fmt(c.strength)})`);
+      html += `</div>`;
+    }
+    if (a.captureCreditIds?.length) {
+      const credits = a.captureCreditIds.map(getCaptureCredit).filter(Boolean).slice(-3);
+      if (credits.length) {
+        html += `<div class="insp-section"><h4>Capture Credits</h4>`;
+        for (const cr of credits) html += this.kv(`Day ${cr.day}`, getSettlement(cr.settlementId)?.name || '?');
+        html += `</div>`;
+      }
+    }
     return html;
   },
 
@@ -11690,6 +12536,14 @@ const UI = {
     html += this.kv('ฝ่าย', f ? this.link('faction', f.id, `<span style="color:${f.color}">■</span> ${f.name}`) : '—');
     html += this.kv('เจ้าของ', owner && owner.alive ? this.link('agent', owner.id, owner.name) : '—');
     html += this.kv('ผู้ปกครอง', gov && gov.alive ? this.link('agent', gov.id, gov.name) : '—');
+    const ownerOrg = s.ownerOrganizationId ? getOrganization(s.ownerOrganizationId) : null;
+    const localLord = s.localLordId ? getAgent(s.localLordId) : null;
+    if (ownerOrg) html += this.kv('Owner Organization', this.link('organization', ownerOrg.id, ownerOrg.name));
+    if (localLord) html += this.kv('Local Lord', this.link('agent', localLord.id, localLord.name));
+    if (s.vassalObligation) html += this.kv('Tax to overlord', fmt((s.vassalObligation.taxRateToOverlord || 0) * 100) + '%');
+    if (s.legitimacy != null) html += this.kv('Legitimacy', fmt(s.legitimacy), s.legitimacy < 35 ? 'bad' : 'good');
+    const claims = (world.claims || []).filter(c => c.settlementId === s.id && c.status === 'active');
+    if (claims.length) html += this.kv('Claimants', claims.length, 'warn');
     if (gov && gov.gov) {
       html += this.kv('· loyalty ของ governor', fmt(gov.gov.loyalty, 2), gov.gov.loyalty < 0.4 ? 'bad' : '');
       html += this.kv('· ambition', fmt(gov.gov.ambition, 2), gov.gov.ambition > 0.7 ? 'warn' : '');
@@ -12132,6 +12986,18 @@ const UI = {
     html += this.kv('Avg loyalty', fmt(avgLoyalty, 1), avgLoyalty < 30 ? 'bad' : 'good');
     html += this.kv('Warbands', org.activeWarbandIds.length);
     html += `</div>`;
+    if (org.sovereignty) {
+      const sov = org.sovereignty;
+      html += `<div class="insp-section"><h4>Sovereignty</h4>`;
+      html += this.kv('Status', sov.status);
+      html += this.kv('Realm', sov.realmName || org.name);
+      html += this.kv('Ruler title', sov.rulerTitle || '—');
+      html += this.kv('Capital', sov.capitalSettlementId ? this.link('settlement', sov.capitalSettlementId, getSettlement(sov.capitalSettlementId)?.name || '?') : '—');
+      html += this.kv('Settlements owned', (sov.settlementIds || []).length);
+      html += this.kv('Vassals', (org.vassals || []).filter(v => v.status !== 'inactive').length);
+      html += this.kv('Legitimacy', fmt(sov.legitimacy || 0), (sov.legitimacy || 0) < 35 ? 'bad' : 'good');
+      html += `</div>`;
+    }
     const offers = world.recruitmentOffers.filter(o => o.organizationId === org.id && o.status === 'open');
     if (offers.length) {
       html += `<div class="insp-section"><h4>Recruitment</h4>`;
@@ -12169,6 +13035,17 @@ const UI = {
     html += this.kv('Fatigue', fmt(wb.fatigue)) + this.bar(wb.fatigue, '#ff7043');
     html += this.kv('Wounded', wb.woundedCount || 0);
     html += `</div>`;
+    if (typeof SovereigntySystem !== 'undefined') {
+      const auth = SovereigntySystem.getWarbandAuthority(wb);
+      html += `<div class="insp-section"><h4>Political Authority</h4>`;
+      html += this.kv('Mode', auth.mode);
+      html += this.kv('Can raid', auth.canRaid ? 'yes' : 'no');
+      html += this.kv('Can siege', auth.canSiege ? 'yes' : 'no', auth.canSiege ? 'warn' : '');
+      html += this.kv('Can capture', auth.canCapture ? 'yes' : 'no', auth.canCapture ? 'warn' : '');
+      html += this.kv('Capture owner', auth.captureOwnerOrgId ? this.link('organization', auth.captureOwnerOrgId, getOrganization(auth.captureOwnerOrgId)?.name || '?') : '—');
+      if (auth.employerOrgId) html += this.kv('Employer', this.link('organization', auth.employerOrgId, getOrganization(auth.employerOrgId)?.name || '?'));
+      html += `</div>`;
+    }
     if (wb.routePath?.length > 1) {
       html += `<div class="insp-section"><h4>Route</h4><div class="ce-desc">`;
       html += wb.routePath.map(id => (getSettlement(id) || {}).name || '?').join(' → ');
@@ -12189,7 +13066,7 @@ const UI = {
   }
 };
 const SandboxTools = {
-  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal', 'setFormation']),
+  needsTarget: new Set(['buildRoad', 'destroyRoad', 'addVillage', 'addTown', 'addFort', 'giveWealth', 'foodShortage', 'drought', 'plague', 'createMarketHub', 'spawnMerchantGuild', 'addTradeContract', 'raiseTradeTax', 'lowerTradeTax', 'cutSupplyLine', 'fortifyCamp', 'forceAmbush', 'setWarGoal', 'setFormation', 'authorizeWarbandSiege', 'grantCityToAgent', 'revokeCityGrant', 'testCaptureWithoutAuthority', 'testGuildCapture', 'forceVassalTribute']),
 
   activate(tool, btn) {
     // เครื่องมือกดแล้วทำทันที
@@ -12505,6 +13382,33 @@ const SandboxTools = {
         UIIndexes.rebuild(true);
         UI.pageDirty = true;
         EventSystem.add('system', '🔄 [Sandbox] Rebuilt UI indexes');
+      },
+      foundGuildFromWarband: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length >= 8);
+        if (!wb) { EventSystem.add('system', '✨ ต้องมี warband >= 8 คน'); return; }
+        const org = SovereigntySystem.foundGuildFromWarband(wb);
+        EventSystem.add('system', org ? `🏛 [Sandbox] ${org.name}` : '✨ ก่อตั้ง guild ไม่สำเร็จ');
+      },
+      triggerVassalRebellionCheck: () => {
+        const org = world.organizations.find(o => o.vassals?.length);
+        if (!org) { EventSystem.add('system', '✨ ไม่มี vassal'); return; }
+        const v = org.vassals[0];
+        v.loyaltyToOverlord = 15;
+        SovereigntySystem.triggerVassalRebellion(org, v);
+      },
+      convertBanditToOutlawRealm: () => {
+        const org = world.organizations.find(o => o.type === 'bandit_gang');
+        if (!org) { EventSystem.add('system', '✨ ไม่มี bandit org'); return; }
+        SovereigntySystem.convertBanditToOutlawRealm(org);
+        EventSystem.add('system', `☠ [Sandbox] ${org.name} outlaw realm`);
+      },
+      showPoliticalAuthority: () => {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 0);
+        if (!wb) return;
+        const auth = SovereigntySystem.getWarbandAuthority(wb);
+        EventSystem.add('system', `👁 ${wb.name}: ${auth.mode} raid=${auth.canRaid} siege=${auth.canSiege} capture=${auth.canCapture}`);
+        UI.selected = { kind: 'warband', id: wb.id };
+        UI.inspectorDirty = true;
       }
     };
 
@@ -12710,6 +13614,68 @@ const SandboxTools = {
         this.disarm();
         break;
       }
+      case 'authorizeWarbandSiege': {
+        const wb = world.warbands.find(w => warbandMembers(w).length > 0);
+        const org = wb?.organizationId ? getOrganization(wb.organizationId) : world.organizations[0];
+        if (wb && org && pickedSettlement && pickedSettlement.type !== 'camp') {
+          SovereigntySystem.authorizeWarbandSiege(org, wb, pickedSettlement.id);
+          EventSystem.add('system', `⚔ [Sandbox] อนุมัติ ${wb.name} ล้อม ${pickedSettlement.name}`);
+        } else EventSystem.add('system', '✨ ต้องมี warband+org และคลิก settlement');
+        this.disarm();
+        break;
+      }
+      case 'grantCityToAgent': {
+        if (!pickedSettlement || pickedSettlement.type === 'camp') { this.disarm(); break; }
+        const org = getOrganization(pickedSettlement.ownerOrganizationId);
+        const agent = world.agents.find(a => a.alive && a.skills.leadership >= 2 && a.id !== org?.leaderId);
+        if (org && agent) {
+          SovereigntySystem.grantSettlement(org.leaderId, pickedSettlement.id, agent.id, 'sandbox_grant');
+          EventSystem.add('system', `🏛 [Sandbox] มอบ ${pickedSettlement.name} ให้ ${agent.name}`);
+        } else EventSystem.add('system', '✨ ต้องมี owner org และ agent จริง');
+        this.disarm();
+        break;
+      }
+      case 'testCaptureWithoutAuthority': {
+        if (!pickedSettlement || pickedSettlement.type === 'camp') { this.disarm(); break; }
+        const a = world.agents.find(x => x.alive && x.skills.leadership >= 2);
+        if (!a) { EventSystem.add('system', '✨ ไม่มี agent'); this.disarm(); break; }
+        const before = pickedSettlement.ownerOrganizationId;
+        const wb = SovereigntySystem.foundWarbandFromAgent(a, 'bandit_gang', { name: 'Raid Test' });
+        if (wb) {
+          a.locationId = pickedSettlement.id;
+          wb.locationId = pickedSettlement.id;
+          WarbandSystem.tryRaid(wb, pickedSettlement);
+          const after = pickedSettlement.ownerOrganizationId;
+          EventSystem.add('system', after === before ? '✅ ไม่เปลี่ยน owner (ถูกต้อง)' : '⚠ owner เปลี่ยน (ผิด)');
+        }
+        this.disarm();
+        break;
+      }
+      case 'testGuildCapture': {
+        if (!pickedSettlement || pickedSettlement.type === 'camp') { this.disarm(); break; }
+        const leader = world.agents.find(a => a.alive && a.skills.leadership >= 3);
+        if (!leader) { this.disarm(); break; }
+        const org = createOrganization({ name: 'Siege Guild', type: 'mercenary_company', leaderId: leader.id, homeSettlementId: pickedSettlement.id, memberIds: [leader.id], purpose: 'conquest' });
+        const ids = [leader.id];
+        for (let i = 0; i < 5; i++) {
+          const m = createAgent({ locationId: pickedSettlement.id, profession: 'guard', factionId: pickedSettlement.factionId });
+          ids.push(m.id);
+        }
+        const wb = WarbandSystem.createFromMembers(org, ids, { locationId: pickedSettlement.id, leaderId: leader.id });
+        SovereigntySystem.authorizeWarbandSiege(org, wb, pickedSettlement.id);
+        org.purpose = 'conquest';
+        leader.locationId = pickedSettlement.id;
+        wb.locationId = pickedSettlement.id;
+        WarbandSystem.tryRaid(wb, pickedSettlement);
+        EventSystem.add('system', `🏰 [Sandbox] guild capture test → owner=${getOrganization(pickedSettlement.ownerOrganizationId)?.name || '?'}`);
+        this.disarm();
+        break;
+      }
+      case 'forceVassalTribute': {
+        if (pickedSettlement) SovereigntySystem.tickVassalObligations();
+        this.disarm();
+        break;
+      }
     }
   },
 
@@ -12723,7 +13689,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.4';
+const SAVE_SCHEMA_VERSION = '18.5';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -12918,6 +13884,10 @@ const SaveSystem = {
     w.musterPoints = w.musterPoints || [];
     w.warbands = w.warbands || [];
     w.headquarters = w.headquarters || [];
+    w.siegeAuthorities = w.siegeAuthorities || [];
+    w.claims = w.claims || [];
+    w.captureCredits = w.captureCredits || [];
+    w.vassalGrants = w.vassalGrants || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
@@ -12981,6 +13951,10 @@ const SaveSystem = {
     if (!s.terrain) s.terrain = inferSettlementTerrain(s);
     if (s.strategicValue == null) s.strategicValue = settlementStrategicValue(s);
     if (!s.siegeEquipment) s.siegeEquipment = { wallBonus: s.buildings?.includes('Wall') ? 1 : 0, watchtower: s.buildings?.includes('Watchtower') ? 1 : 0 };
+    if (!s.vassalObligation) s.vassalObligation = defaultVassalObligation();
+    if (!s.localLordId && s.governorId) s.localLordId = s.governorId;
+    if (s.legitimacy == null) s.legitimacy = 50;
+    if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.migrateSettlementOwnership(s);
   },
 
   migrateRoute(r) {
@@ -13052,6 +14026,9 @@ const SaveSystem = {
     if (!a.injuries) a.injuries = [];
     if (!a.duelRecord) a.duelRecord = { wins: 0, losses: 0, kills: 0 };
     if (!a.memberships) a.memberships = [];
+    if (!a.titles) a.titles = [];
+    if (!a.grievances) a.grievances = [];
+    if (!a.captureCreditIds) a.captureCreditIds = [];
     for (const slot of ['mainHand', 'offHand', 'ranged', 'armor', 'mount', 'tool']) {
       const item = a.equipment?.[slot];
       if (!item) continue;
@@ -13148,6 +14125,8 @@ const SaveSystem = {
     org.rules = org.rules || {};
     if (!org.status) org.status = 'active';
     org.memberIds = org.memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
+    if (!org.sovereignty) org.sovereignty = defaultSovereignty(org);
+    if (!org.vassals) org.vassals = [];
   },
 
   migrateWarband(wb) {
@@ -13162,6 +14141,8 @@ const SaveSystem = {
       const m = wb.memberIds.map(getAgent).filter(a => a && a.alive);
       if (m.length) wb.leaderId = m.reduce((b, a) => (a.skills.leadership > b.skills.leadership ? a : b), m[0]).id;
     }
+    if (!wb.foundingReason) wb.foundingReason = wb.organizationId ? 'guild_detachment' : 'local_militia';
+    if (!wb.politicalMode) wb.politicalMode = wb.organizationId ? 'guild_backed' : 'independent';
   },
 
   migrateRecruitmentOffer(ro) {
@@ -13209,6 +14190,7 @@ const SaveSystem = {
     if (typeof TextCombatCore !== 'undefined') TextCombatCore.initWorld();
     if (typeof LargeBattlefieldSystem !== 'undefined') LargeBattlefieldSystem.initWorld();
     if (typeof OrganizationSystem !== 'undefined') OrganizationSystem.initWorld();
+    if (typeof SovereigntySystem !== 'undefined') SovereigntySystem.initWorld();
     if (typeof UIIndexes !== 'undefined') UIIndexes.rebuild(true);
   },
 
