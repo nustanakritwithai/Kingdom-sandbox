@@ -62,6 +62,35 @@ function defaultMarketIndex() {
   };
 }
 
+/* ── Phase 19.1: Liveness metrics — วัดว่า "โลกมีชีวิต" ไม่ใช่แค่ไม่พัง ── */
+function defaultBalanceMetrics() {
+  return {
+    liveness: {
+      armiesCreated: 0, warsWithBattles: 0, supplyLinesCreated: 0, scoutReportsCreated: 0,
+      largeBattles: 0, warbandsFormed: 0, successfulMusters: 0,
+      caravanTrips: 0, caravanLost: 0, caravanSurvivalRate: 1, caravanLossRate: 0,
+      patrolsCreated: 0, banditSuppressionEvents: 0,
+      guildsFounded: 0, tradeContractsCompleted: 0,
+      settlementsDepopulated: 0, capitalPopulation: 0,
+      rulersRecovered: 0, interregnumDays: 0,
+      minerCount: 0, crafterCount: 0, woodcutterCount: 0,
+      routeDangerAverage: 0
+    }
+  };
+}
+// เข้าถึง liveness counters อย่างปลอดภัย (save เก่าที่ยังไม่ migrate ก็ไม่พัง)
+function LIV() {
+  if (!world) return null;
+  if (!world.balanceMetrics) world.balanceMetrics = defaultBalanceMetrics();
+  if (!world.balanceMetrics.liveness) world.balanceMetrics.liveness = defaultBalanceMetrics().liveness;
+  return world.balanceMetrics.liveness;
+}
+
+/* ── Phase 19.1: Labor market — ค่าแรงพรีเมียมตาม shortage ระดับ realm ── */
+function defaultLaborMarket() {
+  return { wagePremium: { woodcutter: 1, miner: 1, crafter: 1 }, shortage: { wood: 1, ore: 1, tools: 1 }, lastUpdateDay: 0 };
+}
+
 const MERCHANT_RANKS = ['peddler', 'caravan_trader', 'master_merchant', 'guild_member', 'guild_elder', 'trade_prince'];
 const MERCHANT_RANK_TITLES = {
   peddler: 'พ่อค้าเร่', caravan_trader: 'เจ้าคาราวาน', master_merchant: 'นายคลังสินค้า',
@@ -75,7 +104,11 @@ function getContract(id) { return (world.tradeContracts || []).find(c => c.id ==
 /* ── Phase 18.3: Organizations / Warbands ── */
 const ORG_TYPES = ['adventurer_party', 'mercenary_company', 'militia_company', 'royal_army', 'merchant_guild', 'caravan_company', 'bandit_gang', 'rebel_cell', 'noble_retinue', 'town_guard', 'bounty_hunter_lodge'];
 const WARBAND_TYPES = ['adventurer_party', 'mercenary_company', 'militia', 'royal_army', 'bandit_gang', 'caravan_guard', 'rebel_warband', 'noble_retinue', 'scout_party'];
-const OFFER_TYPES = ['open_join', 'paid_contract', 'militia_call', 'royal_conscription', 'mercenary_hire', 'caravan_guard_job', 'bounty_party', 'rebel_recruitment', 'bandit_invitation', 'noble_call_to_arms'];
+const OFFER_TYPES = ['open_join', 'paid_contract', 'militia_call', 'royal_conscription', 'mercenary_hire', 'caravan_guard_job', 'bounty_party', 'rebel_recruitment', 'bandit_invitation', 'noble_call_to_arms',
+  // Phase 19.1
+  'defend_settlement', 'anti_bandit_patrol', 'labor_offer_miner', 'labor_offer_woodcutter', 'labor_offer_crafter'];
+// Phase 19.1: offer ประเภท "วิกฤต" ได้ modifier พิเศษใน evaluateJoinOffer (offer ปกติไม่กระทบ)
+const CRISIS_OFFER_TYPES = new Set(['royal_conscription', 'militia_call', 'defend_settlement', 'anti_bandit_patrol']);
 const MAX_AGENT_MEMBERSHIPS = 3;
 const MAX_ACTIVE_OFFERS_PER_SETTLEMENT = 4;
 const ORG_HISTORY_CAP = 24;
@@ -84,6 +117,7 @@ const WARBAND_HISTORY_CAP = 20;
 function getOrganization(id) { return (world.organizations || []).find(o => o.id === id); }
 function getWarband(id) { return (world.warbands || []).find(w => w.id === id); }
 function getMusterPoint(id) { return (world.musterPoints || []).find(m => m.id === id); }
+function getMilitaryNeed(id) { return (world.militaryNeeds || []).find(n => n.id === id); }
 function getHeadquarters(id) { return (world.headquarters || []).find(h => h.id === id); }
 function getRecruitmentOffer(id) { return (world.recruitmentOffers || []).find(o => o.id === id); }
 
@@ -272,7 +306,13 @@ function defaultRecruitmentOffer(opt) {
     expiresDay: opt.expiresDay != null ? opt.expiresDay : ((world ? world.day : 0) + (opt.duration || 14)),
     status: opt.status || 'open',
     applicants: (opt.applicants || []).slice(),
-    acceptedAgentIds: (opt.acceptedAgentIds || []).slice()
+    acceptedAgentIds: (opt.acceptedAgentIds || []).slice(),
+    // Phase 19.1: ระยะการประกาศรับสมัคร + บันไดยกระดับเมื่อเกณฑ์ไม่สำเร็จ
+    reach: opt.reach || 'local',            // local | nearby | faction | realm | route_network
+    failCount: opt.failCount || 0,
+    escalation: opt.escalation || 0,
+    militaryNeedId: opt.militaryNeedId || null,
+    targetSettlementId: opt.targetSettlementId || null
   };
 }
 
@@ -508,6 +548,14 @@ const PROF_COLOR = {
   captain: '#ab47bc', commander: '#ab47bc', mayor: '#ab47bc', lord: '#ab47bc',
   king: '#ab47bc', unemployed: '#eceff1', migrant: '#eceff1', refugee: '#eceff1'
 };
+
+const PROF_LABEL_MAP = {
+  farmer: 'ชาวนา', woodcutter: 'คนตัดไม้', miner: 'คนงานเหมือง', crafter: 'ช่างฝีมือ',
+  trader: 'พ่อค้า', bandit: 'โจร', guard: 'ทหารยาม', militia: 'กองอาสา',
+  mayor: 'นายเมือง', lord: 'เจ้าเมือง', king: 'กษัตริย์', unemployed: 'คนว่างงาน',
+  migrant: 'ผู้อพยพ', refugee: 'ผู้ลี้ภัย'
+};
+function PROF_LABEL_TH(prof) { return PROF_LABEL_MAP[prof] || prof; }
 
 const MILITARY_PROFS = new Set(['guard', 'militia', 'swordsman', 'spearman', 'archer', 'cavalry', 'captain', 'commander']);
 const RULER_PROFS = new Set(['mayor', 'lord', 'king']);
@@ -901,6 +949,7 @@ function lifeSummary(a) {
 function recordWarBattle(atkFactionId, defFactionId, name, dead, attackerWon) {
   const w = atkFactionId && defFactionId ? activeWarBetween(atkFactionId, defFactionId) : null;
   if (!w) return;
+  if (!w.battles.length) { const lv = LIV(); if (lv) lv.warsWithBattles++; } // Phase 19.1: ศึกแรกของสงครามนี้
   w.battles.push({ day: world.day, name, dead, attackerWon });
   w.casualties += dead;
 }
@@ -1009,7 +1058,12 @@ function createRoute(aId, bId, quality) {
     terrain: null,
     ambushRisk: null,
     supplyTraffic: 0,
-    scoutCoverage: 0
+    scoutCoverage: 0,
+    // ── Phase 19.1: route security loop ──
+    securityPressure: 0,
+    raidWindowStart: 0,      // หน้าต่าง 30 วันของ raid gain cap
+    raidWindowCount: 0,
+    lastResponseDay: -999    // cooldown การตอบโต้โจร
   };
   r.terrain = inferRouteTerrain(r);
   r.ambushRisk = clamp((r.threat || r.danger || 0.1) * (r.terrain === 'forest' ? 1.35 : r.terrain === 'marsh' ? 1.15 : 0.9), 0.02, 0.85);
@@ -1220,7 +1274,10 @@ function generateWorld() {
     supplyLines: [], armyCamps: [], scoutReports: [],
     battleReports: [], legendaryWeapons: [],
     largeBattleRecords: [], activeBattlefields: [],
+    militaryNeeds: [],
     marketIndex: defaultMarketIndex(),
+    balanceMetrics: defaultBalanceMetrics(),
+    laborMarket: defaultLaborMarket(),
     stats: { deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0, bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0, townCaravansReplaced: 0, localRations: 0, emergencyCaravans: 0, emergencyFallbacks: 0, contractsCompleted: 0, contractsFailed: 0, warehouseRaids: 0 }
   };
 
@@ -1573,6 +1630,32 @@ function agentSpeed(a) {
   const ds = CombatSystem.deriveStats(a);
   sp += ds.agility * 0.5;
   return sp;
+}
+
+/* ── Phase 19.1: ประเมินวันเดินทาง + เสบียงที่ต้องมีจริงตามระยะทาง ──
+   แก้ปัญหา "อดตายกลางทาง 92%" — ทุกการออกเดินทางต้องถือเสบียงพอ */
+function estimateTravelDays(path, speed) {
+  if (!path || path.length < 2) return 0;
+  const sp = speed || 80;
+  let days = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const r = getRoute(path[i], path[i + 1]);
+    if (!r) return Infinity; // ถนนขาดกลางทาง
+    days += r.distance / (sp * (0.6 + r.roadQuality * 0.6));
+  }
+  return Math.ceil(days);
+}
+
+function calculateRequiredTravelFood(entity, destId, speed) {
+  if (!entity || entity.locationId === destId) return 0;
+  const agent = entity.profession ? entity : null;
+  const path = findPath(entity.locationId, destId, false, agent);
+  if (!path) return 0;
+  const sp = speed || (agent ? agentSpeed(agent) : 80);
+  const days = estimateTravelDays(path, sp);
+  if (!Number.isFinite(days)) return 0;
+  // อัตรากิน ~1 อาหาร/2.7 วันเดินทาง × ค่าเผื่อความปลอดภัย 1.3
+  return Math.max(2, Math.ceil(days * 0.37 * 1.3));
 }
 
 /* ═══════════ 6.5 PHASE 10.5 SYSTEMS ═══════════ */
@@ -2931,6 +3014,7 @@ const LargeBattlefieldSystem = {
 
   runLargeBattle(attackerUnits, defenderUnits, context) {
     context = context || {};
+    { const lv = LIV(); if (lv) lv.largeBattles++; }   // Phase 19.1
     const terrainType = context.terrainType || 'plain';
     const loc = context.settlementId ? getSettlement(context.settlementId) : null;
     const isSiege = loc && (loc.type === 'castle' || loc.type === 'fort' || loc.siege);
@@ -3232,14 +3316,45 @@ const OrganizationSystem = {
       }
     }
     let currentJobValue = agent.unitId ? 25 : agent.guildId ? 15 : agent.profession === 'king' ? 80 : 0;
+    // Phase 19.1: คนที่มีอาชีพผลิตจริง (ทำนา/เหมือง/ป่า/ช่าง) หวงงาน — ไม่ทิ้งไร่นาไปลาดตระเวนง่ายๆ
+    // ยกเว้นศึกป้องกันบ้านเกิด/เกณฑ์หลวง ที่เป็นหน้าที่จริง (ยังได้ crisis bonus)
+    if (WORKER_PROFS.includes(agent.profession) && s && s.stock.food > populationOf(s)) {
+      currentJobValue += (offer.type === 'anti_bandit_patrol' || offer.type === 'caravan_guard_job' || offer.type === 'bounty_party') ? 28 : 14;
+    }
     let loyaltyConflict = 0;
     if (mil && mil.organizationId !== org.id) loyaltyConflict = 30;
     let traumaPenalty = 0;
     if (agent.memory?.personal?.trauma?.length && offer.type === 'bounty_party') traumaPenalty = 10;
     if (agent.memory?.personal?.grudges?.some(g => g.targetId === org.leaderId)) traumaPenalty += 15;
   if (offer.type === 'bandit_invitation' && agent.profession === 'guard') traumaPenalty += 20;
+
+    /* ── Phase 19.1: modifier สำหรับงานวิกฤต — คน "ยอมไปรบ" เมื่อมีเหตุผลจริง
+       (threshold 12 คงเดิม, offer ปกติไม่ถูกแตะ — ห้าม auto-add / ห้าม spawn) ── */
+    let crisisBonus = 0, riskRelief = 1;
+    if (CRISIS_OFFER_TYPES.has(offer.type)) {
+      // หน้าที่ต่อแผ่นดิน: ความภักดี + motive duty
+      crisisBonus += (agent.traits?.loyalty || 0.5) * 12 + (agent.motives?.duty || 0) * 0.15;
+      // ปกป้องบ้านเกิด: เป้าหมาย/จุดรวมพลคือบ้านหรือเมืองที่อยู่ปัจจุบัน
+      const targetSid = offer.targetSettlementId || offer.settlementId;
+      if (targetSid === agent.homeId || targetSid === agent.locationId) crisisBonus += 16;
+      // แค้นโจร: เคยถูกปล้น หรือเส้นทางรอบบ้านอันตราย
+      if (offer.type === 'anti_bandit_patrol') {
+        if ((agent.memory?.personal?.grudges || []).some(g => g.type === 'robbed') || agent.memory?.timesRobbed > 0) crisisBonus += 12;
+        const home = getSettlement(agent.homeId || agent.locationId);
+        if (home && world.routes.some(r => !r.destroyed && (r.a === home.id || r.b === home.id) && r.danger > 0.5)) crisisBonus += 8;
+      }
+      // ความชอบธรรมของผู้เรียก + ความกดดันสงคราม
+      const issuer = getAgent(offer.issuerId);
+      if (issuer) crisisBonus += clamp((issuer.fame || 0) * 0.1 + (issuer.reputation || 0) * 0.05, 0, 8);
+      const hereS = getSettlement(offer.settlementId);
+      if (hereS) crisisBonus += clamp((hereS.warDemand || 0) * 1.5, 0, 8);
+      // มีเสบียงให้ → กลัวความเสี่ยงน้อยลง (ไม่ต้องเดินทางท้องว่าง)
+      if ((rewards.food || 0) >= 6) riskRelief = 0.7;
+    }
+
     const joinScore = needForIncome + safetyNeed + careerFit + relationshipToLeader + motiveAlignment +
-      rewardValue + prestige + friendsAlreadyJoined + sharedEnemy - riskFear - distanceCost - currentJobValue - loyaltyConflict - traumaPenalty;
+      rewardValue + prestige + friendsAlreadyJoined + sharedEnemy + crisisBonus
+      - riskFear * riskRelief - distanceCost - currentJobValue - loyaltyConflict - traumaPenalty;
     return joinScore;
   },
 
@@ -3268,7 +3383,12 @@ const OrganizationSystem = {
       rewards: opt.rewards || { pay: 12, food: 6 },
       riskLevel: opt.riskLevel != null ? opt.riskLevel : 0.35,
       duration: opt.duration || 14,
-      expiresDay: world.day + (opt.duration || 14)
+      expiresDay: world.day + (opt.duration || 14),
+      reach: opt.reach || 'local',
+      failCount: opt.failCount || 0,
+      escalation: opt.escalation || 0,
+      militaryNeedId: opt.militaryNeedId || null,
+      targetSettlementId: opt.targetSettlementId || null
     });
     this.orgLog(org, `📢 ประกาศรับสมัคร ${offer.roleNeeded} ที่${getSettlement(sid)?.name || sid}`);
     return offer;
@@ -3290,12 +3410,34 @@ const OrganizationSystem = {
     }));
     const mp = getMusterPoint(offer.musterPointId);
     if (mp && !mp.expectedAgentIds.includes(agentId)) mp.expectedAgentIds.push(agentId);
+    if (!mp) return true;
     if (agent.locationId !== mp.locationId) {
+      // Phase 19.1: เตรียมเสบียงตามระยะทางจริงก่อนออกเดินทาง (เงินจริง ของจริง — ไม่เสก)
+      this.provisionRecruit(agent, org, mp.locationId);
       startTravel(agent, mp.locationId, 'muster');
     } else {
       this.arriveAtMuster(agent, mp, org, offer);
     }
     return true;
+  },
+
+  /* Phase 19.1: ผู้สมัครซื้อเสบียงเอง — ขาดเท่าไรองค์กร/คลัง faction จ่ายเบี้ยเลี้ยงให้ */
+  provisionRecruit(agent, org, destId) {
+    const s = getSettlement(agent.locationId);
+    if (!s || s.type === 'camp') return;
+    const want = calculateRequiredTravelFood(agent, destId);
+    const need = Math.max(0, want - (agent.inventory.food || 0));
+    if (need <= 0) return;
+    const cost = (s.prices.food || BASE_PRICE.food) * need;
+    if (agent.money < cost) {
+      const shortfall = Math.ceil(cost - agent.money);
+      if (org && org.wealth >= shortfall) { org.wealth -= shortfall; agent.money += shortfall; }
+      else {
+        const f = org ? getFaction(org.factionId) : null;
+        if (f && f.treasury >= shortfall) { f.treasury -= shortfall; agent.money += shortfall; }
+      }
+    }
+    buyProvisions(agent, s, want);
   },
 
   arriveAtMuster(agent, mp, org, offer) {
@@ -3318,13 +3460,34 @@ const OrganizationSystem = {
     const leader = members.reduce((best, a) => (a.skills.leadership + a.skills.tactics) > (best.skills.leadership + best.skills.tactics) ? a : best, members[0]);
     org.leaderId = org.leaderId || leader.id;
     const wbType = WarbandSystem.orgTypeToWarband(org.type);
+    // Phase 19.1: levy ที่ผูกกับ militaryNeed → เดินไปจุดรวมพลของ need
+    const need = offer?.militaryNeedId != null ? getMilitaryNeed(offer.militaryNeedId) : null;
+    let objective = { type: 'patrol_route', settlementId: mp.settlementId };
+    if (need && need.status === 'active') objective = { type: 'join_campaign', targetId: need.rallySettlementId };
+    else if (offer?.type === 'royal_conscription') objective = { type: 'join_campaign' };
     const wb = WarbandSystem.createFromMembers(org, members.map(a => a.id), {
       name: `${org.name} — กอง ${mp.id % 100}`,
       type: wbType,
       locationId: mp.locationId,
       status: 'mustering',
-      objective: offer?.type === 'royal_conscription' ? { type: 'join_campaign' } : { type: 'patrol_route', settlementId: mp.settlementId }
+      objective
     });
+    if (wb && need && need.status === 'active') {
+      wb.militaryNeedId = need.id;
+      wb.homeSettlementId = mp.settlementId;
+      if (!need.assembledWarbandIds.includes(wb.id)) need.assembledWarbandIds.push(wb.id);
+      if (wb.locationId !== need.rallySettlementId) {
+        // เตรียมเสบียงพอเดินถึงจุดรวมพลจริง (ซื้อจากคลังเมือง — ไม่เสก)
+        const marchPath = findPath(wb.locationId, need.rallySettlementId);
+        const marchDays = marchPath ? estimateTravelDays(marchPath, 60) : 8;
+        WarbandSystem.provisionWarband(wb, getSettlement(mp.locationId), Math.min(20, marchDays + 4));
+        WarbandSystem.startMarch(wb, need.rallySettlementId, 'join_campaign');
+      }
+    } else if (wb) {
+      // กองทั่วไปก็ออกเดินพร้อมเสบียงขั้นต่ำ
+      WarbandSystem.provisionWarband(wb, getSettlement(mp.locationId), 6);
+    }
+    const lvM = LIV(); if (lvM) lvM.successfulMusters++;
     this.orgLog(org, `⚔ รวมพล ${members.length} นาย ที่${getSettlement(mp.settlementId)?.name || ''}`);
     Chronicle.add({ category: 'military', title: `กอง ${wb.name} รวมพลสำเร็จ`, description: `${org.name} รวม ${members.length} นาย`, importance: 3 });
     EventSystem.add('military', `👥 ${org.name} รวมพล ${members.length} นาย → ${wb.name}`);
@@ -3332,12 +3495,75 @@ const OrganizationSystem = {
     return wb;
   },
 
+  /* ── Phase 19.1: หาผู้สมัครตาม offer.reach — แก้ปัญหา "เกณฑ์ได้แค่เมืองที่ร้าง" ──
+     กติกา performance: BFS บน route graph, จำกัด ≤6 เมือง, cap 60 คน, ไม่ scan ทั้งโลก */
+  recruitmentSettlements(offer) {
+    const origin = getSettlement(offer.settlementId);
+    if (!origin) return [];
+    const reach = offer.reach || 'local';
+    if (reach === 'local') return [origin];
+    const adj = {};
+    for (const r of world.routes) {
+      if (r.destroyed) continue;
+      (adj[r.a] = adj[r.a] || []).push({ id: r.b, danger: r.danger });
+      (adj[r.b] = adj[r.b] || []).push({ id: r.a, danger: r.danger });
+    }
+    const maxHops = reach === 'nearby' ? 2 : 4;
+    const visited = new Map([[origin.id, 0]]);
+    const queue = [origin.id];
+    while (queue.length) {
+      const cur = queue.shift();
+      const d = visited.get(cur);
+      if (d >= maxHops) continue;
+      for (const nb of adj[cur] || []) {
+        if (visited.has(nb.id)) continue;
+        if (reach === 'route_network' && nb.danger > 0.6) continue; // เลี่ยงเส้นทางอันตราย
+        visited.set(nb.id, d + 1);
+        queue.push(nb.id);
+      }
+    }
+    const org = getOrganization(offer.organizationId);
+    const fId = org && org.factionId != null ? org.factionId : origin.factionId;
+    let allowedFactions = null;
+    if (reach === 'faction') allowedFactions = new Set([fId]);
+    if (reach === 'realm') {
+      allowedFactions = new Set([fId]);
+      for (const v of world.vassalContracts || []) {
+        if (!v.active) continue;
+        if (v.overlordFactionId === fId) allowedFactions.add(v.vassalFactionId);
+        if (v.vassalFactionId === fId) allowedFactions.add(v.overlordFactionId);
+      }
+    }
+    const out = [];
+    for (const [sid] of [...visited.entries()].sort((a, b) => a[1] - b[1])) {
+      const s = getSettlement(sid);
+      if (!s || s.type === 'camp') continue;
+      if (allowedFactions && !allowedFactions.has(s.factionId)) continue;
+      out.push(s);
+      if (out.length >= 6) break;
+    }
+    return out.length ? out : [origin];
+  },
+
+  getRecruitmentCandidates(offer) {
+    const out = [];
+    for (const s of this.recruitmentSettlements(offer)) {
+      for (const a of agentsAt(s.id)) {
+        if (!a.alive || a.unitId || a.travel) continue;
+        if (a.isTownCaravan || a.isEmergencyCaravan) continue;
+        out.push(a);
+        if (out.length >= 60) return out;
+      }
+    }
+    return out;
+  },
+
   tickRecruitment() {
     if (world.day % 5 !== 0) return;
     for (const offer of world.recruitmentOffers) {
       if (offer.status !== 'open') continue;
       if (world.day > offer.expiresDay) { offer.status = 'expired'; continue; }
-      const agents = agentsAt(offer.settlementId).filter(a => a.alive && !a.unitId && !a.travel);
+      const agents = this.getRecruitmentCandidates(offer);
       const candidates = agents.sort((a, b) => this.evaluateJoinOffer(b, offer) - this.evaluateJoinOffer(a, offer)).slice(0, 8);
       for (const a of candidates) {
         const score = this.evaluateJoinOffer(a, offer);
@@ -3348,11 +3574,65 @@ const OrganizationSystem = {
     }
   },
 
+  /* Phase 19.1: ปล่อยผู้สมัครที่ offer จบไปแล้วให้เป็นอิสระ — ไม่ปล่อยเดินหลงไปหา muster ร้าง */
+  releaseStrandedRecruits(offer) {
+    for (const aid of offer.acceptedAgentIds) {
+      const a = getAgent(aid);
+      if (!a || !a.alive || !a.memberships) continue;
+      const mem = a.memberships.find(m => m.organizationId === offer.organizationId && m.status === 'traveling_to_muster');
+      if (!mem) continue;
+      a.memberships = a.memberships.filter(m => m !== mem);
+      // ถ้ายังเดินทางอยู่ ปล่อยให้เดินถึงปลายทางแล้วใช้ชีวิตปกติ (arrival handler เดิมจัดการ)
+    }
+  },
+
+  /* Phase 19.1: บันไดยกระดับเมื่อรวมพลล้มเหลว — เพิ่มค่าจ้าง → เพิ่มเสบียง → ขยาย reach → ขอหัวเมือง
+     ห้าม auto-add / ห้าม spawn / ห้ามลด threshold */
+  escalateFailedOffer(offer, org) {
+    if (!org || org.status === 'disbanded') return;
+    const fail = (offer.failCount || 0) + 1;
+    if (fail > 4) return; // ยอมพัก — รอเงื่อนไขโลกเปลี่ยน
+    const f = getFaction(org.factionId);
+    const rewards = { pay: offer.rewards?.pay || 12, food: offer.rewards?.food || 6 };
+    let reach = offer.reach || 'local';
+    if (fail === 1) {
+      const raise = Math.ceil(rewards.pay * 0.5);
+      const canPay = org.wealth >= raise * 5 || (f && f.treasury >= raise * 5);
+      if (canPay) rewards.pay += raise;
+    } else if (fail === 2) {
+      rewards.food += 6;
+    } else if (fail === 3) {
+      reach = reach === 'local' ? 'nearby' : reach === 'nearby' ? 'faction' : reach;
+    } else if (fail === 4 && offer.militaryNeedId) {
+      const need = getMilitaryNeed(offer.militaryNeedId);
+      if (need) need.wantSubOffers = true; // ให้ governor หัวเมืองกระจาย levy offer
+    }
+    const reposted = this.postRecruitmentOffer(org, {
+      settlementId: offer.settlementId,
+      type: offer.type,
+      roleNeeded: offer.roleNeeded,
+      quantityNeeded: Math.max(6, Math.ceil((offer.quantityNeeded || 8) * 0.8)),
+      rewards,
+      riskLevel: offer.riskLevel,
+      duration: offer.duration,
+      musterDays: 8,
+      reach,
+      failCount: fail,
+      militaryNeedId: offer.militaryNeedId,
+      targetSettlementId: offer.targetSettlementId
+    });
+    if (reposted) this.orgLog(org, `📢 ยกระดับการเกณฑ์ (ครั้งที่ ${fail}) — ${fail === 1 ? 'เพิ่มค่าจ้าง' : fail === 2 ? 'เพิ่มเสบียง' : fail === 3 ? 'ขยายพื้นที่ประกาศ' : 'ขอกำลังจากหัวเมือง'}`);
+  },
+
   tickTravelingMembers() {
     for (const offer of world.recruitmentOffers) {
       if (!offer.musterPointId) continue;
       const mp = getMusterPoint(offer.musterPointId);
       if (!mp || mp.status === 'complete') continue;
+      if (offer.status === 'failed' || offer.status === 'expired' || mp.status === 'failed') {
+        this.releaseStrandedRecruits(offer);
+        continue;
+      }
       for (const aid of offer.acceptedAgentIds) {
         const a = getAgent(aid);
         if (!a || !a.alive) continue;
@@ -3382,6 +3662,7 @@ const OrganizationSystem = {
             EventSystem.add('military', `📭 ${org.name} รวมพลล้มเหลว — ไม่มีคนมา`);
             Chronicle.add({ category: 'war', title: 'การรวมพลล้มเหลว', description: `${org.name} ไม่มีคนมาตามนัด`, importance: 3 });
           }
+          if (offer2) this.escalateFailedOffer(offer2, org);   // Phase 19.1
         } else {
           mp.targetDay = world.day + 5;
         }
@@ -3478,7 +3759,7 @@ const OrganizationSystem = {
     return child;
   },
 
-  raiseCallToArms(f, ruler, target) {
+  raiseCallToArms(f, ruler, target, need) {
     let org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
     if (!org) {
       org = createOrganization({
@@ -3499,15 +3780,21 @@ const OrganizationSystem = {
     if (!capital) return null;
     const existing = world.recruitmentOffers.find(o => o.organizationId === org.id && o.status === 'open' && o.type === 'royal_conscription');
     if (existing) return existing;
+    // Phase 19.1: ประกาศถึงทั้ง faction (เมืองหลวงร้างก็ยังเกณฑ์จากเมืองอื่นได้)
+    // ค่าจ้างขยับตามความกดดันสงครามและคลัง — ไม่ใช่ลดเกณฑ์คะแนน
+    const warPay = clamp(15 + (capital.warDemand || 0) * 3 + (f.treasury > 600 ? 8 : 0), 15, 40);
     return this.postRecruitmentOffer(org, {
       settlementId: capital.id,
       type: 'royal_conscription',
       roleNeeded: 'soldier',
       quantityNeeded: randInt(8, 18),
-      rewards: { pay: 15, food: 8 },
+      rewards: { pay: warPay, food: 10 },
       riskLevel: 0.55,
       duration: 12,
-      musterDays: 8
+      musterDays: 8,
+      reach: 'faction',
+      militaryNeedId: need ? need.id : null,
+      targetSettlementId: target ? target.id : null
     });
   },
 
@@ -3598,9 +3885,12 @@ const WarbandSystem = {
   syncWarbandSize(wb) {
     wb.memberIds = wb.memberIds.filter(id => { const a = getAgent(id); return a && a.alive; });
     wb.size = wb.memberIds.length;
-    for (const m of warbandMembers(wb)) {
-      m.locationId = wb.locationId;
-      if (wb.travel) m.travel = null;
+    // Phase 19.1: warband ที่สมทบกองทัพแล้ว ("attached") — กองทัพเป็นผู้จัดการตำแหน่งสมาชิก
+    if (wb.status !== 'attached') {
+      for (const m of warbandMembers(wb)) {
+        m.locationId = wb.locationId;
+        if (wb.travel) m.travel = null;
+      }
     }
     wb.composition = this.computeComposition(wb);
     return wb.size;
@@ -3639,13 +3929,16 @@ const WarbandSystem = {
     });
     this.syncWarbandSize(wb);
     wb.history.push({ day: world.day, text: `ก่อตั้งกอง ${wb.size} นาย` });
+    const lv = LIV(); if (lv) lv.warbandsFormed++;   // Phase 19.1
     return wb;
   },
 
   computeSpeed(wb) {
     const members = warbandMembers(wb);
     if (!members.length) return 0;
-    let baseSpeed = 1.2;
+    // Phase 19.1: สเกลความเร็วให้ตรงกับโลกจริง — คนเดิน ~80/วัน กองทัพ 55/วัน
+    // กองเดินทัพ ~55/วัน (เดิม 1.2 = เดิน 167 วันต่อหนึ่งช่วงถนน — ไม่มีวันถึงจุดรวมพล)
+    let baseSpeed = 55;
     const horses = members.filter(m => m.equipment?.mount || m.profession === 'cavalry').length;
     const mountMod = 1 + horses / Math.max(members.length, 1) * 0.35;
     let roadMod = 1;
@@ -3684,6 +3977,20 @@ const WarbandSystem = {
       if (!members.length) { wb.status = 'disbanding'; continue; }
       wb.lastSeenDay = world.day;
       wb.lastKnownLocation = wb.locationId;
+      // Phase 19.1: warband สมทบกองทัพอยู่ — ตามกองทัพไป ถ้ากองทัพสลายให้กลับไปคุมเส้นทางแถวบ้าน
+      if (wb.status === 'attached') {
+        const ar = wb.armyId != null ? getArmy(wb.armyId) : null;
+        if (!ar) {
+          wb.status = 'marching';
+          wb.armyId = null;
+          wb.militaryNeedId = null;
+          wb.locationId = members[0] ? members[0].locationId : wb.locationId;
+          wb.objective = { type: 'patrol_route', settlementId: wb.homeSettlementId || wb.locationId };
+        } else {
+          wb.locationId = ar.locationId;
+        }
+        continue;
+      }
       if (wb.status === 'camping' || wb.status === 'foraging') {
         wb._campDays = (wb._campDays || 0) + 1;
         wb.fatigue = clamp(wb.fatigue - 8, 0, 100);
@@ -3716,7 +4023,21 @@ const WarbandSystem = {
 
   onArrive(wb) {
     const obj = wb.objective || {};
-    if (obj.type === 'travel_to_muster' || obj.type === 'join_campaign') wb.status = 'camping';
+    if (obj.type === 'travel_to_muster' || obj.type === 'join_campaign') {
+      wb.status = 'camping';
+      // Phase 19.1: levy มาช้า — ถ้ากองทัพของ need ตั้งแล้ว ให้ตามไปสมทบจริง (ไม่ใช่เดินขนาน)
+      const need = wb.militaryNeedId != null ? getMilitaryNeed(wb.militaryNeedId) : null;
+      const ar = need && need.armyId != null ? getArmy(need.armyId) : null;
+      if (ar) {
+        if (wb.locationId === ar.locationId) MilitaryNeedSystem.attachWarbandToArmy(wb, ar);
+        else this.startMarch(wb, ar.locationId, 'join_campaign');
+      } else if (!need || need.status === 'failed' || need.status === 'done') {
+        // need จบไปแล้ว — ผันไปคุมเส้นทางแถวที่อยู่ ไม่ตั้งแคมป์ค้างเติ่ง
+        wb.militaryNeedId = null;
+        wb.objective = { type: 'patrol_route', settlementId: wb.homeSettlementId || wb.locationId };
+        wb.status = 'patrolling';
+      }
+    }
     else if (obj.type === 'raid_settlement' && obj.targetId) this.tryRaid(wb, getSettlement(obj.targetId));
     else if (obj.type === 'patrol_route') wb.status = 'patrolling';
     else wb.status = 'camping';
@@ -3731,11 +4052,30 @@ const WarbandSystem = {
       this.startMarch(wb, target.locationId, 'pursue');
       return;
     }
-    if (obj.type === 'patrol_route' && chance(0.08)) {
+    // Phase 19.1: ปลดประจำการกองทหารที่ว่างงานยามสงบ — คืนแรงงานสู่หมู่บ้าน
+    const milType = wb.type === 'royal_army' || wb.type === 'militia' || wb.type === 'noble_retinue';
+    if (milType && !wb.militaryNeedId && !wb.armyId) {
+      const f = getFaction(wb.factionId);
+      const atWar = f && (f.warState || world.wars.some(w => !w.endDay && (w.attackerId === f.id || w.defenderId === f.id)));
+      if (!atWar) {
+        wb._idleDays = (wb._idleDays || 0) + 1;
+        if (wb._idleDays > 25) { this.demobilize(wb, 'ยามสงบ'); return; }
+      } else wb._idleDays = 0;
+    } else wb._idleDays = 0;
+
+    if (obj.type === 'patrol_route') {
+      // Phase 19.1: ลาดตระเวนมีผลจริง — กดอันตรายเส้นทางข้างเคียง + ปะทะโจรซุ่ม (สู้จริง โจรชนะได้)
+      wb.status = 'patrolling';
       const routes = world.routes.filter(r => !r.destroyed && (r.a === wb.locationId || r.b === wb.locationId));
-      if (routes.length) {
+      if (routes.length && world.day % 2 === 0) {
+        const worst = routes.reduce((m, r) => r.danger > m.danger ? r : m, routes[0]);
+        RouteSecuritySystem.applyWarbandPatrol(wb, worst);
+      }
+      if (routes.length && chance(0.08)) {
         const other = routes[0].a === wb.locationId ? routes[0].b : routes[0].a;
+        const keepObjective = wb.objective;
         this.startMarch(wb, other, 'patrol');
+        wb.objective = keepObjective;  // startMarch เขียนทับ objective — คง patrol_route ไว้
         wb.status = 'patrolling';
       }
     } else if (obj.type === 'raid_settlement' && obj.targetId) {
@@ -3756,11 +4096,41 @@ const WarbandSystem = {
     }
   },
 
+  /* Phase 19.1: ซื้อเสบียงกองจากคลังเมืองจริง — จ่ายด้วยทองกอง → คลังองค์กร → คลัง faction
+     แก้ปัญหา warband แตกกองกลางทางเพราะเสบียงตั้งต้นมีแค่ ~2.5 วัน */
+  provisionWarband(wb, s, wantDays) {
+    if (!s || s.type === 'camp') return 0;
+    const n = warbandMembers(wb).length;
+    if (!n) return 0;
+    const wantFood = Math.ceil(n * 1.2 * (wantDays || 6));
+    const need = Math.max(0, wantFood - (wb.food || 0));
+    if (need <= 0) return 0;
+    const price = Math.max(0.5, s.prices.food || BASE_PRICE.food);
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    const f = getFaction(wb.factionId);
+    const funds = (wb.gold || 0) + (org ? org.wealth || 0 : 0) + (f ? f.treasury || 0 : 0);
+    const qty = Math.max(0, Math.min(need, Math.floor(s.stock.food * 0.4), Math.floor(funds / price)));
+    if (qty <= 0) return 0;
+    let cost = qty * price;
+    const take = (obj, key) => { if (!obj || cost <= 0) return; const t = Math.min(obj[key] || 0, cost); obj[key] -= t; cost -= t; };
+    take(wb, 'gold'); take(org, 'wealth'); take(f, 'treasury');
+    s.stock.food -= qty;
+    s.treasury += qty * price;
+    wb.food = (wb.food || 0) + qty;
+    wb.supplyDays = wb.food / Math.max(n * 1.2, 0.1);
+    return qty;
+  },
+
   tickSupply() {
     for (const wb of world.warbands) {
       const members = warbandMembers(wb);
       const n = members.length;
       if (!n) continue;
+      // Phase 19.1: เสบียงใกล้หมดและอยู่ที่เมือง (จุดพัก/ปลายทาง) → เติมเสบียงด้วยเงินจริง
+      if ((wb.food || 0) < n * 1.2 * 2 && wb.status !== 'attached') {
+        const here = getSettlement(wb.locationId);
+        if (here) this.provisionWarband(wb, here, 4);
+      }
       const horses = members.filter(m => m.equipment?.mount).length;
       const foodNeeded = n * 1.2 + horses * 0.5;
       if (wb.food >= foodNeeded) {
@@ -3807,6 +4177,29 @@ const WarbandSystem = {
       if (mem) OrganizationSystem.desertMember(deserter, org, mem);
     }
     this.syncWarbandSize(wb);
+  },
+
+  /* ── Phase 19.1: ปลดประจำการ — คืนกำลังพลสู่ชีวิตพลเรือน หลังสงคราม/ภารกิจจบ
+     แก้ปัญหาชาวนาถูกเกณฑ์ไปเป็นทหารแล้วไม่กลับมาทำนา (ประชากรฐานการผลิตหด) */
+  demobilize(wb, reason) {
+    const org = wb.organizationId ? getOrganization(wb.organizationId) : null;
+    for (const m of warbandMembers(wb)) {
+      if (m.unitId) {
+        const u = getUnit(m.unitId);
+        if (u) u.memberIds = u.memberIds.filter(id => id !== m.id);
+        m.unitId = null;
+      }
+      if (org) {
+        org.memberIds = org.memberIds.filter(id => id !== m.id);
+        m.memberships = (m.memberships || []).filter(x => x.organizationId !== org.id);
+      }
+      // ทหารกลับเป็นพลเรือน — AgentAI จะหางาน (ทำนา/ค้าขาย) ให้เอง
+      if (MILITARY_PROFS.has(m.profession)) m.profession = 'unemployed';
+      m.currentThought = 'สงครามจบแล้ว ข้ากลับไปทำมาหากินดีกว่า';
+    }
+    wb.memberIds = [];
+    wb.status = 'disbanding';
+    if (reason) EventSystem.add('military', `🕊 ${wb.name} ปลดประจำการ — ทหารกลับสู่เหย้า (${reason})`);
   },
 
   tickEncounters() {
@@ -4661,7 +5054,9 @@ const SovereigntySystem = {
         const agent = getAgent(v.agentId);
         if (!agent || !agent.alive) { v.status = 'inactive'; continue; }
         let loyalty = v.loyaltyToOverlord || 50;
-        const rel = overlord ? (agent.relationships?.[overlord.id] || 0) : 0;
+        // relationships[id] เป็น object {score,trust,...} — ต้องดึงตัวเลข ไม่งั้นคูณได้ NaN
+        const relRaw = overlord ? agent.relationships?.[overlord.id] : 0;
+        const rel = typeof relRaw === 'number' ? relRaw : (relRaw?.score ?? 0);
         loyalty += rel * 0.05;
         for (const sid of v.settlementIds) {
           const s = getSettlement(sid);
@@ -5031,26 +5426,80 @@ const LogisticsSystem = {
     }
   },
 
+  /* ── Phase 19.1: ประเมินอันตรายของเส้นทางก่อนส่งคาราวาน ── */
+  assessPathDanger(path) {
+    if (!path || path.length < 2) return 0;
+    let worst = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const r = getRoute(path[i], path[i + 1]);
+      if (!r) return 2;
+      let d = Math.max(r.threat || 0, r.danger || 0);
+      if (world.units.some(u => u.kind === 'warband' && u.objective?.type === 'ambush'
+        && u.objective.routeId === r.id && unitMembers(u).length > 0)) d += 0.6;
+      worst = Math.max(worst, d);
+    }
+    return worst;
+  },
+
+  /* จ้างการ์ดจริงจากคนในเมือง — จ่ายจากคลังเมือง (ห้ามเสกยาม) */
+  hireCaravanGuard(s, carrier, destId) {
+    const guard = agentsAt(s.id).find(a => a.alive && !a.unitId && !a.travel && a.id !== carrier.id
+      && !a.isTownCaravan && !a.isEmergencyCaravan && !a._escortOf
+      && (MILITARY_PROFS.has(a.profession) || (a.skills.fighting || 0) >= 1.5));
+    if (!guard) return null;
+    const pay = 12;
+    if (s.treasury < pay) return null;
+    s.treasury -= pay;
+    guard.money += pay;
+    guard._escortOf = carrier.id;
+    carrier._escortIds = [guard.id];
+    buyProvisions(guard, s, calculateRequiredTravelFood(guard, destId));
+    guard.currentGoal = 'คุ้มกันคาราวาน';
+    guard.currentThought = 'ได้ค่าจ้างคุ้มกันคาราวาน — ระวังโจรให้ดี';
+    return guard;
+  },
+
   spawnTownCaravan(s, dest) {
     LogisticsSystem.validateCaravanSlots(s);
     if (s.townCaravanId) return;
     const isReplacement = s._lastTownCaravanLostDay && world.day - s._lastTownCaravanLostDay < 90;
+
+    // Phase 19.1: pre-flight — เลือกเส้นทางปลอดภัยกว่า / จ้างการ์ด / เลื่อนส่ง (ไม่ใช่สายพานส่งคนไปตาย)
+    const pathDirect = findPath(s.id, dest.id);
+    const pathSafe = findPath(s.id, dest.id, true);
+    const riskDirect = this.assessPathDanger(pathDirect);
+    const riskSafe = this.assessPathDanger(pathSafe);
+    const avoidDanger = riskSafe < riskDirect - 0.1;
+    const risk = avoidDanger ? riskSafe : riskDirect;
+    const recentLoss = s._lastTownCaravanLostDay && world.day - s._lastTownCaravanLostDay < 20;
+    let needGuard = risk > 0.4 || recentLoss;
+
     let carrier = agentsAt(s.id).find(a => (a.profession === 'trader' || a.profession === 'unemployed') && !a.travel && !a.unitId && !a.isTownCaravan && !a.isEmergencyCaravan);
     if (!carrier) {
       carrier = createAgent({ locationId: s.id, factionId: s.factionId, profession: 'trader', isTownCaravan: true, caravanOwnerId: s.id });
       seedSkillForProfession(carrier, 'trader');
+    }
+    let guard = null;
+    if (needGuard) {
+      guard = this.hireCaravanGuard(s, carrier, dest.id);
+      if (!guard && risk > 0.55) {
+        // อันตรายสูงและไม่มีการ์ด → เลื่อนการส่ง (ลอง cycle หน้า) — ความหิวปลายทางยังมี emergency relief รับ
+        carrier._escortIds = null;
+        return;
+      }
     }
     carrier.isTownCaravan = true;
     carrier.caravanOwnerId = s.id;
     carrier.profession = 'trader';
     s.townCaravanId = carrier.id;
     const qty = Math.min(SettlementMetrics.exportableFood(s), 12 + Math.floor(s.treasury / 50));
-    if (qty < 4) return;
+    if (qty < 4) { if (guard) { guard._escortOf = null; carrier._escortIds = null; } return; }
     s.stock.food -= qty;
     carrier.cargo = { good: 'food', qty, buyCost: 0, destId: dest.id, subsidized: true };
     carrier.currentGoal = `คาราวานเมืองขนอาหารไป${dest.name}`;
-    buyProvisions(carrier, s, 4);
-    startTravel(carrier, dest.id, 'town_caravan');
+    buyProvisions(carrier, s, calculateRequiredTravelFood(carrier, dest.id));
+    const lvT = LIV(); if (lvT) lvT.caravanTrips++;
+    startTravel(carrier, dest.id, 'town_caravan', avoidDanger);
     EventSystem.add('trade', isReplacement
       ? `🐪 ${s.name} จัดคาราวานเมืองใหม่ขนอาหาร ${qty} หน่วยไป${dest.name}`
       : `🐪 ${s.name} ส่งคาราวานเมืองขนอาหาร ${qty} หน่วยไป${dest.name}`);
@@ -5091,7 +5540,8 @@ const LogisticsSystem = {
     donor.stock.food -= qty;
     carrier.cargo = { good: 'food', qty, buyCost: 0, destId: needy.id, emergency: true };
     carrier.currentGoal = `คาราวานช่วยเหลือฉุกเฉินไป${needy.name}`;
-    buyProvisions(carrier, donor, 4);
+    buyProvisions(carrier, donor, calculateRequiredTravelFood(carrier, needy.id));
+    const lvE = LIV(); if (lvE) lvE.caravanTrips++;
     if (!startTravel(carrier, needy.id, 'emergency_relief')) {
       needy.emergencyCaravanId = null;
       carrier.isEmergencyCaravan = false;
@@ -5188,17 +5638,221 @@ const LogisticsSystem = {
   }
 };
 
+/* ── Phase 19.1: Labor Market — ค่าแรงพรีเมียมตาม shortage ระดับ realm + ดึงคนกลับเมืองผลิต
+   แก้ profession collapse: miner/woodcutter/crafter สูญพันธุ์เมื่อหมู่บ้านผลิตร้าง ── */
+const LaborMarketSystem = {
+  update() {
+    if (!world.laborMarket) world.laborMarket = defaultLaborMarket();
+    if (world.day % 10 !== 0) return;
+    const lm = world.laborMarket;
+    const mkts = marketSettlements();
+    if (!mkts.length) return;
+    // shortage = ราคาเฉลี่ย/ฐาน (ของขาด → ราคาสูง → พรีเมียมสูง) — damped กันแกว่ง
+    const goodFor = { woodcutter: 'wood', miner: 'ore', crafter: 'tools' };
+    for (const prof of ['woodcutter', 'miner', 'crafter']) {
+      const g = goodFor[prof];
+      const avgRatio = sum(mkts, s => (s.prices[g] || BASE_PRICE[g]) / BASE_PRICE[g]) / mkts.length;
+      lm.shortage[g] = avgRatio;
+      const target = clamp(1 + (avgRatio - 1) * 0.5, 1, 1.8);
+      lm.wagePremium[prof] = +(lm.wagePremium[prof] * 0.7 + target * 0.3).toFixed(3);
+    }
+    lm.lastUpdateDay = world.day;
+    // เปิด labor offer เมื่อเมืองผลิตเฉพาะทางขาดคน + ของขาดจริง
+    if (world.day % 20 !== 0) return;
+    for (const s of mkts) {
+      if (populationOf(s) > 6) continue;
+      let prof = null;
+      if (s.prodPotential.ore > 1 && lm.shortage.ore > 1.2 && !agentsAt(s.id).some(a => a.profession === 'miner')) prof = 'miner';
+      else if (s.prodPotential.wood > 1 && lm.shortage.wood > 1.2 && !agentsAt(s.id).some(a => a.profession === 'woodcutter')) prof = 'woodcutter';
+      else if (s.buildings.includes('Blacksmith') && lm.shortage.tools > 1.2 && !agentsAt(s.id).some(a => a.profession === 'crafter')) prof = 'crafter';
+      if (!prof) continue;
+      if (world.recruitmentOffers.some(o => o.status === 'open' && o.type === `labor_offer_${prof}` && o.settlementId === s.id)) continue;
+      // Bootstrap: หมู่บ้านผลิตอาหารเองน้อย — faction/เมืองลงทุนซื้ออาหารมาตุน คนงานใหม่จะได้ไม่อดตาย
+      if (s.stock.food < populationOf(s) + 10) this.bootstrapFood(s);
+      if (s.stock.food < 8) continue; // ยังไม่มีทุนอาหารพอ — รอบหน้า
+      this.postLaborOffer(s, prof);
+    }
+  },
+
+  /* ลงทุนพัฒนา: ซื้ออาหารเข้าคลังหมู่บ้านผลิต — เฉพาะเมื่อมีอาหารส่วนเกินจริง ไม่แย่งฐานอาหารหลัก */
+  bootstrapFood(s) {
+    const f = getFaction(s.factionId);
+    if (f && world.day - (f._lastBootstrapDay || -999) < 40) return; // ลงทุนทีละที่ ไม่ถี่
+    const budget = Math.min(s.treasury * 0.5 + (f ? f.treasury * 0.05 : 0), 40);
+    if (budget < 10) return;
+    // ผู้บริจาคต้องมีส่วนเกินมากจริงๆ (>25) เพื่อไม่ทำให้ฐานอาหารสั่นคลอน
+    const donor = marketSettlements().filter(x => x.id !== s.id && SettlementMetrics.exportableFood(x) > 25 && findPath(s.id, x.id))
+      .sort((a, b) => SettlementMetrics.exportableFood(b) - SettlementMetrics.exportableFood(a))[0];
+    if (!donor) return;
+    const price = Math.max(0.5, donor.prices.food || BASE_PRICE.food);
+    const qty = Math.min(Math.floor(budget / price), Math.floor(SettlementMetrics.exportableFood(donor) - 20), 12);
+    if (qty < 6) return;
+    if (f) f._lastBootstrapDay = world.day;
+    let cost = qty * price;
+    if (s.treasury >= cost) s.treasury -= cost;
+    else { const fromF = cost - s.treasury; s.treasury = 0; if (f) f.treasury = Math.max(0, f.treasury - fromF); }
+    donor.stock.food -= qty;
+    donor.treasury += cost;
+    s.stock.food += qty;
+    EventSystem.add('economy', `🌾 ลงทุนพัฒนา${s.name} — ส่งอาหาร ${qty} หน่วยจาก${donor.name}เตรียมรับแรงงาน`);
+  },
+
+  postLaborOffer(s, prof) {
+    const activeHere = world.recruitmentOffers.filter(o => o.settlementId === s.id && o.status === 'open').length;
+    if (activeHere >= MAX_ACTIVE_OFFERS_PER_SETTLEMENT) return;
+    // ใช้ org ปกครองเมือง (หรือสร้าง labor guild เบาๆ) เป็นผู้ประกาศ
+    let org = world.organizations.find(o => o.homeSettlementId === s.id && o.type === 'merchant_guild' && o.status === 'active');
+    if (!org) {
+      const boss = getAgent(s.governorId) || agentsAt(s.id)[0];
+      if (!boss) return;
+      org = createOrganization({
+        name: `สำนักแรงงาน${s.name}`, type: 'merchant_guild', leaderId: boss.id, founderId: boss.id,
+        homeSettlementId: s.id, factionId: s.factionId, purpose: 'labor', wealth: Math.min(s.treasury * 0.1, 60)
+      });
+    }
+    createRecruitmentOffer({
+      organizationId: org.id, issuerId: org.leaderId, settlementId: s.id,
+      musterPointId: null,   // ไม่มี muster — เป็นงานพลเรือน เดินไปทำเลย
+      type: `labor_offer_${prof}`, roleNeeded: prof,
+      quantityNeeded: 3, rewards: { pay: 10, food: 12 }, riskLevel: 0.15,
+      duration: 20, reach: 'nearby', targetSettlementId: s.id
+    });
+    EventSystem.add('economy', `🪓 ${s.name} เปิดรับแรงงาน${PROF_LABEL_TH(prof)} — ค่าแรงดี มีอาหารเลี้ยง`);
+  },
+
+  /* ทุกวัน: จับคู่คนว่างงาน/อาชีพไม่ขาดแคลนใน reach เข้ากับ labor offer แล้วให้เดินไปทำ */
+  tickDaily() {
+    if (world.day % 5 !== 0) return;
+    for (const offer of world.recruitmentOffers) {
+      if (offer.status !== 'open' || !offer.type.startsWith('labor_offer_')) continue;
+      if (world.day > offer.expiresDay) { offer.status = 'expired'; continue; }
+      const dest = getSettlement(offer.targetSettlementId || offer.settlementId);
+      if (!dest) { offer.status = 'cancelled'; continue; }
+      const prof = offer.roleNeeded;
+      const cands = OrganizationSystem.getRecruitmentCandidates(offer)
+        .filter(a => (a.profession === 'unemployed' || a.profession === 'migrant' || a.profession === 'refugee'
+          || (WORKER_PROFS.includes(a.profession) && a.profession !== prof && !(getSettlement(a.locationId)?.prodPotential[prof === 'miner' ? 'ore' : prof === 'woodcutter' ? 'wood' : 'food'] > 1))));
+      for (const a of cands.slice(0, 4)) {
+        if (offer.acceptedAgentIds.length >= offer.quantityNeeded) break;
+        // แรงจูงใจ: ของขาด (พรีเมียม) + มีอาหารเลี้ยง + ไม่ใช่คนที่มีงานผลิตดีอยู่แล้ว
+        if (!chance(0.4)) continue;
+        offer.acceptedAgentIds.push(a.id);
+        a.pendingLaborOffer = { prof, destId: dest.id, orgId: offer.organizationId };
+        if (a.locationId === dest.id) this.convertLabor(a);
+        else { const want = calculateRequiredTravelFood(a, dest.id); buyProvisions(a, getSettlement(a.locationId), clamp(want, 3, 6)); startTravel(a, dest.id, 'labor'); }
+      }
+    }
+    // คนที่เดินถึงเมืองปลายทางแล้ว → เปลี่ยนอาชีพ
+    for (const a of world.agents) {
+      if (!a.alive || !a.pendingLaborOffer || a.travel) continue;
+      if (a.locationId === a.pendingLaborOffer.destId) this.convertLabor(a);
+    }
+  },
+
+  convertLabor(a) {
+    const p = a.pendingLaborOffer;
+    if (!p) return;
+    a.profession = p.prof;
+    a.homeId = p.destId;
+    a.currentGoal = `ทำงาน${PROF_LABEL_TH(p.prof)}ที่${getSettlement(p.destId)?.name || ''}`;
+    seedSkillForProfession(a, p.prof);
+    a.pendingLaborOffer = null;
+  }
+};
+
 const RouteSecuritySystem = {
   update() {
     LogisticsSystem.updatePriceGaps();
     for (const r of world.routes) {
       if (r.destroyed) continue;
       if (r.recentRaids > 0) r.recentRaids = Math.max(0, r.recentRaids - 0.08);
+      // Phase 19.1: แรงกดดันความปลอดภัยของเส้นทาง — สูงเกิน 0.7 = โลกต้องตอบโต้
+      // กองโจรซุ่มบนเส้นทาง = ปล้นทุกคาราวานแน่นอน → นับเป็นแรงกดดันเต็มๆ แม้ danger ต่ำ
+      const hasAmbusher = world.units.some(u => u.kind === 'warband' && u.objective?.type === 'ambush'
+        && u.objective.routeId === r.id && unitMembers(u).length > 0);
+      r.securityPressure = clamp(r.danger + r.recentRaids * 0.08 + (hasAmbusher ? 0.6 : 0) - r.patrolLevel * 0.08, 0, 2);
       if (r.threat > 0.45 && r.bounty < 30) this.postBounty(r);
       if (r.caravanLosses >= 1 && r.bounty < 15) this.postBounty(r);
-      if (r.threat > 0.55 && !r.patrolMissionId && chance(0.15)) this.sendPatrolMission(r);
+      if (r.threat > 0.45 && !r.patrolMissionId && chance(0.25)) this.sendPatrolMission(r);
+      // Phase 19.1: ระดมพลกวาดล้างโจรเฉพาะเมื่อภัยหนักจริง (ambush/danger สูงมาก) — ตอบโต้แบบไม่ถี่
+      if (r.securityPressure > 0.9 && world.day - (r.lastResponseDay || -999) > 30) this.antiBanditResponse(r);
     }
     this.bountyHunters();
+  },
+
+  /* ── Phase 19.1: Anti-Bandit Response — โลกมีแรงต้าน แต่ต้องไม่กวาดชาวนาออกจากไร่นา
+     ลำดับ: (1) ค่าหัว+ส่งกอง garrison (ไม่แตะหมู่บ้าน) → (2) เปิด offer เล็กๆ ให้ทหาร/คนว่างงาน
+     ไม่สร้าง militaryNeed ที่ระดม levy จากทุกหมู่บ้าน (ต้นเหตุหมู่บ้านร้าง) ── */
+  antiBanditResponse(r) {
+    const sa = getSettlement(r.a), sb = getSettlement(r.b);
+    const host = [sa, sb].filter(s => s && s.type !== 'camp' && populationOf(s) >= 3)
+      .sort((a, b) => b.treasury - a.treasury)[0];
+    if (!host) return;
+    const f = getFaction(host.factionId);
+    // faction-level cooldown — ทำศึกโจรครั้งละที่ ไม่ระดมพร้อมกันทุกเส้นทาง
+    if (f && world.day - (f._lastAntiBanditDay || -999) < 40) { this.postBounty(r); this.sendPatrolMission(r); return; }
+    r.lastResponseDay = world.day;
+    // ค่าหัว + ส่ง garrison ที่มีอยู่แล้วก่อนเสมอ (ไม่ดึงคนจากหมู่บ้าน)
+    this.postBounty(r);
+    this.sendPatrolMission(r);
+    // เปิด offer ล่าโจรเล็กๆ 1 ใบ เฉพาะเมืองรวย — job-attachment กันชาวนา ทำให้ได้เฉพาะทหาร/คนว่าง
+    if (host.treasury > 150) {
+      let org = world.organizations.find(o => o.homeSettlementId === host.id && o.type === 'town_guard' && o.status === 'active');
+      if (!org) {
+        const cap = agentsAt(host.id).find(a => a.alive && (MILITARY_PROFS.has(a.profession) || a.skills.fighting > 2));
+        if (cap) org = createOrganization({
+          name: `กองคุ้มกัน${host.name}`, type: 'town_guard', leaderId: cap.id, founderId: cap.id,
+          homeSettlementId: host.id, factionId: host.factionId, purpose: 'patrol', wealth: 0
+        });
+      }
+      if (org) {
+        const fund = Math.min(60, host.treasury * 0.2);
+        host.treasury -= fund;
+        org.wealth = (org.wealth || 0) + fund;
+        const offer = OrganizationSystem.postRecruitmentOffer(org, {
+          settlementId: host.id,
+          type: 'anti_bandit_patrol',
+          roleNeeded: 'soldier',
+          quantityNeeded: randInt(3, 5),
+          rewards: { pay: 14 + Math.floor((r.bounty || 0) * 0.2), food: 8 },
+          riskLevel: 0.45,
+          duration: 12,
+          musterDays: 7,
+          reach: 'local',
+          targetSettlementId: host.id
+        });
+        if (offer) {
+          if (f) f._lastAntiBanditDay = world.day;
+          EventSystem.add('war', `🗡 ${host.name} จ้างกำลังกวาดล้างโจรบนเส้นทาง (ค่าหัว ${fmt(r.bounty || 0)} ทอง)`);
+        }
+      }
+    }
+  },
+
+  /* Phase 19.1: warband ลาดตระเวน — กดอันตราย + ปะทะกองซุ่มโจมตี (สู้จริง โจรชนะได้) */
+  applyWarbandPatrol(wb, r) {
+    const men = warbandMembers(wb).length;
+    if (!men || !r) return;
+    r.patrolLevel = clamp(r.patrolLevel + 0.4 + men * 0.06, 0, 6);
+    r.danger = clamp(r.danger - 0.03 - men * 0.004, 0.02, 1);
+    r.threat = clamp(r.threat - 0.05, 0, 1);
+    const lv = LIV(); if (lv) lv.patrolsCreated++;
+    const ambusher = world.units.find(u => u.kind === 'warband' && u.objective?.type === 'ambush'
+      && u.objective.routeId === r.id && unitMembers(u).length > 0);
+    if (ambusher && chance(0.5)) {
+      const myUnits = WarbandSystem.warbandAsUnits(wb);
+      if (myUnits.length) {
+        const res = MilitarySystem.battle(myUnits, [ambusher], { kind: 'patrol_clash', label: 'กวาดล้างโจร', settlementId: wb.locationId });
+        if (res && res.attackerWins) {
+          const lv2 = LIV(); if (lv2) lv2.banditSuppressionEvents++;
+          r.danger = clamp(r.danger - 0.1, 0.02, 1);
+          // จ่ายค่าหัวให้กอง (เงินจริงจากค่าหัวที่เมืองตั้งไว้)
+          const reward = Math.floor((r.bounty || 0) * 0.5);
+          if (reward > 0) { wb.gold = (wb.gold || 0) + reward; r.bounty -= reward; }
+          EventSystem.add('war', `🛡⚔ ${wb.name} กวาดล้างกองโจรบนเส้นทางสำเร็จ`);
+        }
+      }
+    }
   },
 
   postBounty(r) {
@@ -5262,7 +5916,7 @@ const RouteSecuritySystem = {
     r.caravanLosses++;
     r.recentRaids = clamp(r.recentRaids + 1, 0, 10);
     r.threat = clamp(r.threat + 0.12, 0, 1);
-    r.danger = clamp(r.danger + 0.06, 0.02, 1);
+    // Phase 19.1: danger gain ย้ายไปรวมที่ interceptCaravan (มี cap 3 ครั้ง/30 วัน) — ไม่บวกซ้ำสองที่
     if (r.caravanLosses >= 1) this.postBounty(r);
   },
 
@@ -5573,15 +6227,17 @@ const AgentAI = {
 
     // งานผลิตในถิ่นฐานนี้ (ผลตอบแทนลดลงเมื่อคนแน่นเกิน — ที่ดินจำกัด)
     if (s.type !== 'camp') {
+      // Phase 19.1: ค่าแรงพรีเมียมตาม shortage ระดับ realm — ดึงคนกลับไปทำเหมือง/ป่า/ช่างเมื่อของขาด
+      const lm = (world.laborMarket && world.laborMarket.wagePremium) || { woodcutter: 1, miner: 1, crafter: 1 };
       const foodPay = s.prices.food * (1.5 + a.skills.farming * 0.25) * s.prodPotential.food * 0.45 * EconomySystem.crowding(s, 'farmer');
-      const woodPay = s.prices.wood * (1.2 + a.skills.woodcutting * 0.25) * s.prodPotential.wood * 0.45 * EconomySystem.crowding(s, 'woodcutter');
-      const orePay = s.prices.ore * (1 + a.skills.mining * 0.25) * s.prodPotential.ore * 0.45 * EconomySystem.crowding(s, 'miner');
+      const woodPay = s.prices.wood * (1.2 + a.skills.woodcutting * 0.25) * s.prodPotential.wood * 0.45 * EconomySystem.crowding(s, 'woodcutter') * lm.woodcutter;
+      const orePay = s.prices.ore * (1 + a.skills.mining * 0.25) * s.prodPotential.ore * 0.45 * EconomySystem.crowding(s, 'miner') * lm.miner;
       if (s.prodPotential.food > 0) options.push({ act: 'work', prof: 'farmer', score: foodPay + hungerUrgency * 25 + (a.profession === 'farmer' ? 8 : 0) });
       if (s.prodPotential.wood > 0.4) options.push({ act: 'work', prof: 'woodcutter', score: woodPay + (a.profession === 'woodcutter' ? 8 : 0) });
       if (s.prodPotential.ore > 0.4) options.push({ act: 'work', prof: 'miner', score: orePay + (a.profession === 'miner' ? 8 : 0) });
       // งานช่าง (เมือง/ปราสาทที่มีวัตถุดิบ)
       if ((s.type === 'town' || s.type === 'castle') && s.stock.wood >= 1 && s.stock.ore >= 1) {
-        const craftPay = s.prices.tools * 0.35 * (1 + a.skills.crafting * 0.3) + s.warDemand * 2;
+        const craftPay = (s.prices.tools * 0.35 * (1 + a.skills.crafting * 0.3) + s.warDemand * 2) * lm.crafter;
         options.push({ act: 'work', prof: 'crafter', score: craftPay + (a.profession === 'crafter' ? 8 : 0) });
       }
       // เป็นพ่อค้า (ต้องมีทุน) — พ่อค้าอยู่ที่ไหนก็ค้าได้ คนอาชีพอื่นเริ่มจากเมืองตลาด
@@ -5654,10 +6310,12 @@ const AgentAI = {
         TraderSystem.planTrade(a, s);
         break;
       case 'migrate': {
+        // Phase 19.1: ถือเสบียงพอเดินทาง (จำกัดไม่ให้กว้านซื้อจนคลังเมืองแห้ง)
+        const wantFood = clamp(calculateRequiredTravelFood(a, choice.target), 4, 6);
+        buyProvisions(a, s, wantFood);
         a.profession = a.profession === 'unemployed' ? 'migrant' : a.profession;
         a.currentGoal = `ย้ายไป${choice.targetName}`;
         a.currentThought = `${s.name}อยู่ยาก อาหารแพง ข้าจะไป${choice.targetName}`;
-        buyProvisions(a, s, 4);
         if (startTravel(a, choice.target, 'migrate', a.traits.bravery < 0.4)) {
           a.lastMigrationDay = world.day;
           const dest = getSettlement(choice.target);
@@ -5843,6 +6501,7 @@ function createGuild(opt) {
     _bountyDay: -99
   };
   world.guilds.push(g);
+  { const lv = LIV(); if (lv) lv.guildsFounded++; }   // Phase 19.1
   const s = getSettlement(opt.homeSettlementId);
   if (s && s.marketRole) {
     s.marketRole.guildPresence = clamp((s.marketRole.guildPresence || 0) + 20, 0, 100);
@@ -6976,6 +7635,7 @@ const CampaignWarfareSystem = {
     world.supplyLines.push(sl);
     ar.supplyLineId = sl.id;
     ar.baseSettlementId = originId;
+    const lv = LIV(); if (lv) lv.supplyLinesCreated++;   // Phase 19.1
     return sl;
   },
 
@@ -7117,6 +7777,7 @@ const CampaignWarfareSystem = {
   addScoutReport(report) {
     if (!world.scoutReports) world.scoutReports = [];
     world.scoutReports.push(Object.assign({ day: world.day, confidence: 0.5, threat: 'unknown' }, report));
+    { const lv = LIV(); if (lv) lv.scoutReportsCreated++; }   // Phase 19.1
     if (world.scoutReports.length > MAX_SCOUT_REPORTS) world.scoutReports.shift();
   },
 
@@ -7505,7 +8166,7 @@ const TraderSystem = {
     }
 
     if (best) {
-      buyProvisions(a, s, 5);
+      buyProvisions(a, s, Math.max(5, calculateRequiredTravelFood(a, best.destId)));
       const bought = best.good === 'food'
         ? EconomySystem.buyFoodForExport(a, s, best.qty)
         : EconomySystem.buyFromSettlement(a, s, best.good, best.qty);
@@ -7547,7 +8208,7 @@ const TraderSystem = {
     if (s.id !== a.cargo.destId && s.type !== 'camp') {
       // แวะกลางทาง — ขายเลยถ้าราคาดีพอ ไม่งั้นเติมเสบียงแล้วเดินต่อ
       if (s.prices[a.cargo.good] * 0.85 > (a.cargo.buyCost / a.cargo.qty) * 1.3) { /* ขายที่นี่เลย */ }
-      else { buyProvisions(a, s, 4); startTravel(a, a.cargo.destId, 'trade'); return; }
+      else { buyProvisions(a, s, Math.max(4, calculateRequiredTravelFood(a, a.cargo.destId))); startTravel(a, a.cargo.destId, 'trade'); return; }
     }
     const sold = EconomySystem.sellToSettlement(a, s, a.cargo.good, a.cargo.qty);
     if (sold > 0) {
@@ -7579,7 +8240,7 @@ const TraderSystem = {
     else if (sold === 0) {
       // เมืองไม่มีเงินซื้อ — เก็บของไว้ ลองเมืองอื่น
       const alt = marketSettlements().filter(x => x.id !== s.id && x.treasury > 100);
-      if (alt.length) { buyProvisions(a, s, 4); a.cargo.destId = pick(alt).id; startTravel(a, a.cargo.destId, 'trade'); }
+      if (alt.length) { const altDest = pick(alt).id; buyProvisions(a, s, Math.max(4, calculateRequiredTravelFood(a, altDest))); a.cargo.destId = altDest; startTravel(a, a.cargo.destId, 'trade'); }
       else {
         clearTownCaravan(a, 'lost');
         a.cargo = null;
@@ -7692,17 +8353,22 @@ const BanditSystem = {
     const ambusher = world.units.find(u => u.kind === 'warband' && !u.travel &&
       u.objective.type === 'ambush' && u.objective.routeId === r.id && unitMembers(u).length > 0);
     // 2) หรือความเสี่ยงทั่วไปของเส้นทาง
-    const guardsPower = trader.inventory.weapon > 0 || trader.equipment?.mainHand ? 8 : 0;
+    // Phase 19.1: การ์ดคุ้มกันจริง (agent ที่จ้างมา) ช่วยเพิ่มโอกาสรอด — ไม่ใช่ยามเสก
+    let guardsPower = trader.inventory.weapon > 0 || trader.equipment?.mainHand ? 8 : 0;
+    const escorts = (trader._escortIds || []).map(getAgent).filter(a => a && a.alive);
+    guardsPower += sum(escorts, e => 6 + (e.skills.fighting || 0) * 2);
     const baseRisk = clamp((r.threat || r.danger) - r.patrolLevel * 0.06, 0.01, 0.9);
 
     if (ambusher || chance(baseRisk * 0.22)) {
       const robbers = ambusher ? unitMembers(ambusher).length : randInt(2, 4);
       const stolenQty = trader.cargo.qty;
       const stolenGold = Math.floor(trader.money * rand(0.4, 0.8));
-      // ยาม/อาวุธพ่อค้าอาจสู้รอด
-      if (guardsPower > 0 && chance(0.3)) {
-        EventSystem.add('bandit', `⚔ พ่อค้า ${trader.name} สู้กับโจรบนเส้นทางและรอดมาได้!`);
+      // ยาม/อาวุธพ่อค้าอาจสู้รอด — การ์ดยิ่งแข็ง โอกาสรอดยิ่งสูง (โจรกลุ่มใหญ่กดกลับ)
+      const surviveChance = clamp(0.15 + guardsPower * 0.022 - robbers * 0.03, 0.05, 0.75);
+      if (guardsPower > 0 && chance(surviveChance)) {
+        EventSystem.add('bandit', `⚔ คาราวานของ ${trader.name} สู้กับโจรบนเส้นทางและรอดมาได้!`);
         trader.skills.fighting += 0.1;
+        for (const e of escorts) { e.skills.fighting += 0.15; e.stats.morale = clamp(e.stats.morale + 3, 0, 100); }
         return false;
       }
       trader.money -= stolenGold;
@@ -7714,7 +8380,13 @@ const BanditSystem = {
       trader.stats.health -= randInt(0, 25);
       trader.currentThought = 'โดนปล้นเรียบ... ข้าเกลียดเส้นทางนี้';
       world.stats.caravansRobbed++;
-      r.danger = clamp(r.danger + 0.08, 0, 1);
+      const lvR = LIV(); if (lvR) lvR.caravanLost++;
+      // Phase 19.1: raid gain cap — การปล้นยังเกิดได้เต็มที่ แต่ feedback เพิ่ม danger ถูกจำกัด 3 ครั้ง/30 วัน
+      if (world.day - (r.raidWindowStart || 0) >= 30) { r.raidWindowStart = world.day; r.raidWindowCount = 0; }
+      if (r.raidWindowCount < 3) {
+        r.danger = clamp(r.danger + 0.08, 0, 1);
+        r.raidWindowCount++;
+      }
       RouteSecuritySystem.onCaravanRobbed(r);
       const camp = ambusher ? world.settlements.find(s => s.type === 'camp' && s.factionId === ambusher.factionId) : null;
       for (const m of ambusher ? unitMembers(ambusher) : []) {
@@ -8934,49 +9606,333 @@ const GovernanceSystem = {
       const org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
       const readyWbs = world.warbands.filter(wb =>
         wb.factionId === f.id && wb.type === 'royal_army' && warbandMembers(wb).length >= 6 &&
-        wb.status !== 'disbanding' && !wb.travel
+        wb.status !== 'disbanding' && wb.status !== 'attached' && !wb.armyId && !wb.travel
       );
       if (!readyWbs.length) {
-        OrganizationSystem.raiseCallToArms(f, ruler, target);
+        // Phase 19.1: ไม่พึ่งเมืองหลวงอย่างเดียว — เปิด militaryNeed ให้หัวเมืองส่ง levy มาสมทบ
+        const need = MilitaryNeedSystem.ensureNeed(f, 'campaign', target.id, capital.id, randInt(12, 18));
+        OrganizationSystem.raiseCallToArms(f, ruler, target, need);
         EventSystem.add('war', `📯 ${f.name} ประกาศระดมพล — รออาสาสมัครเดินทางมารวมพล`);
         if (capital) capital.warDemand = Math.min(10, capital.warDemand + 2);
         return;
       }
-      const myUnits = [];
-      for (const wb of readyWbs) {
-        const u = WarbandSystem.warbandAsUnits(wb)[0];
-        if (u && unitMembers(u).length >= 4) myUnits.push(u);
-      }
-      if (!myUnits.length) return;
-      const commander = world.agents.filter(a => a.alive && a.factionId === f.id && (MILITARY_PROFS.has(a.profession) || RULER_PROFS.has(a.profession)))
-        .reduce((m, x) => (x.skills.leadership + x.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? x : m, ruler);
-      const foodBought = Math.min(capital.stock.food * 0.3, 200);
-      capital.stock.food -= foodBought;
-      const ar = createArmy({
-        name: `กองทัพ${f.name}`, commanderId: commander.id, factionId: f.id,
-        unitIds: myUnits.map(u => u.id), locationId: myUnits[0].locationId,
-        objective: { type: 'attack', targetId: target.id }, food: foodBought,
-        baseSettlementId: capital.id,
-        warGoal: typeof CampaignWarfareSystem !== 'undefined' ? CampaignWarfareSystem.pickWarGoal(f, enemyF, target) : 'capture_settlement'
-      });
-      if (typeof CampaignWarfareSystem !== 'undefined') {
-        CampaignWarfareSystem.ensureArmy(ar);
-        CampaignWarfareSystem.computeStrategyProfile(commander, ar);
-        CampaignWarfareSystem.createSupplyLine(ar, capital.id, target.id);
-      }
-      for (const u of myUnits) {
-        u.armyId = ar.id;
-        u.locationId = ar.locationId;
-        for (const m of unitMembers(u)) m.locationId = ar.locationId;
-        const wb = world.warbands.find(w => w.unitIds?.includes(u.id));
-        if (wb) { wb.objective = { type: 'join_campaign', targetId: target.id }; WarbandSystem.startMarch(wb, target.id, 'war'); }
-      }
-      startTravel(ar, target.id, 'war');
-      const totalMen = sum(myUnits, u => unitMembers(u).length);
-      EventSystem.add('war', `⚔🔥 ${f.name} ยกทัพ ${totalMen} นาย (จาก warband จริง) นำโดย ${commander.name} มุ่งโจมตี${target.name}!`);
-      if (org) OrganizationSystem.orgLog(org, `ยกทัพ ${totalMen} นายจาก warband`);
+      const ar = assembleArmyFromWarbands(f, target, readyWbs, capital);
+      if (!ar) return;
+      if (org) OrganizationSystem.orgLog(org, `ยกทัพจาก warband จริงมุ่งโจมตี${target.name}`);
       if (capital) capital.warDemand = Math.min(10, capital.warDemand + 4);
       return;
+    }
+  }
+};
+
+/* ── Phase 19.1: Military Needs — ระบบระดมพลแบบกระจาย (levy relay) ──
+   Ruler ประกาศความต้องการ → governor หัวเมืองโพสต์ levy offer ท้องถิ่น →
+   muster ท้องถิ่น → levy warband เดินไปจุดรวมพล → ตั้งกองทัพจาก warband จริง
+   เมืองหลวงร้าง ≠ faction อัมพาต */
+function createMilitaryNeed(opt) {
+  if (!world.militaryNeeds) world.militaryNeeds = [];
+  const n = {
+    id: uid(),
+    organizationId: opt.organizationId || null,
+    factionId: opt.factionId,
+    type: opt.type || 'campaign',        // defense | campaign | anti_bandit | siege
+    targetSettlementId: opt.targetSettlementId || null,
+    rallySettlementId: opt.rallySettlementId,
+    desiredStrength: opt.desiredStrength || 12,
+    currentStrength: 0,
+    createdDay: world.day,
+    expiresDay: opt.expiresDay || world.day + 45,
+    subOfferIds: [],
+    assembledWarbandIds: [],
+    wantSubOffers: opt.wantSubOffers !== false,
+    status: 'active',                    // active | assembled | done | failed
+    armyId: null
+  };
+  world.militaryNeeds.push(n);
+  return n;
+}
+
+/* ตั้งกองทัพจาก warband จริง — ใช้ร่วมโดย raiseArmy และ MilitaryNeedSystem (ไม่เสกทหาร) */
+function assembleArmyFromWarbands(f, target, warbands, base) {
+  const enemyF = getFaction(target.factionId);
+  const myUnits = [];
+  for (const wb of warbands) {
+    const u = WarbandSystem.warbandAsUnits(wb)[0];
+    if (u && unitMembers(u).length >= 3) myUnits.push(u);
+  }
+  if (!myUnits.length) return null;
+  const ruler = f.rulerId != null ? getAgent(f.rulerId) : null;
+  const fallback = getAgent(warbands[0].leaderId);
+  const commander = world.agents
+    .filter(a => a.alive && a.factionId === f.id && (MILITARY_PROFS.has(a.profession) || RULER_PROFS.has(a.profession)))
+    .reduce((m, x) => (x.skills.leadership + x.skills.tactics) > (m.skills.leadership + m.skills.tactics) ? x : m,
+      ruler && ruler.alive ? ruler : fallback);
+  if (!commander) return null;
+  const foodBought = Math.min(base.stock.food * 0.3, 200);
+  base.stock.food -= foodBought;
+  const ar = createArmy({
+    name: `กองทัพ${f.name}`, commanderId: commander.id, factionId: f.id,
+    unitIds: myUnits.map(u => u.id), locationId: myUnits[0].locationId,
+    objective: { type: 'attack', targetId: target.id }, food: foodBought,
+    baseSettlementId: base.id,
+    warGoal: typeof CampaignWarfareSystem !== 'undefined' && enemyF ? CampaignWarfareSystem.pickWarGoal(f, enemyF, target) : 'capture_settlement'
+  });
+  if (typeof CampaignWarfareSystem !== 'undefined') {
+    CampaignWarfareSystem.ensureArmy(ar);
+    CampaignWarfareSystem.computeStrategyProfile(commander, ar);
+    CampaignWarfareSystem.createSupplyLine(ar, base.id, target.id);
+  }
+  for (const u of myUnits) {
+    u.armyId = ar.id;
+    u.locationId = ar.locationId;
+    for (const m of unitMembers(u)) m.locationId = ar.locationId;
+    const wb = world.warbands.find(w => w.unitIds?.includes(u.id));
+    if (wb) {
+      wb.status = 'attached';   // กองทัพจัดการสมาชิกแทน — ไม่เดินขนานอีกต่อไป
+      wb.armyId = ar.id;
+      wb.objective = { type: 'join_campaign', targetId: target.id };
+      wb.travel = null;
+      wb.destinationId = null;
+      wb.locationId = ar.locationId;
+    }
+  }
+  startTravel(ar, target.id, 'war');
+  const lv = LIV(); if (lv) lv.armiesCreated++;
+  const totalMen = sum(myUnits, u => unitMembers(u).length);
+  EventSystem.add('war', `⚔🔥 ${f.name} ยกทัพ ${totalMen} นาย (จาก warband จริง) นำโดย ${commander.name} มุ่งโจมตี${target.name}!`);
+  return ar;
+}
+
+const MilitaryNeedSystem = {
+  ensureNeed(f, type, targetId, rallyId, strength) {
+    const existing = (world.militaryNeeds || []).find(n =>
+      n.status === 'active' && n.factionId === f.id && n.type === type && n.targetSettlementId === targetId);
+    if (existing) return existing;
+    const org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
+    return createMilitaryNeed({
+      factionId: f.id, organizationId: org ? org.id : null, type,
+      targetSettlementId: targetId, rallySettlementId: rallyId,
+      desiredStrength: strength || 12
+    });
+  },
+
+  tickDaily() {
+    if (!world.militaryNeeds || !world.militaryNeeds.length) return;
+    for (const need of world.militaryNeeds) {
+      if (need.status !== 'active') continue;
+      const f = getFaction(need.factionId);
+      if (!f) { need.status = 'failed'; continue; }
+      if (!need.organizationId) {
+        const org = world.organizations.find(o => o.factionId === f.id && o.type === 'royal_army' && o.status === 'active');
+        if (org) need.organizationId = org.id;
+      }
+      need.assembledWarbandIds = need.assembledWarbandIds.filter(id => {
+        const wb = getWarband(id);
+        return wb && wb.status !== 'disbanding' && warbandMembers(wb).length > 0;
+      });
+      need.currentStrength = sum(need.assembledWarbandIds, id => warbandMembers(getWarband(id)).length);
+
+      // กระจาย levy offer ผ่านหัวเมืองที่มีคน (ทุก 5 วัน ถ้ากำลังยังไม่พอ)
+      if (need.wantSubOffers && world.day % 5 === 0 && need.currentStrength < need.desiredStrength) {
+        this.fanOutLevyOffers(need, f);
+      }
+
+      // ประกอบกองทัพเมื่อมีกำลังที่จุดรวมพล ≥6 นาย (พอออกรบ) — ไม่รอจนครบเป้า
+      const readyAtRally = need.assembledWarbandIds.map(getWarband)
+        .filter(wb => wb && !wb.travel && wb.status !== 'attached' && wb.locationId === need.rallySettlementId);
+      const strengthAtRally = sum(readyAtRally, wb => warbandMembers(wb).length);
+      const expired = world.day >= need.expiresDay;
+      if (strengthAtRally >= 6 && (strengthAtRally >= need.desiredStrength * 0.5 || expired || world.day - need.createdDay > 20)) {
+        this.assemble(need, f, readyAtRally);
+      } else if (expired) {
+        need.status = 'failed';
+        // levy ที่รวมได้ไม่หายเปล่า — ผันไปคุมเส้นทางแถวบ้าน (ป้อนกำลังให้ route security)
+        for (const id of need.assembledWarbandIds) {
+          const wb = getWarband(id);
+          if (wb && wb.status !== 'disbanding' && wb.status !== 'attached') {
+            wb.objective = { type: 'patrol_route', settlementId: wb.homeSettlementId || wb.locationId };
+            wb.militaryNeedId = null;
+          }
+        }
+        EventSystem.add('war', `📭 การระดมพลของ${f.name}ไม่ครบกำลังตามเวลา — กองที่รวมได้ผันไปคุมเส้นทาง`);
+      }
+    }
+    // เก็บกวาด need ที่จบแล้วเกิน 90 วัน
+    world.militaryNeeds = world.militaryNeeds.filter(n => n.status === 'active' || world.day - n.createdDay < 90);
+  },
+
+  fanOutLevyOffers(need, f) {
+    const org = need.organizationId ? getOrganization(need.organizationId) : null;
+    if (!org) return;
+    const settlements = world.settlements
+      .filter(s => s.factionId === f.id && s.type !== 'camp' && populationOf(s) >= 4)
+      .sort((a, b) => populationOf(b) - populationOf(a));
+    let posted = 0;
+    for (const s of settlements) {
+      if (posted >= 3) break;
+      if (world.recruitmentOffers.some(o => o.status === 'open' && o.militaryNeedId === need.id && o.settlementId === s.id)) continue;
+      const offer = OrganizationSystem.postRecruitmentOffer(org, {
+        settlementId: s.id,
+        type: need.type === 'anti_bandit' ? 'anti_bandit_patrol' : need.type === 'defense' ? 'defend_settlement' : 'militia_call',
+        roleNeeded: 'soldier',
+        quantityNeeded: randInt(5, 9),
+        rewards: { pay: 12 + (s.warDemand || 0) * 2, food: 8 },
+        riskLevel: need.type === 'anti_bandit' ? 0.45 : 0.5,
+        duration: 12,
+        musterDays: 7,
+        reach: 'nearby',
+        militaryNeedId: need.id,
+        targetSettlementId: need.type === 'defense' ? need.targetSettlementId : need.rallySettlementId
+      });
+      if (offer) { need.subOfferIds.push(offer.id); posted++; }
+    }
+  },
+
+  assemble(need, f, warbands) {
+    const rally = getSettlement(need.rallySettlementId);
+    if (!rally || !warbands.length) { need.status = 'failed'; return; }
+    if (need.type === 'defense') {
+      // วางกำลังป้องกันเมืองเป้าหมาย — คุมเส้นทางรอบเมือง พร้อมรบเมื่อข้าศึกมาถึง
+      for (const wb of warbands) {
+        wb.objective = { type: 'patrol_route', settlementId: need.targetSettlementId || rally.id };
+        wb.status = 'patrolling';
+        wb.militaryNeedId = null;
+      }
+      need.status = 'done';
+      EventSystem.add('war', `🛡 ${f.name} วางกำลัง ${sum(warbands, wb => warbandMembers(wb).length)} นายป้องกัน${rally.name}`);
+      return;
+    }
+    if (need.type === 'anti_bandit') {
+      // ไม่ตั้งกองทัพ — ผัน warband ไปกวาดล้างเส้นทางรอบจุดรวมพล
+      for (const wb of warbands) {
+        wb.objective = { type: 'patrol_route', settlementId: rally.id };
+        wb.status = 'patrolling';
+        wb.militaryNeedId = null;
+      }
+      need.status = 'done';
+      EventSystem.add('war', `🛡 ${f.name} จัดกำลัง ${sum(warbands, wb => warbandMembers(wb).length)} นายกวาดล้างโจรรอบ${rally.name}`);
+      return;
+    }
+    const target = need.targetSettlementId ? getSettlement(need.targetSettlementId) : null;
+    if (!target) { need.status = 'failed'; return; }
+    const ar = assembleArmyFromWarbands(f, target, warbands, rally);
+    if (ar) {
+      need.status = 'assembled';
+      need.armyId = ar.id;
+      ar.militaryNeedId = need.id;
+    } else {
+      need.status = 'failed';
+    }
+  },
+
+  attachWarbandToArmy(wb, ar) {
+    const units = WarbandSystem.warbandAsUnits(wb);
+    for (const u of units) {
+      if (u.armyId === ar.id) continue;
+      u.armyId = ar.id;
+      if (!ar.unitIds.includes(u.id)) ar.unitIds.push(u.id);
+      u.locationId = ar.locationId;
+      for (const m of unitMembers(u)) m.locationId = ar.locationId;
+    }
+    wb.status = 'attached';
+    wb.armyId = ar.id;
+    wb.travel = null;
+    wb.destinationId = null;
+    wb.locationId = ar.locationId;
+    EventSystem.add('war', `🤝 ${wb.name} เข้าสมทบ${ar.name} (${warbandMembers(wb).length} นาย)`);
+  }
+};
+
+/* ── Phase 19.1: Faction Leadership Recovery — faction ห้ามอัมพาตถาวร ──
+   ruler ตาย/สืบทอดล้มเหลวเกิดได้ (มี interregnum จริง) แต่ภายใน ~10 วัน
+   ต้องมี acting ruler จาก agent จริงเสมอ ไม่ปล่อย rulerId ค้างชี้ศพ */
+const FactionLeadershipSystem = {
+  INTERVAL: 10,
+
+  tick() {
+    if (!world) return;
+    // นับวัน interregnum (ตัวชี้วัด liveness — ราคาถูก รันทุกวัน)
+    const liv = LIV();
+    for (const f of world.factions) {
+      const ruler = f.rulerId != null ? getAgent(f.rulerId) : null;
+      if ((!ruler || !ruler.alive) && liv) liv.interregnumDays++;
+    }
+    if (world.day % this.INTERVAL !== 0) return;
+    for (const f of world.factions) {
+      const ruler = f.rulerId != null ? getAgent(f.rulerId) : null;
+      if (ruler && ruler.alive) continue;
+      const settlements = world.settlements.filter(s => s.factionId === f.id);
+      if (!settlements.length && !f.isBandit) continue; // ปล่อยให้ checkFactionCollapse จัดการ
+      this.electLeader(f, settlements);
+    }
+    this.repairInvalidGovernors();
+  },
+
+  candidateScore(a) {
+    let score = a.skills.leadership * 3 + a.skills.governance * 2
+      + (a.reputation || 0) * 0.5 + (a.fame || 0) * 0.3;
+    if (RULER_PROFS.has(a.profession)) score += 10;
+    if (MILITARY_PROFS.has(a.profession)) score += 3;
+    score += world.settlements.filter(s => s.ownerId === a.id).length * 4;
+    if (a.gov && a.gov.corruption) score -= a.gov.corruption * 8;
+    if (a.injuries && a.injuries.length) score -= a.injuries.length * 2;
+    return score;
+  },
+
+  electLeader(f, settlements) {
+    settlements = settlements || world.settlements.filter(s => s.factionId === f.id);
+    // ผู้ท้าชิง: คนใน faction ก่อน — ถ้าไม่มีเลย ใช้คนที่อาศัยในเมืองของ faction
+    let candidates = world.agents.filter(a => a.alive && a.factionId === f.id && !a.isTownCaravan && !a.isEmergencyCaravan);
+    if (!candidates.length) {
+      const sIds = new Set(settlements.map(s => s.id));
+      candidates = world.agents.filter(a => a.alive && sIds.has(a.locationId));
+    }
+    if (!candidates.length) { f.rulerId = null; return null; } // ไม่มีใครเหลือจริงๆ — รอรอบหน้า
+    const best = candidates.reduce((m, a) => this.candidateScore(a) > this.candidateScore(m) ? a : m, candidates[0]);
+    const weak = this.candidateScore(best) < 15;
+    f.rulerId = best.id;
+    best.factionId = f.id;
+    f.interregnumSince = null;
+    if (f.isBandit) { best.currentThought = 'บัดนี้ข้าคือหัวหน้าโจร'; return best; } // ไม่ลง chronicle — ลดสแปม
+    best.profession = settlements.length > 2 ? 'king' : 'lord';
+    best.rank = best.profession;
+    if (best.unitId) {
+      const u = getUnit(best.unitId);
+      if (u) u.memberIds = u.memberIds.filter(id => id !== best.id);
+      best.unitId = null;
+    }
+    for (const s of settlements) {
+      const owner = s.ownerId != null ? getAgent(s.ownerId) : null;
+      if (!owner || !owner.alive) s.ownerId = best.id;
+    }
+    const lv = LIV(); if (lv) lv.rulersRecovered++;
+    const title = weak ? 'ผู้สำเร็จราชการ' : 'ผู้นำคนใหม่';
+    EventSystem.add('politics', `👑 ${best.name} ก้าวขึ้นเป็น${title}ของ${f.name} — ยุคไร้ผู้นำสิ้นสุด`);
+    addDeed(best, `ก้าวขึ้นนำ${f.name}หลังยุคไร้ผู้นำ`, weak ? 8 : 12);
+    factionTimeline(f, `${best.name} ขึ้นเป็น${title}`);
+    Chronicle.add({
+      category: 'faction', importance: 4,
+      title: `👑 ${best.name} ${weak ? 'รับตำแหน่งผู้สำเร็จราชการ' : 'ขึ้นครองอำนาจ'}${f.name}`,
+      description: `หลังบัลลังก์ว่างลง สภาหัวเมืองเลือก${best.name}ขึ้นนำแผ่นดิน`,
+      agents: [best.id], factions: [f.id]
+    });
+    return best;
+  },
+
+  repairInvalidGovernors() {
+    for (const s of world.settlements) {
+      if (s.governorId != null) {
+        const g = getAgent(s.governorId);
+        if (!g || !g.alive) s.governorId = null;
+      }
+      if (s.ownerId != null) {
+        const o = getAgent(s.ownerId);
+        if (!o || !o.alive) {
+          const f = getFaction(s.factionId);
+          const ruler = f && f.rulerId != null ? getAgent(f.rulerId) : null;
+          s.ownerId = ruler && ruler.alive ? f.rulerId : null;
+        }
+      }
     }
   }
 };
@@ -9005,6 +9961,9 @@ function handleRulerDeath(dead) {
         agents: [heir.id], factions: [f.id]
       });
     } else {
+      // Phase 19.1: ล้าง rulerId ทันที (ไม่ปล่อยชี้ศพ) — FactionLeadershipSystem จะเลือก acting ruler ภายใน ~10 วัน
+      f.rulerId = null;
+      f.interregnumSince = world.day;
       EventSystem.add('politics', `💀 ${f.name} ไร้ผู้สืบทอด — อาณาจักรระส่ำระสาย`);
       factionTimeline(f, `ไร้ผู้สืบทอดหลัง${dead.name}ตาย — ระส่ำระสาย`);
       Chronicle.add({
@@ -9447,6 +10406,11 @@ const DiplomacySystem = {
       this.betray(f, other, 'ประกาศสงครามทั้งที่มีสัญญา');
     }
     startWar(f, other, cause);
+    // Phase 19.1: ฝ่ายถูกโจมตีเปิด defense need ทันที — หัวเมืองส่ง levy มาป้องกัน
+    if (typeof MilitaryNeedSystem !== 'undefined' && !other.isBandit) {
+      const defCapital = world.settlements.find(s => s.factionId === other.id && (s.type === 'castle' || s.type === 'town'));
+      if (defCapital) MilitaryNeedSystem.ensureNeed(other, 'defense', defCapital.id, defCapital.id, randInt(10, 16));
+    }
   },
 
   offerPeace(f, other) {
@@ -9616,10 +10580,22 @@ function simulateDay() {
   for (const s of world.settlements) LogisticsSystem.updateSettlement(s);
   LogisticsSystem.traderRespawn();
   RouteSecuritySystem.update();
+  LaborMarketSystem.update();      // Phase 19.1: อัปเดตค่าแรงพรีเมียม + เปิด labor offer
+  LaborMarketSystem.tickDaily();   // Phase 19.1: จับคู่คนกับงานผลิตที่ขาดแคลน
 
   /* 6-8. Agent AI + งาน + พ่อค้า */
   for (const a of world.agents) {
     if (!a.alive) continue;
+    // Phase 19.1: การ์ดคุ้มกันคาราวาน — ตามคาราวานไป ปลดประจำการเมื่อภารกิจจบ
+    if (a._escortOf != null) {
+      const t = getAgent(a._escortOf);
+      if (!t || !t.alive || (!t.travel && !t.cargo)) {
+        a._escortOf = null;   // ภารกิจจบ — กลับสู่ชีวิตปกติที่เมืองที่อยู่
+      } else {
+        a.locationId = t.locationId;
+        continue;
+      }
+    }
     if (a.travel && !a.unitId) {
       const wasTraveling = !!a.travel;
       const arrived = advanceTravel(a, agentSpeed(a));
@@ -9647,9 +10623,11 @@ function simulateDay() {
   MilitarySystem.updateArmies();
 
   /* 12-17. Governance + factions */
+  FactionLeadershipSystem.tick();   // Phase 19.1: ฟื้นผู้นำก่อน governance ทำงาน — faction ห้ามอัมพาต
   for (const s of world.settlements) GovernanceSystem.updateSettlement(s);
   GovernanceSystem.updateFactions();
   DiplomacySystem.tick();
+  MilitaryNeedSystem.tickDaily();   // Phase 19.1: levy relay — หลังการทูต (สงครามใหม่สร้าง need) ก่อน recruitment tick
   MarketTradeSystem.tickDaily();
   if (typeof AgentMemorySystem !== 'undefined') AgentMemorySystem.tickDaily();
   if (typeof CampaignWarfareSystem !== 'undefined') CampaignWarfareSystem.tickDaily();
@@ -9667,10 +10645,10 @@ function simulateDay() {
     if (s.type !== 'camp') LogisticsSystem.validateCaravanSlots(s);
   }
 
-  /* route dynamics */
+  /* route dynamics — Phase 19.1: decay แรงขึ้นให้เส้นทาง "ฟื้นได้" เมื่อมี patrol */
   for (const r of world.routes) {
     r.traffic *= 0.9;
-    r.danger = clamp(r.danger - 0.005 - r.patrolLevel * 0.01, 0.02, 1);
+    r.danger = clamp(r.danger - 0.008 - r.patrolLevel * 0.012, 0.02, 1);
     r.patrolLevel = Math.max(0, r.patrolLevel - 0.1);
   }
 
@@ -9752,11 +10730,23 @@ function simulateDay() {
   /* ── สรุปยุคสมัยอัตโนมัติทุก 50 วัน ── */
   if (world.day % 50 === 0) generateEraSummary();
 
-  /* สรุปสถานการณ์ทุก 15 วัน */
+  /* สรุปสถานการณ์ทุก 15 วัน + เก็บ liveness snapshot (Phase 19.1) */
   if (world.day % 15 === 0) {
     const alive = world.agents.filter(a => a.alive).length;
     const avgFood = sum(marketSettlements(), s => s.prices.food) / marketSettlements().length;
     EventSystem.add('system', `📊 Day ${world.day}: ประชากร ${alive} | ราคาอาหารเฉลี่ย ${fmt(avgFood, 1)} | ศึก ${world.stats.battles} | ปล้น ${world.stats.raids + world.stats.caravansRobbed} | ตาย ${world.stats.deaths}`);
+    const lv = LIV();
+    if (lv) {
+      const castle = world.settlements.find(s => s.type === 'castle');
+      lv.capitalPopulation = castle ? populationOf(castle) : 0;
+      lv.settlementsDepopulated = marketSettlements().filter(s => populationOf(s) === 0).length;
+      lv.minerCount = world.agents.filter(a => a.alive && a.profession === 'miner').length;
+      lv.woodcutterCount = world.agents.filter(a => a.alive && a.profession === 'woodcutter').length;
+      lv.crafterCount = world.agents.filter(a => a.alive && a.profession === 'crafter').length;
+      lv.routeDangerAverage = +(world.routes.reduce((s, r) => s + (r.danger || 0), 0) / Math.max(world.routes.length, 1)).toFixed(3);
+      lv.caravanLossRate = lv.caravanTrips > 0 ? +(lv.caravanLost / (lv.caravanTrips + lv.caravanLost)).toFixed(3) : 0;
+      lv.caravanSurvivalRate = +(1 - lv.caravanLossRate).toFixed(3);
+    }
   }
 
   UI.inspectorDirty = true;
@@ -10314,7 +11304,12 @@ const ObserverSystem = {
       day: world.day,
       tradeHealth: world.marketIndex ? fmt(world.marketIndex.tradeHealth, 0) : '—',
       guilds: (world.guilds || []).length,
-      hubs: marketSettlements().filter(s => s.marketRole?.isMarketHub).length
+      hubs: marketSettlements().filter(s => s.marketRole?.isMarketHub).length,
+      // Phase 19.1 liveness
+      armies: world.armies ? world.armies.length : 0,
+      armiesCreated: world.balanceMetrics?.liveness?.armiesCreated || 0,
+      caravanSurvival: world.balanceMetrics?.liveness ? Math.round((world.balanceMetrics.liveness.caravanSurvivalRate || 1) * 100) : 100,
+      interregnum: alive.filter(a => a.profession === 'king' || a.profession === 'lord').length < liveFactions.filter(f => !f.isBandit).length
     };
   },
 
@@ -10549,10 +11544,12 @@ const ObserverSystem = {
       ['👥', d.population, 'pop'],
       ['🚩', d.factions, 'fac'],
       ['⚔', d.wars, 'war'],
+      ['🛡', d.armies, 'armies'],
+      ['🐪', d.caravanSurvival + '%', 'caravan'],
       ['🏦', d.tradeHealth, 'trade'],
       ['🏛', d.guilds, 'guild'],
       ['🍞', d.foodCrisis, 'food'],
-      ['👑', d.strongest, 'str'],
+      ['👑', d.interregnum ? '⚠ ว่าง' : d.strongest, 'str'],
       ['📅', 'Day ' + d.day, 'day']
     ].map(([icon, val, cls]) => `<span class="dash-item ${cls}" title="${cls}">${icon} ${val}</span>`).join('');
   },
@@ -13689,7 +14686,7 @@ const SandboxTools = {
 
 /* ═══════════════════ 17.5 PHASE 13: SAVE / LOAD / EXPORT ═══════════════════ */
 
-const SAVE_SCHEMA_VERSION = '18.5';
+const SAVE_SCHEMA_VERSION = '19.1';
 const SAVE_GAME_ID = 'living-kingdom-sandbox';
 const SAVE_STORAGE_KEY = 'livingKingdomSandbox_save';
 const AUTOSAVE_EVERY_DAYS = 50;
@@ -13889,6 +14886,12 @@ const SaveSystem = {
     w.captureCredits = w.captureCredits || [];
     w.vassalGrants = w.vassalGrants || [];
     w.marketIndex = Object.assign(defaultMarketIndex(), w.marketIndex || {});
+    // Phase 19.1
+    w.militaryNeeds = w.militaryNeeds || [];
+    w.balanceMetrics = w.balanceMetrics && w.balanceMetrics.liveness
+      ? { liveness: Object.assign(defaultBalanceMetrics().liveness, w.balanceMetrics.liveness) }
+      : defaultBalanceMetrics();
+    w.laborMarket = Object.assign(defaultLaborMarket(), w.laborMarket || {});
     w.stats = Object.assign({
       deaths: 0, battles: 0, raids: 0, caravansRobbed: 0, squadsFormed: 0, gearBought: 0,
       bountiesPosted: 0, traderSpawns: 0, townCaravans: 0, townCaravansLost: 0,
@@ -13972,6 +14975,11 @@ const SaveSystem = {
     if (r.ambushRisk == null) r.ambushRisk = clamp((r.threat || r.danger || 0.1) * 0.9, 0.02, 0.85);
     if (r.supplyTraffic == null) r.supplyTraffic = 0;
     if (r.scoutCoverage == null) r.scoutCoverage = 0;
+    // Phase 19.1
+    if (r.securityPressure == null) r.securityPressure = r.danger || 0;
+    if (r.raidWindowStart == null) r.raidWindowStart = 0;
+    if (r.raidWindowCount == null) r.raidWindowCount = 0;
+    if (r.lastResponseDay == null) r.lastResponseDay = -999;
   },
 
   migrateWar(w) {
@@ -14143,6 +15151,9 @@ const SaveSystem = {
     }
     if (!wb.foundingReason) wb.foundingReason = wb.organizationId ? 'guild_detachment' : 'local_militia';
     if (!wb.politicalMode) wb.politicalMode = wb.organizationId ? 'guild_backed' : 'independent';
+    if (wb.militaryNeedId == null) wb.militaryNeedId = null;   // Phase 19.1
+    if (wb.homeSettlementId == null) wb.homeSettlementId = null;
+    if (wb._idleDays == null) wb._idleDays = 0;
   },
 
   migrateRecruitmentOffer(ro) {
@@ -14151,6 +15162,12 @@ const SaveSystem = {
     ro.requirements = ro.requirements || {};
     ro.rewards = ro.rewards || { pay: 10, food: 5 };
     if (!ro.status) ro.status = 'open';
+    // Phase 19.1
+    if (!ro.reach) ro.reach = 'local';
+    if (ro.failCount == null) ro.failCount = 0;
+    if (ro.escalation == null) ro.escalation = 0;
+    if (ro.militaryNeedId == null) ro.militaryNeedId = null;
+    if (ro.targetSettlementId == null) ro.targetSettlementId = null;
   },
 
   migrateMusterPoint(mp) {
