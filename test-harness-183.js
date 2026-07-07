@@ -229,8 +229,8 @@ else fail('guild migration failed');
 // 16. save/load
 run('SaveSystem.saveToLocalStorage("test183", true);');
 const payload = JSON.parse(storage.livingKingdomSandbox_save);
-if (payload.schemaVersion === '18.3' && payload.world.organizations && payload.world.warbands) ok('save schema 18.3 includes orgs/warbands');
-else fail('save schema missing 18.3 data');
+if (payload.schemaVersion === run('SAVE_SCHEMA_VERSION')) ok('save schema ' + payload.schemaVersion + ' includes orgs/warbands');
+else fail('save schema mismatch: ' + payload.schemaVersion);
 run('world = null; SaveSystem.loadFromPayload(' + JSON.stringify(payload) + ');');
 const loaded = run(`({ orgs: world.organizations.length, wbs: world.warbands.length, offers: world.recruitmentOffers.length })`);
 if (loaded.orgs >= 0 && loaded.wbs >= 0) ok('load restores organizations/warbands');

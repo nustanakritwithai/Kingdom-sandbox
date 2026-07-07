@@ -1,0 +1,26 @@
+{
+  "name": "living-kingdom-sandbox",
+  "version": "19.2.0",
+  "description": "Living Kingdom Sandbox — AI economy, war, and governance simulator",
+  "main": "script.js",
+  "scripts": {
+    "test": "node scripts/run-all-tests.js --core",
+    "test:core": "node scripts/run-all-tests.js --core",
+    "test:audit": "node scripts/run-all-tests.js --audit",
+    "test:ui": "node scripts/run-all-tests.js --ui",
+    "test:all": "node scripts/run-all-tests.js --all",
+    "test:regression": "node test-harness-191-regression.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nustanakritwithai/Kingdom-sandbox.git"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "playwright-core": "^1.52.0",
+    "puppeteer": "^24.0.0"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.52.0"
+  }
+}
