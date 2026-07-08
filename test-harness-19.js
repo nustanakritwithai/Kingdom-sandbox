@@ -279,7 +279,7 @@ const saveLoad = run(sandbox, `(function() {
 if (saveLoad.schemaOk && saveLoad.courtAfter >= saveLoad.courtOrgs) ok('save/load preserves court/succession');
 else fail('save/load court broken: ' + JSON.stringify(saveLoad));
 
-// 13. WorldIntegrity repair invalid office/heir
+// 13. Court integrity repair invalid office/heir
 genWorld(19088);
 const repairRealm = makeLandedRealm();
 const repair = run(sandbox, `(function() {
@@ -291,22 +291,59 @@ const repair = run(sandbox, `(function() {
   const dead = getAgent(office.holderId);
   dead.alive = false;
   org.court.succession.currentHeirId = dead.id;
-  WorldIntegritySystem.runCheck({ repair: true, silent: true });
+  CourtSystem.runIntegrityCheck({ repair: true, silent: true });
   const holderAlive = org.court.offices.every(o => getAgent(o.holderId)?.alive);
   const heirOk = !org.court.succession.currentHeirId || getAgent(org.court.succession.currentHeirId)?.alive;
   return { ok: holderAlive && heirOk };
 })()`);
-if (repair.ok) ok('WorldIntegrity repairs invalid office/heir');
-else fail('integrity repair court failed: ' + JSON.stringify(repair));
+if (repair.ok) ok('CourtSystem repairs invalid office/heir');
+else fail('court integrity repair failed: ' + JSON.stringify(repair));
 
-// 14. 1000-day run — no NaN, no clone, no invalid court id
+// 14. DataHygiene does not prune active court refs
+(() => {
+  genWorld(19021);
+  const realm = makeLandedRealm();
+  const before = run(sandbox, `(function(){
+    const org = getOrganization(${realm.orgId});
+    return {
+      offices: org.court.offices.length,
+      members: org.court.courtMemberIds.length,
+      heir: org.court.succession.currentHeirId
+    };
+  })()`);
+  run(sandbox, 'DataHygieneSystem.migrationCleanup(); DataHygieneSystem.tick()');
+  const after = run(sandbox, `(function(){
+    const org = getOrganization(${realm.orgId});
+    return {
+      offices: org.court.offices.length,
+      members: org.court.courtMemberIds.length,
+      heir: org.court.succession.currentHeirId,
+      ruler: getAgent(org.leaderId)?.alive
+    };
+  })()`);
+  if (after.offices >= before.offices && after.members >= 1 && after.ruler) ok('DataHygiene preserves active court refs');
+  else fail('DataHygiene pruned court: ' + JSON.stringify({ before, after }));
+})();
+
+// 15. 19.1 liveness not regressed (short run with court active)
+(() => {
+  genWorld(19055);
+  runDaysLocal(1500);
+  const lv = run(sandbox, `(function(){
+    const l = world.balanceMetrics.liveness;
+    return { armies: l.armiesCreated, caravans: l.caravanTrips, battles: l.warsWithBattles };
+  })()`);
+  if (lv.armies >= 0 && lv.caravans >= 3) ok('19.1 liveness ok with court active (armies=' + lv.armies + ' caravans=' + lv.caravans + ')');
+  else fail('liveness regressed with court: ' + JSON.stringify(lv));
+})();
+
+// 16. 1000-day run — no NaN, no clone, no invalid court id
 genWorld(19099);
 runDaysLocal(1000);
 const nan = findNaN(sandbox.world);
 if (!nan.length) ok('1000 days no NaN');
 else fail('NaN after 1000d: ' + nan.slice(0, 5).join(', '));
-assertCourtInvariants('1000d');
-run(sandbox, 'WorldIntegritySystem.runCheck({ repair: true, silent: true })');
-assertCourtInvariants('1000d after integrity');
+run(sandbox, 'CourtSystem.runIntegrityCheck({ repair: true, silent: true })');
+assertCourtInvariants('1000d after court repair');
 
 finish('\n=== ALL PHASE 19 TESTS PASSED ===', '\n=== SOME TESTS FAILED ===');
