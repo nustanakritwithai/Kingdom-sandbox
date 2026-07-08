@@ -14,7 +14,8 @@ const GROUPS = {
     { file: 'test-harness-185-save.js', required: true },
     { file: 'test-harness-19.js', required: true },
     { file: 'test-harness-191-liveness.js', required: true },
-    { file: 'test-harness-191-regression.js', required: true }
+    { file: 'test-harness-191-regression.js', required: true },
+    { file: 'test-harness-193-hygiene.js', required: true }
   ],
   audit: [
     { file: 'audit/probe-longrun.js', args: ['8', '3000'], required: true, slow: true },
