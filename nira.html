@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Realm of Nira — R0 World Atlas</title>
+  <link rel="stylesheet" href="nira.css">
+</head>
+<body>
+<header class="topbar">
+  <div><strong>THE REALM OF NIRA</strong><small>R0 · Canon World Atlas / Read-only Map Data</small></div>
+  <nav><a href="./index.html">Kingdom Sandbox</a><span id="loadStatus" role="status">กำลังโหลดข้อมูล...</span></nav>
+</header>
+<main class="layout">
+  <section class="atlas">
+    <div class="toolbar">
+      <label><input type="checkbox" id="showPins" checked> จุดสำคัญ</label>
+      <label><input type="checkbox" id="showLinks"> เส้นทางทั้งหมด</label>
+      <label><input type="checkbox" id="allowPortals"> อนุญาตประตูมิติ</label>
+      <label class="upload-map">เลือกภาพแผนที่ <input type="file" id="pickMap" accept="image/*"></label>
+      <button type="button" id="zoomOut">−</button><button type="button" id="zoomIn">+</button>
+    </div>
+    <div id="mapViewport" class="map-viewport"><canvas id="atlasCanvas" width="1536" height="1536" aria-label="แผนที่ The Realm of Nira พร้อมตำแหน่งและเส้นทาง"></canvas></div>
+    <p class="hint">ตำแหน่งเป็นพิกัดประมาณจากภาพต้นฉบับ เส้นที่แสดงเป็นกราฟการเดินทางแบบแผนผัง ยังไม่ผ่านการตรวจ Collision หรือเส้นทางเดินจริงใน Pixel-level</p>
+  </section>
+  <aside class="panel">
+    <section><h2>World Data</h2><p id="counts">กำลังโหลด...</p><p class="hint">R0 แสดงข้อมูลโลกเท่านั้น ไม่ได้เปิด AI NPC หรือจำลองเศรษฐกิจ</p></section>
+    <section><h2>ตัวเลือกพื้นที่</h2><label for="regionSelect">ภูมิภาค</label><select id="regionSelect"></select><div id="regionInfo" class="infobox"></div></section>
+    <section><h2>ค้นหาเส้นทาง</h2><label for="fromSelect">จาก</label><select id="fromSelect"></select><label for="toSelect">ไป</label><select id="toSelect"></select><button id="findRoute" type="button">คำนวณเส้นทาง</button><div id="routeResult" class="infobox" aria-live="polite">เลือกต้นทางและปลายทาง</div></section>
+    <section><h2>ข้อมูลจุดสำคัญ</h2><div id="selectedLocation" class="infobox">คลิกเครื่องหมายบนแผนที่</div></section>
+    <section><h2>สถานะข้อมูล</h2><div id="assetInfo" class="infobox">กำลังตรวจภาพ...</div></section>
+  </aside>
+</main>
+<script type="module" src="nira.js"></script>
+</body>
+</html>

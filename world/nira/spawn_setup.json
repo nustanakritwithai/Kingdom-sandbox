@@ -1,0 +1,87 @@
+{
+  "start_day": 1,
+  "start_seed": "NIRA-R0-001",
+  "start_mode": "observer",
+  "profiles": {
+    "mvp30": {
+      "target_agents": 30,
+      "locations": [
+        {
+          "location_id": "loc_niravale",
+          "count": 15
+        },
+        {
+          "location_id": "loc_greenford",
+          "count": 5
+        },
+        {
+          "location_id": "loc_solkar",
+          "count": 5
+        },
+        {
+          "location_id": "loc_silverpeak",
+          "count": 5
+        }
+      ]
+    },
+    "expanded132": {
+      "target_agents": 132,
+      "locations": [
+        {
+          "location_id": "loc_niravale",
+          "count": 22
+        },
+        {
+          "location_id": "loc_redbanner",
+          "count": 12
+        },
+        {
+          "location_id": "loc_silverpeak",
+          "count": 10
+        },
+        {
+          "location_id": "loc_solkar",
+          "count": 12
+        },
+        {
+          "location_id": "loc_emerald_harbor",
+          "count": 11
+        },
+        {
+          "location_id": "loc_blossomhaven",
+          "count": 10
+        },
+        {
+          "location_id": "loc_frostkeep",
+          "count": 9
+        },
+        {
+          "location_id": "loc_emberfall",
+          "count": 8
+        },
+        {
+          "location_id": "loc_mirehold",
+          "count": 7
+        },
+        {
+          "location_id": "loc_redmesa",
+          "count": 8
+        },
+        {
+          "location_id": "loc_azurea",
+          "count": 7
+        },
+        {
+          "location_id": "loc_voidspire",
+          "count": 6
+        },
+        {
+          "location_id": "loc_fallsong",
+          "count": 10
+        }
+      ]
+    }
+  },
+  "npc_decision_policy": "utility_ai_first",
+  "llm_enabled_by_default": false
+}

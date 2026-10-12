@@ -1,0 +1,250 @@
+[
+  {
+    "region_id": "region_frostcrown",
+    "produces": [
+      "fish",
+      "fur",
+      "ice_crystal"
+    ],
+    "consumes": [
+      "grain",
+      "hardwood"
+    ],
+    "exports": [
+      "fur",
+      "ice_crystal"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_glacier_isles",
+    "produces": [
+      "ice_crystal",
+      "fish",
+      "relic_fragments"
+    ],
+    "consumes": [
+      "grain",
+      "iron_tools"
+    ],
+    "exports": [
+      "ice_crystal"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_inferno",
+    "produces": [
+      "sulfur",
+      "obsidian",
+      "fire_core",
+      "iron_ore"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "obsidian",
+      "sulfur"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_sunspire",
+    "produces": [
+      "spices",
+      "gold_ore",
+      "stone",
+      "relic_fragments"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "spices",
+      "gold_ore"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_heartland",
+    "produces": [
+      "grain",
+      "livestock",
+      "wood",
+      "iron_tools"
+    ],
+    "consumes": [
+      "iron_ore",
+      "silk",
+      "crystal_shard"
+    ],
+    "exports": [
+      "grain",
+      "iron_tools"
+    ],
+    "imports": [
+      "iron_ore"
+    ]
+  },
+  {
+    "region_id": "region_elderwood",
+    "produces": [
+      "hardwood",
+      "herbs",
+      "mana_blossom"
+    ],
+    "consumes": [
+      "grain",
+      "iron_tools"
+    ],
+    "exports": [
+      "herbs",
+      "hardwood"
+    ],
+    "imports": [
+      "iron_tools"
+    ]
+  },
+  {
+    "region_id": "region_silverridge",
+    "produces": [
+      "iron_ore",
+      "silver_ore",
+      "stone"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "iron_ore",
+      "silver_ore"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_blossom",
+    "produces": [
+      "silk",
+      "mana_blossom",
+      "crystal_shard"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "silk",
+      "mana_blossom"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_emerald",
+    "produces": [
+      "fish",
+      "wood",
+      "herbs",
+      "pearl"
+    ],
+    "consumes": [
+      "iron_tools",
+      "grain"
+    ],
+    "exports": [
+      "fish",
+      "pearl"
+    ],
+    "imports": [
+      "iron_tools"
+    ]
+  },
+  {
+    "region_id": "region_mistfen",
+    "produces": [
+      "fungus",
+      "venom_sac",
+      "herbs"
+    ],
+    "consumes": [
+      "grain",
+      "iron_tools"
+    ],
+    "exports": [
+      "herbs",
+      "venom_sac"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_shadow",
+    "produces": [
+      "void_shard",
+      "cursed_stone"
+    ],
+    "consumes": [
+      "grain",
+      "fish"
+    ],
+    "exports": [
+      "void_shard"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_redstone",
+    "produces": [
+      "stone",
+      "copper_ore",
+      "relic_fragments"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "copper_ore"
+    ],
+    "imports": [
+      "grain"
+    ]
+  },
+  {
+    "region_id": "region_azure",
+    "produces": [
+      "crystal_shard",
+      "mana_water",
+      "pearl"
+    ],
+    "consumes": [
+      "grain",
+      "wood"
+    ],
+    "exports": [
+      "crystal_shard",
+      "mana_water"
+    ],
+    "imports": [
+      "grain"
+    ]
+  }
+]

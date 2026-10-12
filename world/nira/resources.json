@@ -1,0 +1,198 @@
+[
+  {
+    "id": "grain",
+    "name": "Grain",
+    "category": "food",
+    "base_value": 4,
+    "tradable": true
+  },
+  {
+    "id": "fish",
+    "name": "Fish",
+    "category": "food",
+    "base_value": 5,
+    "tradable": true
+  },
+  {
+    "id": "livestock",
+    "name": "Livestock",
+    "category": "food",
+    "base_value": 9,
+    "tradable": true
+  },
+  {
+    "id": "fur",
+    "name": "Fur",
+    "category": "textile",
+    "base_value": 12,
+    "tradable": true
+  },
+  {
+    "id": "herbs",
+    "name": "Herbs",
+    "category": "medicine",
+    "base_value": 8,
+    "tradable": true
+  },
+  {
+    "id": "wood",
+    "name": "Wood",
+    "category": "material",
+    "base_value": 4,
+    "tradable": true
+  },
+  {
+    "id": "hardwood",
+    "name": "Hardwood",
+    "category": "material",
+    "base_value": 10,
+    "tradable": true
+  },
+  {
+    "id": "stone",
+    "name": "Stone",
+    "category": "material",
+    "base_value": 4,
+    "tradable": true
+  },
+  {
+    "id": "iron_ore",
+    "name": "Iron Ore",
+    "category": "ore",
+    "base_value": 9,
+    "tradable": true
+  },
+  {
+    "id": "silver_ore",
+    "name": "Silver Ore",
+    "category": "ore",
+    "base_value": 16,
+    "tradable": true
+  },
+  {
+    "id": "gold_ore",
+    "name": "Gold Ore",
+    "category": "ore",
+    "base_value": 25,
+    "tradable": true
+  },
+  {
+    "id": "copper_ore",
+    "name": "Copper Ore",
+    "category": "ore",
+    "base_value": 7,
+    "tradable": true
+  },
+  {
+    "id": "iron_tools",
+    "name": "Iron Tools",
+    "category": "equipment",
+    "base_value": 15,
+    "tradable": true
+  },
+  {
+    "id": "sulfur",
+    "name": "Sulfur",
+    "category": "special",
+    "base_value": 12,
+    "tradable": true
+  },
+  {
+    "id": "obsidian",
+    "name": "Obsidian",
+    "category": "special",
+    "base_value": 22,
+    "tradable": true
+  },
+  {
+    "id": "fire_core",
+    "name": "Fire Core",
+    "category": "magic",
+    "base_value": 75,
+    "tradable": true
+  },
+  {
+    "id": "spices",
+    "name": "Spices",
+    "category": "luxury",
+    "base_value": 16,
+    "tradable": true
+  },
+  {
+    "id": "relic_fragments",
+    "name": "Relic Fragments",
+    "category": "artifact",
+    "base_value": 35,
+    "tradable": true
+  },
+  {
+    "id": "mana_blossom",
+    "name": "Mana Blossom",
+    "category": "magic",
+    "base_value": 32,
+    "tradable": true
+  },
+  {
+    "id": "ice_crystal",
+    "name": "Ice Crystal",
+    "category": "magic",
+    "base_value": 28,
+    "tradable": true
+  },
+  {
+    "id": "silk",
+    "name": "Silk",
+    "category": "luxury",
+    "base_value": 26,
+    "tradable": true
+  },
+  {
+    "id": "crystal_shard",
+    "name": "Crystal Shard",
+    "category": "magic",
+    "base_value": 30,
+    "tradable": true
+  },
+  {
+    "id": "venom_sac",
+    "name": "Venom Sac",
+    "category": "alchemy",
+    "base_value": 20,
+    "tradable": true
+  },
+  {
+    "id": "fungus",
+    "name": "Fen Fungus",
+    "category": "alchemy",
+    "base_value": 11,
+    "tradable": true
+  },
+  {
+    "id": "void_shard",
+    "name": "Void Shard",
+    "category": "dark",
+    "base_value": 70,
+    "tradable": true
+  },
+  {
+    "id": "cursed_stone",
+    "name": "Cursed Stone",
+    "category": "dark",
+    "base_value": 37,
+    "tradable": true
+  },
+  {
+    "id": "mana_water",
+    "name": "Mana Water",
+    "category": "magic",
+    "base_value": 24,
+    "tradable": true
+  },
+  {
+    "id": "pearl",
+    "name": "Pearl",
+    "category": "luxury",
+    "base_value": 20,
+    "tradable": true
+  }
+]
