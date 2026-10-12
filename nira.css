@@ -29,3 +29,11 @@
 .npc-map-label{font-size:11px}
 @media(min-width:981px){.layout{grid-template-columns:minmax(0,1fr) 355px}.panel{max-height:calc(100vh - 93px);overflow-y:auto}}
 @media(max-width:520px){.sim-clock{font-size:21px}.npc-list{max-height:190px}}
+
+/* R2 social simulation inspector */
+.social-section{border-color:#38706b!important}
+.social-stats{font-size:12px;line-height:1.65;color:#9aebd5;margin:6px 0}
+.social-badge{color:#d6f6ed}
+.social-good{color:#87e1b2}
+.social-warn{color:#f2c48e}
+.social-feed .event-line{white-space:normal}
