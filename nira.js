@@ -123,7 +123,7 @@ function renderAgentPanel(){
  const a=currentNPC();
  say('npcInspector',a?`${a.name} (${a.id})\nอาชีพ: ${a.profession}\nบ้าน: ${locName(a.homeId)}\nปัจจุบัน: ${locName(a.locationId)}${a.travel?' → '+locName(a.travel.to):''}\nเป้าหมาย: ${a.goal}\nกิจกรรม: ${a.activity}\nเงิน: ${a.gold} เหรียญ · หิว: ${Math.round(a.hunger)}/100 · พลังงาน: ${Math.round(a.energy)}/100\nเดินทางสำเร็จ: ${a.visits} · ชั่วโมงทำงาน: ${a.workCount}\nสินค้า: ${a.cargo?`${a.cargo.good} ×${a.cargo.quantity}`:'ไม่มี'}\n\nความทรงจำล่าสุด:\n${a.stories.slice(-4).map(x=>`D${x.day} ${String(x.hour).padStart(2,'0')}:00 ${x.message}`).join('\n')||'ยังไม่มีเหตุการณ์สำคัญ'}`:'เลือก NPC จากรายชื่อหรือคลิกเครื่องหมายบนแผนที่');
  const social=a?.social;
- say('socialStats',`พบปะ ${world.stats.socialMeetings} ครั้ง · ช่วยเหลือ ${world.stats.socialHelp} ครั้ง · แลกข่าว ${world.stats.knowledgeShared} ครั้ง · ขัดแย้ง ${world.stats.socialDisputes} ครั้ง`);
+ say('socialStats',`พบปะ ${world.stats.socialMeetings} ครั้ง · ช่วยเหลือ ${world.stats.socialHelp} ครั้ง · แลกข่าว ${world.stats.knowledgeShared} ครั้ง · ขัดแย้ง ${world.stats.socialDisputes} ครั้ง · ยืนยันข่าว ${world.stats.socialConfirmedReports||0} · แก้ข่าว ${world.stats.socialCorrectedReports||0}`);
  const names=new Map(world.agents.map(agent=>[agent.id,agent.name]));
  const relations=social?Object.entries(social.relations).sort((left,right)=>right[1].trust-left[1].trust||left[0].localeCompare(right[0])):[];
  say('npcRelations',relations.length?relations.slice(0,8).map(([id,rel])=>`${names.get(id)||id}: ไว้ใจ ${rel.trust}/100 · พบ ${rel.contacts} ครั้ง${rel.helped?` · ช่วย ${rel.helped} ครั้ง`:''}`).join('\n'):'ยังไม่พบคนรู้จัก');
