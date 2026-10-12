@@ -14,7 +14,7 @@ const memo = (agent,item) => {
   agent.social.memories.push(item);
   if(agent.social.memories.length>SOCIAL_MEMORY_CAP)agent.social.memories.splice(0,agent.social.memories.length-SOCIAL_MEMORY_CAP);
 };
-const statsDefault = {socialMeetings:0,socialHelp:0,socialDisputes:0,knowledgeShared:0,socialObservations:0};
+const statsDefault = {socialMeetings:0,socialHelp:0,socialDisputes:0,knowledgeShared:0,socialObservations:0,socialConfirmedReports:0,socialCorrectedReports:0};
 function trimBeliefs(agent,protectedKey){
   const keys=Object.keys(agent.social.beliefs);
   if(keys.length<=SOCIAL_BELIEF_CAP)return;
@@ -46,6 +46,26 @@ function observeMarket(world,agent){
   agent.social.lastObservedDay=world.day;
   const food=(market.stock.grain||0)+(market.stock.fish||0);
   const knownKey='food:'+agent.locationId;
+  // A report can only be checked through the receiver's own observation.
+  // A mismatch can reflect a changing market, not intentional deception.
+  const observedValue=food<30?'scarce':'available';
+  const prior=agent.social.beliefs[knownKey];
+  if(prior?.status==='reported'&&prior.sourceAgentId){
+    const source=world.agents.find(a=>a.id===prior.sourceAgentId);
+    if(source&&source.id!==agent.id){
+      const rel=relationship(agent,source);
+      const confirmed=prior.value===observedValue;
+      rel.trust=cap(rel.trust+(confirmed?4:-7),0,100);
+      const kind=confirmed?'CONFIRMED':'CORRECTED';
+      const stat=confirmed?'socialConfirmedReports':'socialCorrectedReports';
+      world.stats[stat]=(world.stats[stat]||0)+1;
+      const msg=confirmed
+        ? `${agent.name} ตรวจตลาดและยืนยันข่าวจาก ${source.name}`
+        : `${agent.name} ตรวจตลาดพบว่าข่าวจาก ${source.name} ไม่ตรงกับข้อมูลล่าสุด`;
+      memo(agent,{kind:kind.toLowerCase(),day:world.day,hour:world.hour,locationId:agent.locationId,peerId:source.id,summary:msg});
+      socialEvent(world,kind,agent.locationId,[agent.id,source.id],msg);
+    }
+  }
   agent.social.beliefs[knownKey]={key:knownKey,locationId:agent.locationId,kind:'food_supply',value:food<30?'scarce':'available',
     status:'observed',sourceAgentId:null,originAgentId:agent.id,confidence:1,relayDepth:0,observedDay:world.day,updatedTick:world.tick};
   trimBeliefs(agent,knownKey);

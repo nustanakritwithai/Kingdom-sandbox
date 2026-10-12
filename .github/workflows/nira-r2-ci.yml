@@ -33,4 +33,5 @@ jobs:
       - run: node --test tests/nira-map-contract.test.mjs
       - run: node tests/nira-living-world.test.mjs
       - run: node tests/nira-social-world.test.mjs
+      - run: node --test tests/nira-r2-verification.test.mjs
       - run: node tests/nira-r2-page-contract.test.mjs

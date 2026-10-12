@@ -38,3 +38,12 @@ Social test coverage: co-location, no cross-city leakage, resource-backed help, 
 - Pixel-level collision and physical boat simulation. Routes remain schematic edges.
 - Full economy, governance, war and free-form LLM cognition.
 - 24/7 server persistence; needs separate server/worker milestone and explicit deployment approval.
+
+
+## R2.1 evidence verification (additive)
+
+- A second-hand food-supply report is checked only when the listener visits the named market and observes it directly. No report modifies stock or becomes authoritative before observation.
+- Matching news raises trust by 4; an outdated/mismatching report lowers trust by 7 (a mismatch is not proof of deliberate lying).
+- Confirmations/corrections create bounded social events and personal memory, with global counters `socialConfirmedReports` and `socialCorrectedReports`.
+- Old R2 saves missing just these two newly introduced counters migrate with zero values; all other social validation remains active.
+- `node --test tests/nira-r2-verification.test.mjs` checks truth verification, correction, provenance, market invariants, and old R2 save compatibility.

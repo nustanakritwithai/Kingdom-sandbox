@@ -222,6 +222,10 @@ export function restoreLivingWorld(pack,saved){
   if(!Array.isArray(saved.events)||saved.events.length>180)throw Error('Invalid event log');
   const result=clone(saved);
   if(isR1){initializeSocialWorld(result);result.schema=NIRA_R2_SCHEMA;}
+  // R2.1 introduced verification counters: existing valid R2 saves must still load.
+  else for(const name of ['socialConfirmedReports','socialCorrectedReports']){
+    if(result.stats[name]===undefined)result.stats[name]=0;
+  }
   const socialCheck=verifySocialWorld(result,pack);
   if(!socialCheck.ok)throw Error('Invalid social state: '+socialCheck.errors.join('; '));
   return result;
