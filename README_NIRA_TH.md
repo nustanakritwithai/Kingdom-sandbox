@@ -1,37 +1,42 @@
-# The Realm of Nira — AI Living World R0
+# The Realm of Nira — R1 Autonomous NPC Atlas
 
-ชุดข้อมูลโลกจากภาพที่ผู้ใช้เลือก (ภาพต้นฉบับ 1536×1536) สำหรับต่อยอดใน `nustanakritwithai/Kingdom-sandbox`
+**Canonical source:** `nustanakritwithai/Kingdom-sandbox` → `nira.html` / `world/nira/`  
+**Public viewer mirror:** `nustanakritwithai/AstraLife` → `/nira/`
 
-## มีอะไรแล้ว
+## ทำงานแล้วใน R1
 
-- ภาพแผนที่ต้นฉบับ: `world/nira/assets/nira_world_map.jpg`
-- JSON: 13 ภูมิภาค, 11 กลุ่มอำนาจ, 55 สถานที่, 68 เส้นทาง, 28 ทรัพยากร, เศรษฐกิจภูมิภาค และแผนประชากรเริ่มต้น 30/132 คน
-- Interactive Atlas: `nira.html` + `nira.js` + `nira.css` เปิดดูจุดสำคัญ เลือกพื้นที่ วางเส้นทางบนกราฟ และแสดงข้อมูลประกอบ
-- Pathfinding แบบ Graph ใช้ Dijkstra (`world/nira/navigation.mjs`)
-- Legacy compatibility projection (`world/nira/legacy_adapter.mjs`) แบบไม่เขียนแก้สถานะเกมเดิม
-- Unit tests (`tests/nira-map-contract.test.mjs`) ตรวจความถูกต้องของข้อมูล ความเชื่อมโยง การเดินเรือ และเส้นทาง
+- ภาพ Canon Pixel Art 1536×1536 พร้อม 13 เขต 55 สถานที่ 68 เส้นทาง
+- NPC 30 ตัวจริงตาม `spawn_setup.json` (Niravale 15, Greenford 5, Solkar 5, Silverpeak 5)
+- Rule/Utility AI: ประเมินความหิว พัก ทำงาน เก็บทรัพยากร สร้างสินค้า ตลาด และพ่อค้าเดินทางไปขาย
+- เดินทางทีละช่วงตามกราฟ R0 พร้อม interpolation ตำแหน่งบนภาพ (เส้นทาง schematic)
+- UI: เริ่ม/หยุด, x1/x5/x20, +1 ชั่วโมง, +1 วัน, เลือก NPC, ตรวจชีวิต/ความทรงจำ, World Events
+- บันทึกและโหลดสถานะด้วย localStorage ภายในเบราว์เซอร์, export/import JSON
+- Seeded RNG และ snapshot replay ตรวจได้ (ผลเหมือนกันเมื่อ seed + state เท่ากัน)
 
-## เปิดดูแผนที่บนเครื่อง
+## เริ่มใช้งาน
 
-1. แตก ZIP และเปิด Terminal ที่โฟลเดอร์โปรเจกต์
-2. รัน `python3 -m http.server 8000`
-3. เปิด `http://localhost:8000/nira.html`
-4. ติ๊ก “เส้นทางทั้งหมด” หรือเลือกเมืองสองเมืองเพื่อคำนวณเส้นทาง
-5. สำหรับการทดสอบ ใช้ `node --test tests/nira-map-contract.test.mjs` (ต้องมี Node.js)
+```bash
+python3 -m http.server 8000
+# open http://localhost:8000/nira.html
+node --test tests/nira-map-contract.test.mjs
+node tests/nira-living-world.test.mjs
+```
 
-## เพิ่มไฟล์ลง GitHub
+## ขอบเขตที่ต้องไม่กล่าวเกินจริง
 
-เพื่อไม่กระทบเกมหลัก ให้นำไฟล์ทั้งหมดใน ZIP ไปเพิ่มใน Branch `feat/nira-living-world-r0` ของ `nustanakritwithai/Kingdom-sandbox` โดยคงพาธตรงตาม ZIP **และอย่าเขียนทับ `script.js`, `index.html`, หรือ `main`** จากนั้นจึงเปิด Pull Request ให้ตรวจรับก่อน Merge
+- **ยังไม่มี LLM Agent**: เป็น rule/utility AI ซึ่งไม่มีการเรียกผู้ให้บริการโมเดลภายนอก
+- **ยังไม่มี always-on server**: ปิดหน้าเว็บหรือเปลี่ยนแท็บเป็น hidden จะไม่เดิน Tick ต่อ; Save เป็นของ browser/device นั้น
+- **ยังไม่มี pixel collision หรือ pathfinding ระดับ Tilemap**: จุดและเส้นทางประเมินจากแผนที่ภาพ; ไม่ใช่ NavMesh ที่ทดสอบแล้ว
+- **ยังไม่ใช่ engine เดิมของ Kingdom-sandbox**: R1 เป็น simulation module แยกและไม่แก้ `script.js` หรือ existing saves
+- **ตลาดขั้นต้น**: เป็นระบบทรัพยากร/เงินและกิจวัตรสำหรับพิสูจน์แนวคิด ไม่ใช่เศรษฐกิจระดับอาณาจักรทั้งหมด
+- Browser screenshot smoke ใน environment ที่มีข้อจำกัดอาจเป็น UNKNOWN; อย่าอ้าง PASS หากไม่ได้ทดสอบบนเบราว์เซอร์จริง
 
-## สถานะ / ข้อจำกัด
+## ข้อกำหนด R2
 
-- **R0 DATA ONLY:** ยังไม่มี NPC AI ที่ทำงานจริง หรือเซิร์ฟเวอร์จำลองเวลา 24/7
-- ตำแหน่งสถานที่เป็นการระบุโดยประมาณบนภาพต้นฉบับ ไม่ใช่พิกัดเดินจริง
-- เส้นทางกราฟเป็นสมมติฐานสำหรับการนำทางขั้นต้น ต้องตรวจด้วยทางบก สะพาน ท่าเรือ และชนิดภูมิประเทศก่อนให้ NPC เคลื่อนจริง
-- จำนวน NPC 30 / 132 เป็นเป้าหมายตั้งต้น ยังไม่ถูก Spawn
-- Browser screenshot smoke ยังไม่ตรวจยืนยัน แม้ข้อมูลและโค้ด JS ผ่านการตรวจอัตโนมัติ
-- ดูลำดับต่อไปใน `docs/NIRA_R0_INTEGRATION.md`
+1. ตรวจ topo ของเส้นทาง/bridge/sea จากพิกัดจริง
+2. เชื่อมข้อมูล Market + Faction จาก Kingdom engine ด้วย adapter ที่ไม่ทำให้ save เก่าพัง
+3. เพิ่ม Social Memory, Relationships และ NPC conversations
+4. เพิ่ม persistence backend จริงแยกจาก localStorage พร้อม event log/ledger
+5. จัดเก็บผลทดสอบ mobile/browser จริงและ snapshot restore ทุก release
 
-## เผยแพร่ GitHub Pages
-
-เปิด `/nira.html` หรือ `/nira/` จาก GitHub Pages ของรีโปหลัก เว็บใช้ภาพ Canon ขนาด 1536×1536 ที่เข้ารหัส WebP เพื่อความเร็ว ส่วนไฟล์ต้นฉบับอยู่ใน ZIP ส่งมอบแยกต่างหาก ไม่ใช่ระบบ AI NPC ที่รันต่อเนื่อง
+ดู `docs/NIRA_R1_IMPLEMENTATION.md`

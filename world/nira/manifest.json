@@ -1,7 +1,7 @@
 {
   "id": "nira_living_world",
   "title": "The Realm of Nira",
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "coordinate_system": {
     "origin": "top_left",
     "unit": "source_image_pixel",
@@ -12,7 +12,7 @@
   "map_source": "user-provided canon image in conversation",
   "map_status": "SOURCE_IMAGE_VERIFIED_OPTIMIZED_WEBP",
   "geometry_status": "APPROXIMATE_NOT_COLLISION_VALIDATED",
-  "gameplay_status": "R0_DATA_ONLY",
+  "gameplay_status": "R1_BROWSER_LOCAL_UTILITY_AI_SIMULATION",
   "route_distance_unit": "abstract_travel_units_not_kilometres",
   "bundles": {
     "regions": "regions.json",
@@ -22,5 +22,15 @@
     "resources": "resources.json",
     "region_economy": "region_economy.json",
     "spawn_setup": "spawn_setup.json"
+  },
+  "r1": {
+    "engine": "world/nira/living-world.mjs",
+    "profile": "mvp30",
+    "active_npc_count": 30,
+    "clock": "one_tick_one_sim_hour",
+    "online_persistence": false,
+    "llm_enabled": false,
+    "pixel_navigation_verified": false,
+    "local_save": true
   }
 }
