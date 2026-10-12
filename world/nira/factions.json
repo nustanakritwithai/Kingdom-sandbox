@@ -1,0 +1,147 @@
+[
+  {
+    "id": "faction_nira_crown",
+    "name": "Crown of Nira",
+    "type": "kingdom",
+    "home_region_id": "region_heartland",
+    "seat_location_id": "loc_niravale",
+    "color": "#f5d66c",
+    "relations": {
+      "faction_frost_court": 25,
+      "faction_inferno_legion": -75,
+      "faction_free_mariners": 40,
+      "faction_shadow_cult": -90,
+      "faction_sunspire_consort": 30
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_frost_court",
+    "name": "Frost Court",
+    "type": "kingdom",
+    "home_region_id": "region_frostcrown",
+    "seat_location_id": "loc_frostkeep",
+    "color": "#a8deff",
+    "relations": {
+      "faction_nira_crown": 25
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_inferno_legion",
+    "name": "Inferno Legion",
+    "type": "military",
+    "home_region_id": "region_inferno",
+    "seat_location_id": "loc_emberfall",
+    "color": "#ff6d4a",
+    "relations": {
+      "faction_nira_crown": -75,
+      "faction_elder_circle": -40
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_sunspire_consort",
+    "name": "Sunspire Consortium",
+    "type": "merchant_league",
+    "home_region_id": "region_sunspire",
+    "seat_location_id": "loc_solkar",
+    "color": "#d6aa56",
+    "relations": {
+      "faction_nira_crown": 30,
+      "faction_free_mariners": 55,
+      "faction_redstone_clans": 30
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_elder_circle",
+    "name": "Elderwood Circle",
+    "type": "druid_order",
+    "home_region_id": "region_elderwood",
+    "seat_location_id": "loc_fallsong",
+    "color": "#68bd74",
+    "relations": {
+      "faction_blossom_magi": 35,
+      "faction_inferno_legion": -40
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_blossom_magi",
+    "name": "Blossom Magi",
+    "type": "mage_order",
+    "home_region_id": "region_blossom",
+    "seat_location_id": "loc_blossomhaven",
+    "color": "#f08abf",
+    "relations": {
+      "faction_elder_circle": 35,
+      "faction_shadow_cult": -80,
+      "faction_azure_order": 50
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_free_mariners",
+    "name": "Free Mariners Guild",
+    "type": "merchant_guild",
+    "home_region_id": "region_emerald",
+    "seat_location_id": "loc_emerald_harbor",
+    "color": "#43c5d2",
+    "relations": {
+      "faction_nira_crown": 40,
+      "faction_sunspire_consort": 55
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_shadow_cult",
+    "name": "Shadow Cult",
+    "type": "cult",
+    "home_region_id": "region_shadow",
+    "seat_location_id": "loc_voidspire",
+    "color": "#9153bc",
+    "relations": {
+      "faction_nira_crown": -90,
+      "faction_blossom_magi": -80,
+      "faction_mistfen_clans": -20
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_mistfen_clans",
+    "name": "Mistfen Clans",
+    "type": "clan_confederation",
+    "home_region_id": "region_mistfen",
+    "seat_location_id": "loc_mirehold",
+    "color": "#668d65",
+    "relations": {
+      "faction_shadow_cult": -20
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_redstone_clans",
+    "name": "Redstone Clans",
+    "type": "clan_confederation",
+    "home_region_id": "region_redstone",
+    "seat_location_id": "loc_redmesa",
+    "color": "#c97953",
+    "relations": {
+      "faction_sunspire_consort": 30
+    },
+    "status": "initial_design"
+  },
+  {
+    "id": "faction_azure_order",
+    "name": "Azure Crystal Order",
+    "type": "arcane_order",
+    "home_region_id": "region_azure",
+    "seat_location_id": "loc_azurea",
+    "color": "#73bcec",
+    "relations": {
+      "faction_blossom_magi": 50
+    },
+    "status": "initial_design"
+  }
+]

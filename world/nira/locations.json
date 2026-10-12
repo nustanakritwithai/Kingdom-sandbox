@@ -1,0 +1,760 @@
+[
+  {
+    "id": "loc_frostkeep",
+    "name": "Frostkeep",
+    "type": "city",
+    "region_id": "region_frostcrown",
+    "map_x": 330,
+    "map_y": 140,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "inn",
+      "barracks"
+    ]
+  },
+  {
+    "id": "loc_icegate",
+    "name": "Icegate Bastion",
+    "type": "landmark",
+    "region_id": "region_frostcrown",
+    "map_x": 438,
+    "map_y": 232,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_frostwatch",
+    "name": "Frostwatch",
+    "type": "town",
+    "region_id": "region_frostcrown",
+    "map_x": 120,
+    "map_y": 278,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "inn"
+    ]
+  },
+  {
+    "id": "loc_icefell_port",
+    "name": "Icefell Landing",
+    "type": "port",
+    "region_id": "region_frostcrown",
+    "map_x": 590,
+    "map_y": 252,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_glacier_spire",
+    "name": "Glacier Spire",
+    "type": "city",
+    "region_id": "region_glacier_isles",
+    "map_x": 760,
+    "map_y": 88,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "shrine"
+    ]
+  },
+  {
+    "id": "loc_ancient_ice_temple",
+    "name": "Ancient Ice Temple",
+    "type": "dungeon",
+    "region_id": "region_glacier_isles",
+    "map_x": 704,
+    "map_y": 185,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_ice_drifts",
+    "name": "Ice Drifts Landing",
+    "type": "port",
+    "region_id": "region_glacier_isles",
+    "map_x": 664,
+    "map_y": 228,
+    "owner_faction_id": "faction_frost_court",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_emberfall",
+    "name": "Emberfall Citadel",
+    "type": "city",
+    "region_id": "region_inferno",
+    "map_x": 1300,
+    "map_y": 116,
+    "owner_faction_id": "faction_inferno_legion",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "fortress",
+      "armory"
+    ]
+  },
+  {
+    "id": "loc_molten_gate",
+    "name": "Molten Gate",
+    "type": "landmark",
+    "region_id": "region_inferno",
+    "map_x": 1185,
+    "map_y": 258,
+    "owner_faction_id": "faction_inferno_legion",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_obsidian_pit",
+    "name": "Obsidian Pit",
+    "type": "dungeon",
+    "region_id": "region_inferno",
+    "map_x": 1440,
+    "map_y": 178,
+    "owner_faction_id": "faction_inferno_legion",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_ashdock",
+    "name": "Ashdock",
+    "type": "port",
+    "region_id": "region_inferno",
+    "map_x": 1104,
+    "map_y": 328,
+    "owner_faction_id": "faction_inferno_legion",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "market"
+    ]
+  },
+  {
+    "id": "loc_solkar",
+    "name": "Solkar",
+    "type": "city",
+    "region_id": "region_sunspire",
+    "map_x": 445,
+    "map_y": 485,
+    "owner_faction_id": "faction_sunspire_consort",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "inn",
+      "caravan"
+    ]
+  },
+  {
+    "id": "loc_dunewatch",
+    "name": "Dunewatch Harbor",
+    "type": "port",
+    "region_id": "region_sunspire",
+    "map_x": 259,
+    "map_y": 359,
+    "owner_faction_id": "faction_sunspire_consort",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "market"
+    ]
+  },
+  {
+    "id": "loc_sunvault",
+    "name": "Sunvault Ruins",
+    "type": "dungeon",
+    "region_id": "region_sunspire",
+    "map_x": 158,
+    "map_y": 530,
+    "owner_faction_id": "faction_sunspire_consort",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_oasis_miraj",
+    "name": "Oasis Miraj",
+    "type": "town",
+    "region_id": "region_sunspire",
+    "map_x": 357,
+    "map_y": 550,
+    "owner_faction_id": "faction_sunspire_consort",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "inn",
+      "caravan"
+    ]
+  },
+  {
+    "id": "loc_sandbreak",
+    "name": "Sandbreak Landing",
+    "type": "port",
+    "region_id": "region_sunspire",
+    "map_x": 504,
+    "map_y": 632,
+    "owner_faction_id": "faction_sunspire_consort",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_niravale",
+    "name": "Niravale",
+    "type": "city",
+    "region_id": "region_heartland",
+    "map_x": 780,
+    "map_y": 724,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "inn",
+      "barracks",
+      "smithy",
+      "academy"
+    ]
+  },
+  {
+    "id": "loc_redbanner",
+    "name": "Redbanner Keep",
+    "type": "city",
+    "region_id": "region_heartland",
+    "map_x": 643,
+    "map_y": 303,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "barracks"
+    ]
+  },
+  {
+    "id": "loc_greenford",
+    "name": "Greenford",
+    "type": "town",
+    "region_id": "region_heartland",
+    "map_x": 688,
+    "map_y": 588,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "inn",
+      "farms"
+    ]
+  },
+  {
+    "id": "loc_kingscross",
+    "name": "King’s Cross",
+    "type": "landmark",
+    "region_id": "region_heartland",
+    "map_x": 744,
+    "map_y": 642,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_heartland_dock",
+    "name": "Nira South Docks",
+    "type": "port",
+    "region_id": "region_heartland",
+    "map_x": 880,
+    "map_y": 838,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "market"
+    ]
+  },
+  {
+    "id": "loc_elderroot",
+    "name": "Elderroot",
+    "type": "landmark",
+    "region_id": "region_elderwood",
+    "map_x": 946,
+    "map_y": 336,
+    "owner_faction_id": "faction_elder_circle",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_fallsong",
+    "name": "Fallsong Grove",
+    "type": "town",
+    "region_id": "region_elderwood",
+    "map_x": 832,
+    "map_y": 330,
+    "owner_faction_id": "faction_elder_circle",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "shrine",
+      "herbs"
+    ]
+  },
+  {
+    "id": "loc_mossrest",
+    "name": "Mossrest",
+    "type": "town",
+    "region_id": "region_elderwood",
+    "map_x": 844,
+    "map_y": 464,
+    "owner_faction_id": "faction_elder_circle",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "herbs",
+      "inn"
+    ]
+  },
+  {
+    "id": "loc_hollow_altar",
+    "name": "Hollow Altar",
+    "type": "dungeon",
+    "region_id": "region_elderwood",
+    "map_x": 1002,
+    "map_y": 387,
+    "owner_faction_id": "faction_elder_circle",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_silverbay",
+    "name": "Silverbay Watch",
+    "type": "port",
+    "region_id": "region_elderwood",
+    "map_x": 1070,
+    "map_y": 369,
+    "owner_faction_id": "faction_elder_circle",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_silverpeak",
+    "name": "Silverpeak",
+    "type": "city",
+    "region_id": "region_silverridge",
+    "map_x": 1020,
+    "map_y": 574,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "mine",
+      "market",
+      "smithy"
+    ]
+  },
+  {
+    "id": "loc_stonepass",
+    "name": "Stonepass Fort",
+    "type": "landmark",
+    "region_id": "region_silverridge",
+    "map_x": 885,
+    "map_y": 626,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_deepmine",
+    "name": "Deepmine",
+    "type": "dungeon",
+    "region_id": "region_silverridge",
+    "map_x": 934,
+    "map_y": 575,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_highwall",
+    "name": "Highwall Watch",
+    "type": "town",
+    "region_id": "region_silverridge",
+    "map_x": 748,
+    "map_y": 551,
+    "owner_faction_id": "faction_nira_crown",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "barracks",
+      "inn"
+    ]
+  },
+  {
+    "id": "loc_blossomhaven",
+    "name": "Blossomhaven",
+    "type": "city",
+    "region_id": "region_blossom",
+    "map_x": 1260,
+    "map_y": 713,
+    "owner_faction_id": "faction_blossom_magi",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "academy",
+      "inn"
+    ]
+  },
+  {
+    "id": "loc_petalshore",
+    "name": "Petalshore Port",
+    "type": "port",
+    "region_id": "region_blossom",
+    "map_x": 1122,
+    "map_y": 795,
+    "owner_faction_id": "faction_blossom_magi",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "market"
+    ]
+  },
+  {
+    "id": "loc_lotus_tower",
+    "name": "Lotus Tower",
+    "type": "landmark",
+    "region_id": "region_blossom",
+    "map_x": 1301,
+    "map_y": 706,
+    "owner_faction_id": "faction_blossom_magi",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_moonpetal_academy",
+    "name": "Moonpetal Academy",
+    "type": "landmark",
+    "region_id": "region_blossom",
+    "map_x": 1225,
+    "map_y": 830,
+    "owner_faction_id": "faction_blossom_magi",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_rosewatch",
+    "name": "Rosewatch Landing",
+    "type": "port",
+    "region_id": "region_blossom",
+    "map_x": 1444,
+    "map_y": 782,
+    "owner_faction_id": "faction_blossom_magi",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_emerald_harbor",
+    "name": "Emerald Harbor",
+    "type": "port",
+    "region_id": "region_emerald",
+    "map_x": 281,
+    "map_y": 921,
+    "owner_faction_id": "faction_free_mariners",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "market",
+      "shipyard"
+    ]
+  },
+  {
+    "id": "loc_tidewatch",
+    "name": "Tidewatch",
+    "type": "town",
+    "region_id": "region_emerald",
+    "map_x": 165,
+    "map_y": 802,
+    "owner_faction_id": "faction_free_mariners",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock",
+      "inn"
+    ]
+  },
+  {
+    "id": "loc_isle_of_ruins",
+    "name": "Isle of Ruins",
+    "type": "dungeon",
+    "region_id": "region_emerald",
+    "map_x": 144,
+    "map_y": 1000,
+    "owner_faction_id": "faction_free_mariners",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_sunken_temple",
+    "name": "Sunken Temple",
+    "type": "landmark",
+    "region_id": "region_emerald",
+    "map_x": 147,
+    "map_y": 856,
+    "owner_faction_id": "faction_free_mariners",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_mirehold",
+    "name": "Mirehold",
+    "type": "town",
+    "region_id": "region_mistfen",
+    "map_x": 720,
+    "map_y": 1065,
+    "owner_faction_id": "faction_mistfen_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "alchemy"
+    ]
+  },
+  {
+    "id": "loc_fenwatch",
+    "name": "Fenwatch",
+    "type": "landmark",
+    "region_id": "region_mistfen",
+    "map_x": 968,
+    "map_y": 1050,
+    "owner_faction_id": "faction_mistfen_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_blackreed_shrine",
+    "name": "Blackreed Shrine",
+    "type": "dungeon",
+    "region_id": "region_mistfen",
+    "map_x": 833,
+    "map_y": 1017,
+    "owner_faction_id": "faction_mistfen_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_rotwater_ferry",
+    "name": "Rotwater Ferry",
+    "type": "port",
+    "region_id": "region_mistfen",
+    "map_x": 673,
+    "map_y": 930,
+    "owner_faction_id": "faction_mistfen_clans",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_voidspire",
+    "name": "Voidspire",
+    "type": "city",
+    "region_id": "region_shadow",
+    "map_x": 284,
+    "map_y": 1252,
+    "owner_faction_id": "faction_shadow_cult",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "black_market"
+    ]
+  },
+  {
+    "id": "loc_eclipse_bridge",
+    "name": "Eclipse Bridge",
+    "type": "landmark",
+    "region_id": "region_shadow",
+    "map_x": 230,
+    "map_y": 1168,
+    "owner_faction_id": "faction_shadow_cult",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_maw_rift",
+    "name": "Maw Rift",
+    "type": "dungeon",
+    "region_id": "region_shadow",
+    "map_x": 386,
+    "map_y": 1345,
+    "owner_faction_id": "faction_shadow_cult",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_blackcliff_port",
+    "name": "Blackcliff Landing",
+    "type": "port",
+    "region_id": "region_shadow",
+    "map_x": 96,
+    "map_y": 1271,
+    "owner_faction_id": "faction_shadow_cult",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_redmesa",
+    "name": "Redmesa",
+    "type": "city",
+    "region_id": "region_redstone",
+    "map_x": 935,
+    "map_y": 1305,
+    "owner_faction_id": "faction_redstone_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "market",
+      "mine",
+      "smithy"
+    ]
+  },
+  {
+    "id": "loc_canyon_step",
+    "name": "Canyon Step",
+    "type": "landmark",
+    "region_id": "region_redstone",
+    "map_x": 833,
+    "map_y": 1225,
+    "owner_faction_id": "faction_redstone_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_scorchvault",
+    "name": "Scorchvault",
+    "type": "dungeon",
+    "region_id": "region_redstone",
+    "map_x": 1072,
+    "map_y": 1360,
+    "owner_faction_id": "faction_redstone_clans",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_redstone_port",
+    "name": "Redstone Landing",
+    "type": "port",
+    "region_id": "region_redstone",
+    "map_x": 775,
+    "map_y": 1374,
+    "owner_faction_id": "faction_redstone_clans",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  },
+  {
+    "id": "loc_azurea",
+    "name": "Azurea",
+    "type": "city",
+    "region_id": "region_azure",
+    "map_x": 1314,
+    "map_y": 1320,
+    "owner_faction_id": "faction_azure_order",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": [
+      "academy",
+      "shrine"
+    ]
+  },
+  {
+    "id": "loc_crystal_lighthouse",
+    "name": "Crystal Lighthouse",
+    "type": "landmark",
+    "region_id": "region_azure",
+    "map_x": 1374,
+    "map_y": 1398,
+    "owner_faction_id": "faction_azure_order",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_shard_sanctum",
+    "name": "Shard Sanctum",
+    "type": "dungeon",
+    "region_id": "region_azure",
+    "map_x": 1445,
+    "map_y": 1322,
+    "owner_faction_id": "faction_azure_order",
+    "sea_access": false,
+    "anchor_status": "approx_visual",
+    "services": []
+  },
+  {
+    "id": "loc_aquamarine_dock",
+    "name": "Aquamarine Dock",
+    "type": "port",
+    "region_id": "region_azure",
+    "map_x": 1210,
+    "map_y": 1273,
+    "owner_faction_id": "faction_azure_order",
+    "sea_access": true,
+    "anchor_status": "approx_visual",
+    "services": [
+      "dock"
+    ]
+  }
+]

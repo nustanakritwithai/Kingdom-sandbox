@@ -1,0 +1,240 @@
+[
+  {
+    "id": "region_frostcrown",
+    "name": "Frostcrown North",
+    "biome": "snow",
+    "anchor": {
+      "x": 360,
+      "y": 160
+    },
+    "danger_index": 60,
+    "initial_faction_id": "faction_frost_court",
+    "resource_ids": [
+      "fish",
+      "fur",
+      "ice_crystal",
+      "silver_ore"
+    ],
+    "description_th": "อาณาจักรหิมะและป้อมปราการบนภูเขา",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_glacier_isles",
+    "name": "Glacier Isles",
+    "biome": "ice_islands",
+    "anchor": {
+      "x": 750,
+      "y": 120
+    },
+    "danger_index": 80,
+    "initial_faction_id": "faction_frost_court",
+    "resource_ids": [
+      "ice_crystal",
+      "relic_fragments",
+      "fish"
+    ],
+    "description_th": "หมู่เกาะน้ำแข็งและวิหารกลางทะเล",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_inferno",
+    "name": "Inferno Dominion",
+    "biome": "volcanic",
+    "anchor": {
+      "x": 1335,
+      "y": 150
+    },
+    "danger_index": 93,
+    "initial_faction_id": "faction_inferno_legion",
+    "resource_ids": [
+      "sulfur",
+      "obsidian",
+      "fire_core",
+      "iron_ore"
+    ],
+    "description_th": "อาณาจักรลาวาและป้อมไฟบนเกาะ",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_sunspire",
+    "name": "Sunspire Desert",
+    "biome": "desert",
+    "anchor": {
+      "x": 320,
+      "y": 480
+    },
+    "danger_index": 42,
+    "initial_faction_id": "faction_sunspire_consort",
+    "resource_ids": [
+      "spices",
+      "gold_ore",
+      "stone",
+      "relic_fragments"
+    ],
+    "description_th": "นครกลางทะเลทรายและเครือข่ายคาราวาน",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_heartland",
+    "name": "Heartland of Nira",
+    "biome": "plains",
+    "anchor": {
+      "x": 770,
+      "y": 700
+    },
+    "danger_index": 22,
+    "initial_faction_id": "faction_nira_crown",
+    "resource_ids": [
+      "grain",
+      "livestock",
+      "wood",
+      "iron_tools"
+    ],
+    "description_th": "นครกลางและที่ราบเกษตรกรรม",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_elderwood",
+    "name": "Elderwood Sanctuary",
+    "biome": "enchanted_forest",
+    "anchor": {
+      "x": 940,
+      "y": 338
+    },
+    "danger_index": 45,
+    "initial_faction_id": "faction_elder_circle",
+    "resource_ids": [
+      "hardwood",
+      "herbs",
+      "mana_blossom"
+    ],
+    "description_th": "ป่าต้นไม้ยักษ์ล้อมน้ำตกและซากวิหาร",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_silverridge",
+    "name": "Silver Ridge Highlands",
+    "biome": "mountain",
+    "anchor": {
+      "x": 950,
+      "y": 570
+    },
+    "danger_index": 59,
+    "initial_faction_id": "faction_nira_crown",
+    "resource_ids": [
+      "iron_ore",
+      "silver_ore",
+      "stone"
+    ],
+    "description_th": "เทือกเขา เหมือง และทางผ่านภูเขา",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_blossom",
+    "name": "Blossom Coast",
+    "biome": "blossom_islands",
+    "anchor": {
+      "x": 1230,
+      "y": 727
+    },
+    "danger_index": 40,
+    "initial_faction_id": "faction_blossom_magi",
+    "resource_ids": [
+      "silk",
+      "mana_blossom",
+      "crystal_shard"
+    ],
+    "description_th": "เกาะบุปผาและหอคอยเวทมนตร์",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_emerald",
+    "name": "Emerald Archipelago",
+    "biome": "tropical_islands",
+    "anchor": {
+      "x": 210,
+      "y": 865
+    },
+    "danger_index": 47,
+    "initial_faction_id": "faction_free_mariners",
+    "resource_ids": [
+      "fish",
+      "wood",
+      "herbs",
+      "pearl"
+    ],
+    "description_th": "หมู่เกาะเขตร้อน ซากอารยธรรม และเส้นทางเรือ",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_mistfen",
+    "name": "Mistfen Marsh",
+    "biome": "swamp",
+    "anchor": {
+      "x": 750,
+      "y": 1035
+    },
+    "danger_index": 69,
+    "initial_faction_id": "faction_mistfen_clans",
+    "resource_ids": [
+      "fungus",
+      "venom_sac",
+      "herbs"
+    ],
+    "description_th": "หนองน้ำและเมืองวิหารลี้ลับ",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_shadow",
+    "name": "Shadow Void",
+    "biome": "shadow_islands",
+    "anchor": {
+      "x": 270,
+      "y": 1270
+    },
+    "danger_index": 95,
+    "initial_faction_id": "faction_shadow_cult",
+    "resource_ids": [
+      "void_shard",
+      "cursed_stone"
+    ],
+    "description_th": "ดินแดนมืดและรอยแยกผิดธรรมชาติ",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_redstone",
+    "name": "Redstone South",
+    "biome": "red_canyon",
+    "anchor": {
+      "x": 930,
+      "y": 1308
+    },
+    "danger_index": 67,
+    "initial_faction_id": "faction_redstone_clans",
+    "resource_ids": [
+      "copper_ore",
+      "stone",
+      "relic_fragments"
+    ],
+    "description_th": "หุบเขาหินแดงและมหานครกลางผา",
+    "boundary_accuracy": "APPROXIMATE"
+  },
+  {
+    "id": "region_azure",
+    "name": "Azure Crystal Coast",
+    "biome": "crystal_islands",
+    "anchor": {
+      "x": 1310,
+      "y": 1335
+    },
+    "danger_index": 84,
+    "initial_faction_id": "faction_azure_order",
+    "resource_ids": [
+      "crystal_shard",
+      "mana_water",
+      "pearl"
+    ],
+    "description_th": "หมู่เกาะผลึกฟ้าและปราสาทน้ำตก",
+    "boundary_accuracy": "APPROXIMATE"
+  }
+]

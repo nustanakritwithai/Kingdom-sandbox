@@ -1,0 +1,876 @@
+[
+  {
+    "id": "route_frostkeep__icegate",
+    "from_location_id": "loc_frostkeep",
+    "to_location_id": "loc_icegate",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_icegate__icefell_port",
+    "from_location_id": "loc_icegate",
+    "to_location_id": "loc_icefell_port",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_icegate__frostwatch",
+    "from_location_id": "loc_icegate",
+    "to_location_id": "loc_frostwatch",
+    "mode": "land",
+    "distance_units": 16,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_glacier_spire__ancient_ice_temple",
+    "from_location_id": "loc_glacier_spire",
+    "to_location_id": "loc_ancient_ice_temple",
+    "mode": "land",
+    "distance_units": 6,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_glacier_spire__ice_drifts",
+    "from_location_id": "loc_glacier_spire",
+    "to_location_id": "loc_ice_drifts",
+    "mode": "land",
+    "distance_units": 5,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_emberfall__molten_gate",
+    "from_location_id": "loc_emberfall",
+    "to_location_id": "loc_molten_gate",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_emberfall__obsidian_pit",
+    "from_location_id": "loc_emberfall",
+    "to_location_id": "loc_obsidian_pit",
+    "mode": "land",
+    "distance_units": 13,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_molten_gate__ashdock",
+    "from_location_id": "loc_molten_gate",
+    "to_location_id": "loc_ashdock",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_solkar__oasis_miraj",
+    "from_location_id": "loc_solkar",
+    "to_location_id": "loc_oasis_miraj",
+    "mode": "land",
+    "distance_units": 11,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_oasis_miraj__sunvault",
+    "from_location_id": "loc_oasis_miraj",
+    "to_location_id": "loc_sunvault",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_solkar__dunewatch",
+    "from_location_id": "loc_solkar",
+    "to_location_id": "loc_dunewatch",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_solkar__sandbreak",
+    "from_location_id": "loc_solkar",
+    "to_location_id": "loc_sandbreak",
+    "mode": "land",
+    "distance_units": 13,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_niravale__kingscross",
+    "from_location_id": "loc_niravale",
+    "to_location_id": "loc_kingscross",
+    "mode": "land",
+    "distance_units": 4,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_kingscross__greenford",
+    "from_location_id": "loc_kingscross",
+    "to_location_id": "loc_greenford",
+    "mode": "land",
+    "distance_units": 5,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_greenford__redbanner",
+    "from_location_id": "loc_greenford",
+    "to_location_id": "loc_redbanner",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_niravale__heartland_dock",
+    "from_location_id": "loc_niravale",
+    "to_location_id": "loc_heartland_dock",
+    "mode": "land",
+    "distance_units": 7,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_elderroot__fallsong",
+    "from_location_id": "loc_elderroot",
+    "to_location_id": "loc_fallsong",
+    "mode": "land",
+    "distance_units": 7,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_elderroot__hollow_altar",
+    "from_location_id": "loc_elderroot",
+    "to_location_id": "loc_hollow_altar",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_fallsong__mossrest",
+    "from_location_id": "loc_fallsong",
+    "to_location_id": "loc_mossrest",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_mossrest__silverbay",
+    "from_location_id": "loc_mossrest",
+    "to_location_id": "loc_silverbay",
+    "mode": "land",
+    "distance_units": 11,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_silverpeak__stonepass",
+    "from_location_id": "loc_silverpeak",
+    "to_location_id": "loc_stonepass",
+    "mode": "land",
+    "distance_units": 7,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_silverpeak__deepmine",
+    "from_location_id": "loc_silverpeak",
+    "to_location_id": "loc_deepmine",
+    "mode": "land",
+    "distance_units": 5,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_stonepass__highwall",
+    "from_location_id": "loc_stonepass",
+    "to_location_id": "loc_highwall",
+    "mode": "land",
+    "distance_units": 6,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_blossomhaven__lotus_tower",
+    "from_location_id": "loc_blossomhaven",
+    "to_location_id": "loc_lotus_tower",
+    "mode": "land",
+    "distance_units": 3,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_blossomhaven__moonpetal_academy",
+    "from_location_id": "loc_blossomhaven",
+    "to_location_id": "loc_moonpetal_academy",
+    "mode": "land",
+    "distance_units": 5,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_blossomhaven__petalshore",
+    "from_location_id": "loc_blossomhaven",
+    "to_location_id": "loc_petalshore",
+    "mode": "land",
+    "distance_units": 9,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_blossomhaven__rosewatch",
+    "from_location_id": "loc_blossomhaven",
+    "to_location_id": "loc_rosewatch",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_emerald_harbor__tidewatch",
+    "from_location_id": "loc_emerald_harbor",
+    "to_location_id": "loc_tidewatch",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_mirehold__fenwatch",
+    "from_location_id": "loc_mirehold",
+    "to_location_id": "loc_fenwatch",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_mirehold__blackreed_shrine",
+    "from_location_id": "loc_mirehold",
+    "to_location_id": "loc_blackreed_shrine",
+    "mode": "land",
+    "distance_units": 7,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_mirehold__rotwater_ferry",
+    "from_location_id": "loc_mirehold",
+    "to_location_id": "loc_rotwater_ferry",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_voidspire__eclipse_bridge",
+    "from_location_id": "loc_voidspire",
+    "to_location_id": "loc_eclipse_bridge",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_voidspire__maw_rift",
+    "from_location_id": "loc_voidspire",
+    "to_location_id": "loc_maw_rift",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_voidspire__blackcliff_port",
+    "from_location_id": "loc_voidspire",
+    "to_location_id": "loc_blackcliff_port",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_redmesa__canyon_step",
+    "from_location_id": "loc_redmesa",
+    "to_location_id": "loc_canyon_step",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_redmesa__scorchvault",
+    "from_location_id": "loc_redmesa",
+    "to_location_id": "loc_scorchvault",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_redmesa__redstone_port",
+    "from_location_id": "loc_redmesa",
+    "to_location_id": "loc_redstone_port",
+    "mode": "land",
+    "distance_units": 10,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_azurea__crystal_lighthouse",
+    "from_location_id": "loc_azurea",
+    "to_location_id": "loc_crystal_lighthouse",
+    "mode": "land",
+    "distance_units": 6,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_azurea__shard_sanctum",
+    "from_location_id": "loc_azurea",
+    "to_location_id": "loc_shard_sanctum",
+    "mode": "land",
+    "distance_units": 7,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_azurea__aquamarine_dock",
+    "from_location_id": "loc_azurea",
+    "to_location_id": "loc_aquamarine_dock",
+    "mode": "land",
+    "distance_units": 11,
+    "risk": 0.08,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_icefell_port__redbanner",
+    "from_location_id": "loc_icefell_port",
+    "to_location_id": "loc_redbanner",
+    "mode": "bridge",
+    "distance_units": 16,
+    "risk": 0.28,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 611,
+        "y": 245
+      },
+      {
+        "x": 633,
+        "y": 278
+      }
+    ]
+  },
+  {
+    "id": "route_redbanner__fallsong",
+    "from_location_id": "loc_redbanner",
+    "to_location_id": "loc_fallsong",
+    "mode": "land",
+    "distance_units": 18,
+    "risk": 0.15,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 740,
+        "y": 320
+      },
+      {
+        "x": 802,
+        "y": 324
+      }
+    ]
+  },
+  {
+    "id": "route_redbanner__highwall",
+    "from_location_id": "loc_redbanner",
+    "to_location_id": "loc_highwall",
+    "mode": "land",
+    "distance_units": 15,
+    "risk": 0.19,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 675,
+        "y": 390
+      },
+      {
+        "x": 711,
+        "y": 482
+      }
+    ]
+  },
+  {
+    "id": "route_mossrest__highwall",
+    "from_location_id": "loc_mossrest",
+    "to_location_id": "loc_highwall",
+    "mode": "land",
+    "distance_units": 12,
+    "risk": 0.19,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 803,
+        "y": 520
+      },
+      {
+        "x": 758,
+        "y": 545
+      }
+    ]
+  },
+  {
+    "id": "route_highwall__greenford",
+    "from_location_id": "loc_highwall",
+    "to_location_id": "loc_greenford",
+    "mode": "land",
+    "distance_units": 8,
+    "risk": 0.12,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 699,
+        "y": 565
+      }
+    ]
+  },
+  {
+    "id": "route_stonepass__niravale",
+    "from_location_id": "loc_stonepass",
+    "to_location_id": "loc_niravale",
+    "mode": "land",
+    "distance_units": 14,
+    "risk": 0.18,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 828,
+        "y": 646
+      },
+      {
+        "x": 790,
+        "y": 701
+      }
+    ]
+  },
+  {
+    "id": "route_stonepass__mossrest",
+    "from_location_id": "loc_stonepass",
+    "to_location_id": "loc_mossrest",
+    "mode": "mountain_pass",
+    "distance_units": 12,
+    "risk": 0.35,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 878,
+        "y": 549
+      },
+      {
+        "x": 840,
+        "y": 503
+      }
+    ]
+  },
+  {
+    "id": "route_solkar__greenford",
+    "from_location_id": "loc_solkar",
+    "to_location_id": "loc_greenford",
+    "mode": "bridge",
+    "distance_units": 20,
+    "risk": 0.26,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 530,
+        "y": 519
+      },
+      {
+        "x": 586,
+        "y": 536
+      },
+      {
+        "x": 633,
+        "y": 558
+      }
+    ]
+  },
+  {
+    "id": "route_sunvault__dunewatch",
+    "from_location_id": "loc_sunvault",
+    "to_location_id": "loc_dunewatch",
+    "mode": "land",
+    "distance_units": 15,
+    "risk": 0.23,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_silverbay__ashdock",
+    "from_location_id": "loc_silverbay",
+    "to_location_id": "loc_ashdock",
+    "mode": "sea",
+    "distance_units": 15,
+    "risk": 0.38,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 1070,
+        "y": 310
+      }
+    ]
+  },
+  {
+    "id": "route_icefell_port__ice_drifts",
+    "from_location_id": "loc_icefell_port",
+    "to_location_id": "loc_ice_drifts",
+    "mode": "sea",
+    "distance_units": 17,
+    "risk": 0.46,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 632,
+        "y": 228
+      }
+    ]
+  },
+  {
+    "id": "route_dunewatch__frostwatch",
+    "from_location_id": "loc_dunewatch",
+    "to_location_id": "loc_frostwatch",
+    "mode": "sea",
+    "distance_units": 20,
+    "risk": 0.38,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_dunewatch__tidewatch",
+    "from_location_id": "loc_dunewatch",
+    "to_location_id": "loc_tidewatch",
+    "mode": "sea",
+    "distance_units": 21,
+    "risk": 0.31,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 235,
+        "y": 550
+      },
+      {
+        "x": 183,
+        "y": 716
+      }
+    ]
+  },
+  {
+    "id": "route_sandbreak__emerald_harbor",
+    "from_location_id": "loc_sandbreak",
+    "to_location_id": "loc_emerald_harbor",
+    "mode": "sea",
+    "distance_units": 25,
+    "risk": 0.3,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 457,
+        "y": 735
+      },
+      {
+        "x": 340,
+        "y": 848
+      }
+    ]
+  },
+  {
+    "id": "route_emerald_harbor__sunken_temple",
+    "from_location_id": "loc_emerald_harbor",
+    "to_location_id": "loc_sunken_temple",
+    "mode": "sea",
+    "distance_units": 10,
+    "risk": 0.24,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_sunken_temple__isle_of_ruins",
+    "from_location_id": "loc_sunken_temple",
+    "to_location_id": "loc_isle_of_ruins",
+    "mode": "sea",
+    "distance_units": 9,
+    "risk": 0.38,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC"
+  },
+  {
+    "id": "route_emerald_harbor__rotwater_ferry",
+    "from_location_id": "loc_emerald_harbor",
+    "to_location_id": "loc_rotwater_ferry",
+    "mode": "sea",
+    "distance_units": 20,
+    "risk": 0.24,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 470,
+        "y": 903
+      },
+      {
+        "x": 575,
+        "y": 900
+      }
+    ]
+  },
+  {
+    "id": "route_rotwater_ferry__heartland_dock",
+    "from_location_id": "loc_rotwater_ferry",
+    "to_location_id": "loc_heartland_dock",
+    "mode": "sea",
+    "distance_units": 15,
+    "risk": 0.2,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 750,
+        "y": 890
+      }
+    ]
+  },
+  {
+    "id": "route_heartland_dock__petalshore",
+    "from_location_id": "loc_heartland_dock",
+    "to_location_id": "loc_petalshore",
+    "mode": "sea",
+    "distance_units": 20,
+    "risk": 0.27,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 970,
+        "y": 814
+      },
+      {
+        "x": 1050,
+        "y": 806
+      }
+    ]
+  },
+  {
+    "id": "route_petalshore__rosewatch",
+    "from_location_id": "loc_petalshore",
+    "to_location_id": "loc_rosewatch",
+    "mode": "sea",
+    "distance_units": 16,
+    "risk": 0.24,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 1325,
+        "y": 845
+      }
+    ]
+  },
+  {
+    "id": "route_rosewatch__aquamarine_dock",
+    "from_location_id": "loc_rosewatch",
+    "to_location_id": "loc_aquamarine_dock",
+    "mode": "sea",
+    "distance_units": 30,
+    "risk": 0.48,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 1450,
+        "y": 1000
+      },
+      {
+        "x": 1330,
+        "y": 1120
+      }
+    ]
+  },
+  {
+    "id": "route_aquamarine_dock__redstone_port",
+    "from_location_id": "loc_aquamarine_dock",
+    "to_location_id": "loc_redstone_port",
+    "mode": "sea",
+    "distance_units": 20,
+    "risk": 0.4,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 1040,
+        "y": 1300
+      }
+    ]
+  },
+  {
+    "id": "route_redstone_port__blackcliff_port",
+    "from_location_id": "loc_redstone_port",
+    "to_location_id": "loc_blackcliff_port",
+    "mode": "sea",
+    "distance_units": 32,
+    "risk": 0.62,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 520,
+        "y": 1420
+      },
+      {
+        "x": 225,
+        "y": 1420
+      }
+    ]
+  },
+  {
+    "id": "route_tidewatch__blackcliff_port",
+    "from_location_id": "loc_tidewatch",
+    "to_location_id": "loc_blackcliff_port",
+    "mode": "sea",
+    "distance_units": 25,
+    "risk": 0.55,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 85,
+        "y": 1040
+      }
+    ]
+  },
+  {
+    "id": "route_rotwater_ferry__redstone_port",
+    "from_location_id": "loc_rotwater_ferry",
+    "to_location_id": "loc_redstone_port",
+    "mode": "sea",
+    "distance_units": 19,
+    "risk": 0.31,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 690,
+        "y": 1175
+      }
+    ]
+  },
+  {
+    "id": "route_ashdock__petalshore",
+    "from_location_id": "loc_ashdock",
+    "to_location_id": "loc_petalshore",
+    "mode": "sea",
+    "distance_units": 23,
+    "risk": 0.48,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "via": [
+      {
+        "x": 1250,
+        "y": 472
+      },
+      {
+        "x": 1150,
+        "y": 645
+      }
+    ]
+  },
+  {
+    "id": "route_emberfall__voidspire",
+    "from_location_id": "loc_emberfall",
+    "to_location_id": "loc_voidspire",
+    "mode": "portal",
+    "distance_units": 6,
+    "risk": 0.9,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "unlock_flag": "rift_gate_open"
+  },
+  {
+    "id": "route_maw_rift__shard_sanctum",
+    "from_location_id": "loc_maw_rift",
+    "to_location_id": "loc_shard_sanctum",
+    "mode": "portal",
+    "distance_units": 8,
+    "risk": 0.94,
+    "bidirectional": true,
+    "geometry_accuracy": "SCHEMATIC",
+    "unlock_flag": "crystal_gate_open"
+  }
+]
