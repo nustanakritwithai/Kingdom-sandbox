@@ -12,7 +12,7 @@
   "map_source": "user-provided canon image in conversation",
   "map_status": "SOURCE_IMAGE_VERIFIED_OPTIMIZED_WEBP",
   "geometry_status": "APPROXIMATE_NOT_COLLISION_VALIDATED",
-  "gameplay_status": "R1_BROWSER_LOCAL_UTILITY_AI_SIMULATION",
+  "gameplay_status": "R2_BROWSER_LOCAL_UTILITY_SOCIAL_AI_SIMULATION",
   "route_distance_unit": "abstract_travel_units_not_kilometres",
   "bundles": {
     "regions": "regions.json",
@@ -32,5 +32,14 @@
     "llm_enabled": false,
     "pixel_navigation_verified": false,
     "local_save": true
+  },
+  "r2": {
+    "engine": "world/nira/social-world.mjs",
+    "social_memory_per_agent_cap": 20,
+    "beliefs_per_agent_cap": 16,
+    "social_event_cap": 120,
+    "same_location_meetings_only": true,
+    "hearsay_is_not_world_truth": true,
+    "r1_snapshot_migration": true
   }
 }

@@ -4,8 +4,10 @@
  * This is utility/rule AI, NOT remote LLM inference or a persistent server.
  */
 import {findShortestPath} from './navigation.mjs';
+import {initializeSocialWorld,tickSocialWorld,verifySocialWorld} from './social-world.mjs';
 
 export const NIRA_R1_SCHEMA = 'nira-living-world-r1-v1';
+export const NIRA_R2_SCHEMA = 'nira-living-world-r2-v1';
 const GOODS = ['grain', 'fish', 'wood', 'iron_ore', 'herbs', 'tools'];
 const PRIMARY = {farmer:'grain', fisherman:'fish', woodcutter:'wood', miner:'iron_ore', healer:'herbs'};
 const FIRST = ['Mira','Aren','Liora','Tarin','Kael','Nessa','Daren','Yuna','Vera','Orin','Selin','Rhea','Ember','Elio','Nira','Rovan','Faye','Kirin','Tala','Nolan','Sera','Iris','Bryn','Pera','Arin','Runa','Iven','Luka','Lyra','Venn'];
@@ -50,7 +52,7 @@ export function createLivingWorld(pack,{profile='mvp30',seed=null}={}){
   const setup=pack.spawn_setup.profiles[profile];
   const total=setup.locations.reduce((n,x)=>n+x.count,0);
   if(total!==setup.target_agents)throw Error('Spawn count mismatch');
-  const world={schema:NIRA_R1_SCHEMA,mapId:pack.manifest.id,profile,seed:String(seed??pack.spawn_setup.start_seed),rngState:hashSeed(seed??pack.spawn_setup.start_seed),day:1,hour:6,tick:0,eventSeq:0,markets:initialMarkets(pack),agents:[],events:[],stats:{journeys:0,delivered:0,produced:0,meals:0,rests:0,attempts:0,blocked:0}};
+  const world={schema:NIRA_R2_SCHEMA,mapId:pack.manifest.id,profile,seed:String(seed??pack.spawn_setup.start_seed),rngState:hashSeed(seed??pack.spawn_setup.start_seed),day:1,hour:6,tick:0,eventSeq:0,markets:initialMarkets(pack),agents:[],events:[],stats:{journeys:0,delivered:0,produced:0,meals:0,rests:0,attempts:0,blocked:0}};
   let id=0;
   for(const group of setup.locations){
     const home=locOf(pack,group.location_id);
@@ -63,6 +65,7 @@ export function createLivingWorld(pack,{profile='mvp30',seed=null}={}){
         temperament:{risk:Math.round(random(world)*100)/100,sociability:Math.round(random(world)*100)/100},goal:'เริ่มต้นชีวิต',activity:'พักอยู่ที่เมือง',travel:null,cargo:null,visits:0,workCount:0,restCount:0,stories:[]});
     }
   }
+  initializeSocialWorld(world);
   emit(world,'WORLD',`วันแรกของโลก Nira — ประชากร ${world.agents.length} คน เริ่มดำเนินชีวิต`);
   return world;
 }
@@ -188,6 +191,7 @@ function stepAgent(world,pack,agent){
 }
 function stepOne(world,pack){
   for(const a of world.agents)stepAgent(world,pack,a);
+  for(const e of tickSocialWorld(world,pack))if(e.kind!=='MEET')emit(world,e.kind,e.summary,e.participants[0]);
   world.tick++;world.hour++;
   if(world.hour>=24){world.hour=0;world.day++;emit(world,'DAY',`เริ่มวันที่ ${world.day} — สินค้าเคลื่อนไหว ${world.stats.delivered} เที่ยว การเดินทาง ${world.stats.journeys} ครั้ง`);}
 }
@@ -200,7 +204,8 @@ export function stepLivingWorld(world,pack,hours=1){
 export function snapshotLivingWorld(world){return clone(world);}
 export function restoreLivingWorld(pack,saved){
   if(typeof saved==='string')saved=JSON.parse(saved);
-  if(!saved||saved.schema!==NIRA_R1_SCHEMA||saved.mapId!==pack.manifest.id)throw Error('Snapshot schema or map does not match');
+  if(!saved||![NIRA_R1_SCHEMA,NIRA_R2_SCHEMA].includes(saved.schema)||saved.mapId!==pack.manifest.id)throw Error('Snapshot schema or map does not match');
+  const isR1=saved.schema===NIRA_R1_SCHEMA;
   if(!['mvp30','expanded132'].includes(saved.profile))throw Error('Unknown snapshot profile');
   const expected=pack.spawn_setup.profiles[saved.profile]?.target_agents;
   if(!Array.isArray(saved.agents)||saved.agents.length!==expected||new Set(saved.agents.map(a=>a.id)).size!==expected)throw Error('Invalid snapshot population');
@@ -215,7 +220,11 @@ export function restoreLivingWorld(pack,saved){
     for(const qty of Object.values(m.stock||{}))if(!finite(qty)||qty<0)throw Error('Invalid market stock');
   }
   if(!Array.isArray(saved.events)||saved.events.length>180)throw Error('Invalid event log');
-  return clone(saved);
+  const result=clone(saved);
+  if(isR1){initializeSocialWorld(result);result.schema=NIRA_R2_SCHEMA;}
+  const socialCheck=verifySocialWorld(result,pack);
+  if(!socialCheck.ok)throw Error('Invalid social state: '+socialCheck.errors.join('; '));
+  return result;
 }
 export function verifyLivingWorld(world,pack){
   const errors=[];
@@ -232,5 +241,7 @@ export function verifyLivingWorld(world,pack){
     if(!finite(market.treasury)||market.treasury<0)errors.push('negative treasury');
     for(const q of Object.values(market.stock))if(!finite(q)||q<0)errors.push('negative stock');
   }
+  if(world.schema!==NIRA_R2_SCHEMA)errors.push('wrong world schema');
+  errors.push(...verifySocialWorld(world,pack).errors);
   return {ok:errors.length===0,errors};
 }

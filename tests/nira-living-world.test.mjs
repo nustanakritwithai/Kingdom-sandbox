@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createLivingWorld,stepLivingWorld,snapshotLivingWorld,restoreLivingWorld,verifyLivingWorld,getAgentMapPosition,NIRA_R1_SCHEMA} from '../world/nira/living-world.mjs';
+import {createLivingWorld,stepLivingWorld,snapshotLivingWorld,restoreLivingWorld,verifyLivingWorld,getAgentMapPosition,NIRA_R2_SCHEMA} from '../world/nira/living-world.mjs';
 const dirname=path.dirname(fileURLToPath(import.meta.url));
 const root=path.resolve(dirname,'../world/nira');
 const read=name=>JSON.parse(fs.readFileSync(path.join(root,name+'.json'),'utf8'));
 const pack=Object.fromEntries(['manifest','regions','factions','locations','routes','resources','region_economy','spawn_setup'].map(n=>[n,read(n)]));
 const runner=(name,fn)=>{fn();console.log('PASS',name);};
 runner('R1 spawns 30 stable NPCs across four R0 towns',()=>{
- const world=createLivingWorld(pack);assert.equal(world.schema,NIRA_R1_SCHEMA);assert.equal(world.agents.length,30);
+ const world=createLivingWorld(pack);assert.equal(world.schema,NIRA_R2_SCHEMA);assert.equal(world.agents.length,30);
  const ids=new Set(world.agents.map(x=>x.id));assert.equal(ids.size,30);
  assert.deepEqual([...new Set(world.agents.map(x=>x.homeId))].sort(),['loc_greenford','loc_niravale','loc_silverpeak','loc_solkar'].sort());
  assert.ok(world.agents.some(a=>a.profession==='farmer'));

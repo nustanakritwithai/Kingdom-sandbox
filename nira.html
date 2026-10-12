@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Realm of Nira — R1 Living World</title>
+  <title>The Realm of Nira — R2 Living Society</title>
   <link rel="stylesheet" href="nira.css">
 </head>
 <body>
 <header class="topbar">
-  <div><strong>THE REALM OF NIRA</strong><small>R1 · AI Living World / 30 Autonomous NPCs · Browser Simulation</small></div>
+  <div><strong>THE REALM OF NIRA</strong><small>R2 · Living Society / 30 Autonomous NPCs · Local Simulation</small></div>
   <nav><a href="./index.html">Kingdom Sandbox</a><span id="loadStatus" role="status">กำลังโหลดข้อมูล...</span></nav>
 </header>
 <main class="layout">
@@ -22,11 +22,11 @@
       <button type="button" id="zoomOut">−</button><button type="button" id="zoomIn">+</button>
     </div>
     <div id="mapViewport" class="map-viewport"><canvas id="atlasCanvas" width="1536" height="1536" aria-label="แผนที่ The Realm of Nira พร้อมตำแหน่งและเส้นทาง"></canvas></div>
-    <p class="hint">R1 ใช้เส้นทางแบบกราฟจาก R0: การเคลื่อนที่บนภาพเป็นการประมาณตามแนวเส้น ยังไม่ใช่ Pixel-level Collision / Navigation และไม่ได้ทำงานต่อเมื่อปิดหน้าเว็บ</p>
+    <p class="hint">R2 ใช้เส้นทางแบบกราฟจาก R0: การเคลื่อนที่บนภาพเป็นการประมาณตามแนวเส้น ยังไม่ใช่ Pixel-level Collision / Navigation และไม่ได้ทำงานต่อเมื่อปิดหน้าเว็บ</p>
   </section>
   <aside class="panel">
     <section class="sim-section">
-      <h2>🌍 Living World <span class="sim-chip">R1 Local Simulation</span></h2>
+      <h2>🌍 Living World <span class="sim-chip">R2 Social Simulation</span></h2>
       <p class="hint">NPC ใช้ Rule / Utility AI ภายในเบราว์เซอร์ · ไม่ใช่ LLM · ปิดหน้าเว็บแล้วหยุดจำลอง</p>
       <div class="sim-clock" id="simClock">Day 1 · 06:00</div>
       <p id="simMetrics" class="sim-metrics">กำลังเตรียมประชากร...</p>
@@ -57,11 +57,22 @@
       <h2 class="npc-heading">ข้อมูลตัวละคร</h2>
       <div id="npcInspector" class="infobox">เลือก NPC เพื่อติดตามชีวิต</div>
     </section>
+    <section class="social-section">
+      <h2>🤝 ความสัมพันธ์และข่าวสาร</h2>
+      <p class="hint">NPC พบกันเฉพาะในสถานที่เดียวกัน ช่วยเหลือ แลกข้อมูลและจดจำกันได้ · ข่าวบอกต่อไม่ถือเป็นความจริงของโลก</p>
+      <p id="socialStats" class="social-stats">กำลังเตรียมสังคม...</p>
+      <h2 class="npc-heading">คนรู้จักของ NPC ที่เลือก</h2>
+      <div id="npcRelations" class="infobox">เลือก NPC เพื่อดูความสัมพันธ์</div>
+      <h2 class="npc-heading">ข้อมูลที่ตัวละครรู้</h2>
+      <div id="npcBeliefs" class="infobox">ยังไม่มีข้อมูล</div>
+      <h2 class="npc-heading">เหตุการณ์ทางสังคมล่าสุด</h2>
+      <div id="socialFeed" class="npc-events" aria-live="polite"></div>
+    </section>
     <section>
       <h2>📜 เหตุการณ์ในโลก</h2>
       <div id="npcEvents" class="npc-events" aria-live="polite"></div>
     </section>
-    <section><h2>World Data</h2><p id="counts">กำลังโหลด...</p><p class="hint">R1 จำลองประชากรและการผลิตขั้นต้นบนกราฟเส้นทางเดิม ยังไม่เชื่อมกับ Kingdom-sandbox main engine หรือเซิร์ฟเวอร์ถาวร</p></section>
+    <section><h2>World Data</h2><p id="counts">กำลังโหลด...</p><p class="hint">R2 เพิ่มความสัมพันธ์ ความจำ และการแลกข่าวเหนือระบบประชากร/การผลิตขั้นต้นบนกราฟเส้นทางเดิม ยังไม่เชื่อมกับ Kingdom-sandbox main engine หรือเซิร์ฟเวอร์ถาวร</p></section>
     <section><h2>ตัวเลือกพื้นที่</h2><label for="regionSelect">ภูมิภาค</label><select id="regionSelect"></select><div id="regionInfo" class="infobox"></div></section>
     <section><h2>ค้นหาเส้นทาง</h2><label for="fromSelect">จาก</label><select id="fromSelect"></select><label for="toSelect">ไป</label><select id="toSelect"></select><button id="findRoute" type="button">คำนวณเส้นทาง</button><div id="routeResult" class="infobox" aria-live="polite">เลือกต้นทางและปลายทาง</div></section>
     <section><h2>ข้อมูลจุดสำคัญ</h2><div id="selectedLocation" class="infobox">คลิกเครื่องหมายบนแผนที่</div></section>

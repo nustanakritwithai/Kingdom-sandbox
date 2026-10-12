@@ -61,14 +61,15 @@ async function load(){
   bindUI();
   setupLivingWorld();
   say('counts',`${state.pack.regions.length} regions · ${state.pack.factions.length} factions · ${state.pack.locations.length} locations · ${state.pack.routes.length} routes · ${state.pack.resources.length} resources`);
-  say('loadStatus','R1 World Atlas + local autonomous NPCs');
+  say('loadStatus','R2 Living Society — local autonomous NPCs');
   say('regionInfo','เลือกภูมิภาคเพื่อดูข้อมูล');
   const img=new Image();img.onload=()=>{state.image=img;say('assetInfo',`Canon map: ${img.width}×${img.height}\nR0 graphical overlay loaded. Geometry is approximate.`);render();};img.onerror=()=>{say('assetInfo','ยังไม่มีไฟล์ภาพ Canon Map ในการ Deploy นี้ เลือกไฟล์จากเครื่องเพื่อแสดงบนแผนที่ได้ (ข้อมูลพิกัด/เส้นทางโหลดแล้ว)');render();};img.src='./'+m.image_path;
   render();
  }catch(err){say('loadStatus','โหลดไม่สำเร็จ');say('counts',String(err.message||err));say('assetInfo','ต้องเปิดผ่าน Web server เช่น python3 -m http.server 8000 จากโฟลเดอร์ repo');}
 }
-// Nira R1 observer controls. Browser-only simulation; no AI provider or remote persistence.
-const SAVE_KEY='nira-r1-world-save-v1';
+// Nira R2 observer controls. Browser-only simulation with bounded social memory; no LLM provider.
+const SAVE_KEY='nira-r2-world-save-v1';
+const OLD_SAVE_KEY='nira-r1-world-save-v1';
 const JOB_COLORS={farmer:'#ffc773',trader:'#78e5fa',guard:'#f87c7c',miner:'#b1adfa',woodcutter:'#92df8b',crafter:'#ffc98d',healer:'#88f4c5',explorer:'#ffffff',fisherman:'#58adff'};
 let simLoop=null;
 const agentColor=a=>JOB_COLORS[a.profession]||'#fff';
@@ -121,6 +122,20 @@ function renderAgentPanel(){
  if(!filtered.length){const empty=document.createElement('p');empty.className='hint';empty.textContent='ไม่พบ NPC';list.appendChild(empty);}
  const a=currentNPC();
  say('npcInspector',a?`${a.name} (${a.id})\nอาชีพ: ${a.profession}\nบ้าน: ${locName(a.homeId)}\nปัจจุบัน: ${locName(a.locationId)}${a.travel?' → '+locName(a.travel.to):''}\nเป้าหมาย: ${a.goal}\nกิจกรรม: ${a.activity}\nเงิน: ${a.gold} เหรียญ · หิว: ${Math.round(a.hunger)}/100 · พลังงาน: ${Math.round(a.energy)}/100\nเดินทางสำเร็จ: ${a.visits} · ชั่วโมงทำงาน: ${a.workCount}\nสินค้า: ${a.cargo?`${a.cargo.good} ×${a.cargo.quantity}`:'ไม่มี'}\n\nความทรงจำล่าสุด:\n${a.stories.slice(-4).map(x=>`D${x.day} ${String(x.hour).padStart(2,'0')}:00 ${x.message}`).join('\n')||'ยังไม่มีเหตุการณ์สำคัญ'}`:'เลือก NPC จากรายชื่อหรือคลิกเครื่องหมายบนแผนที่');
+ const social=a?.social;
+ say('socialStats',`พบปะ ${world.stats.socialMeetings} ครั้ง · ช่วยเหลือ ${world.stats.socialHelp} ครั้ง · แลกข่าว ${world.stats.knowledgeShared} ครั้ง · ขัดแย้ง ${world.stats.socialDisputes} ครั้ง`);
+ const names=new Map(world.agents.map(agent=>[agent.id,agent.name]));
+ const relations=social?Object.entries(social.relations).sort((left,right)=>right[1].trust-left[1].trust||left[0].localeCompare(right[0])):[];
+ say('npcRelations',relations.length?relations.slice(0,8).map(([id,rel])=>`${names.get(id)||id}: ไว้ใจ ${rel.trust}/100 · พบ ${rel.contacts} ครั้ง${rel.helped?` · ช่วย ${rel.helped} ครั้ง`:''}`).join('\n'):'ยังไม่พบคนรู้จัก');
+ const beliefs=social?Object.values(social.beliefs).sort((left,right)=>right.updatedTick-left.updatedTick):[];
+ say('npcBeliefs',beliefs.length?beliefs.slice(0,6).map(b=>`${locName(b.locationId)}: อาหาร${b.value==='scarce'?'ขาดแคลน':'เพียงพอ'} · ${b.status==='observed'?'สังเกตเอง':'ข่าวบอกต่อจาก '+(names.get(b.sourceAgentId)||b.sourceAgentId)} · ความเชื่อมั่น ${Math.round(b.confidence*100)}%`).join('\n'):'NPC ยังไม่มีข้อมูลตลาด');
+ const socialFeed=$('socialFeed');socialFeed.replaceChildren();
+ for(const item of (world.social?.events||[]).slice(-8).reverse()){
+  const line=document.createElement('div');line.className='event-line';
+  const time=document.createElement('time');time.textContent=`D${item.day} ${String(item.hour).padStart(2,'0')}:00`;
+  const desc=document.createElement('span');desc.textContent=item.summary;
+  line.append(time,desc);socialFeed.appendChild(line);
+ }
  const events=$('npcEvents');events.replaceChildren();
  for(const e of world.events.slice(-11).reverse()){
   const line=document.createElement('div');line.className='event-line';
@@ -143,12 +158,12 @@ function bindSimUI(){
  $('simToggle').addEventListener('click',()=>{state.simRunning=!state.simRunning;notice(state.simRunning?'กำลังจำลองในแท็บนี้':'หยุดเวลาไว้ชั่วคราว');renderAgentPanel();});
  $('simHour').addEventListener('click',()=>advanceHours(1));
  $('simDay').addEventListener('click',()=>advanceHours(24));
- $('simReset').addEventListener('click',()=>{if(!confirm('เริ่มโลก Nira ใหม่? ค่าที่บันทึกเดิมจะถูกแทนที่'))return;state.simRunning=false;state.simulation=createLivingWorld(state.pack);state.selectedNPC=state.simulation.agents[0].id;saveLocal(false);notice('รีเซ็ตโลกและสร้าง NPC 30 ตัวใหม่');renderAgentPanel();render();});
+ $('simReset').addEventListener('click',()=>{if(!confirm('เริ่มโลก Nira ใหม่? ค่าที่บันทึกเดิมจะถูกแทนที่'))return;state.simRunning=false;state.simulation=createLivingWorld(state.pack);state.selectedNPC=state.simulation.agents[0].id;saveLocal(false);notice('รีเซ็ตโลกและสร้าง NPC 30 ตัวใหม่พร้อมระบบสังคม R2');renderAgentPanel();render();});
  $('simSave').addEventListener('click',()=>saveLocal());
  $('simLoad').addEventListener('click',()=>{try{const raw=localStorage.getItem(SAVE_KEY);if(!raw){notice('ยังไม่มีข้อมูลที่บันทึก');return;}state.simulation=restoreLivingWorld(state.pack,raw);state.selectedNPC=state.simulation.agents[0].id;state.simRunning=false;notice('โหลดสถานะโลกสำเร็จ');renderAgentPanel();render();}catch(err){notice('ไม่สามารถโหลดข้อมูล: '+err.message);}});
  $('simExport').addEventListener('click',()=>{
   const blob=new Blob([JSON.stringify(snapshotLivingWorld(state.simulation),null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`nira-r1-day-${state.simulation.day}.json`;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`nira-r2-day-${state.simulation.day}.json`;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
   notice('ส่งออกไฟล์ JSON ของสถานะโลกแล้ว');
  });
  $('simImportFile').addEventListener('change',async(e)=>{
@@ -164,12 +179,12 @@ function setupLivingWorld(){
  state.simRunning=true;
  state.simSpeed=1;
  let restored=false;
- try{const saved=localStorage.getItem(SAVE_KEY);if(saved){state.simulation=restoreLivingWorld(state.pack,saved);restored=true;}}
+ try{const saved=localStorage.getItem(SAVE_KEY)||localStorage.getItem(OLD_SAVE_KEY);if(saved){state.simulation=restoreLivingWorld(state.pack,saved);restored=true;saveLocal(false);}}
  catch(err){notice('ข้อมูลเดิมไม่รองรับเวอร์ชันนี้ จะเริ่มโลกใหม่: '+err.message);}
  if(!state.simulation)state.simulation=createLivingWorld(state.pack);
  state.selectedNPC=state.simulation.agents[0].id;
  bindSimUI();renderAgentPanel();
- notice(restored?'คืนสถานะโลกที่บันทึกจากเบราว์เซอร์แล้ว':'NPC เริ่มใช้ชีวิตแล้ว — จำลองเฉพาะเมื่อเปิดหน้านี้');
+ notice(restored?'คืนสถานะโลกที่บันทึกและอัปเกรดเซฟเดิมแล้ว':'NPC เริ่มใช้ชีวิตและสร้างความสัมพันธ์ — จำลองเฉพาะเมื่อเปิดหน้านี้');
  if(simLoop)clearInterval(simLoop);
  simLoop=setInterval(()=>{
   if(!state.simRunning||document.visibilityState==='hidden')return;
