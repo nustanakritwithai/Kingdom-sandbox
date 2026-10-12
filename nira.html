@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Realm of Nira — R0 World Atlas</title>
+  <title>The Realm of Nira — R1 Living World</title>
   <link rel="stylesheet" href="nira.css">
 </head>
 <body>
 <header class="topbar">
-  <div><strong>THE REALM OF NIRA</strong><small>R0 · Canon World Atlas / Read-only Map Data</small></div>
+  <div><strong>THE REALM OF NIRA</strong><small>R1 · AI Living World / 30 Autonomous NPCs · Browser Simulation</small></div>
   <nav><a href="./index.html">Kingdom Sandbox</a><span id="loadStatus" role="status">กำลังโหลดข้อมูล...</span></nav>
 </header>
 <main class="layout">
@@ -16,15 +16,52 @@
     <div class="toolbar">
       <label><input type="checkbox" id="showPins" checked> จุดสำคัญ</label>
       <label><input type="checkbox" id="showLinks"> เส้นทางทั้งหมด</label>
+      <label><input type="checkbox" id="showNPC" checked> แสดง NPC</label>
       <label><input type="checkbox" id="allowPortals"> อนุญาตประตูมิติ</label>
       <label class="upload-map">เลือกภาพแผนที่ <input type="file" id="pickMap" accept="image/*"></label>
       <button type="button" id="zoomOut">−</button><button type="button" id="zoomIn">+</button>
     </div>
     <div id="mapViewport" class="map-viewport"><canvas id="atlasCanvas" width="1536" height="1536" aria-label="แผนที่ The Realm of Nira พร้อมตำแหน่งและเส้นทาง"></canvas></div>
-    <p class="hint">ตำแหน่งเป็นพิกัดประมาณจากภาพต้นฉบับ เส้นที่แสดงเป็นกราฟการเดินทางแบบแผนผัง ยังไม่ผ่านการตรวจ Collision หรือเส้นทางเดินจริงใน Pixel-level</p>
+    <p class="hint">R1 ใช้เส้นทางแบบกราฟจาก R0: การเคลื่อนที่บนภาพเป็นการประมาณตามแนวเส้น ยังไม่ใช่ Pixel-level Collision / Navigation และไม่ได้ทำงานต่อเมื่อปิดหน้าเว็บ</p>
   </section>
   <aside class="panel">
-    <section><h2>World Data</h2><p id="counts">กำลังโหลด...</p><p class="hint">R0 แสดงข้อมูลโลกเท่านั้น ไม่ได้เปิด AI NPC หรือจำลองเศรษฐกิจ</p></section>
+    <section class="sim-section">
+      <h2>🌍 Living World <span class="sim-chip">R1 Local Simulation</span></h2>
+      <p class="hint">NPC ใช้ Rule / Utility AI ภายในเบราว์เซอร์ · ไม่ใช่ LLM · ปิดหน้าเว็บแล้วหยุดจำลอง</p>
+      <div class="sim-clock" id="simClock">Day 1 · 06:00</div>
+      <p id="simMetrics" class="sim-metrics">กำลังเตรียมประชากร...</p>
+      <div class="sim-controls">
+        <button type="button" id="simToggle">⏸ หยุด</button>
+        <button type="button" id="simHour">+1 ชั่วโมง</button>
+        <button type="button" id="simDay">+1 วัน</button>
+        <button type="button" id="simReset" class="subtle">เริ่มใหม่</button>
+      </div>
+      <div class="sim-speeds" aria-label="ความเร็วการจำลอง">
+        <button type="button" data-sim-speed="1" class="selected">×1</button>
+        <button type="button" data-sim-speed="5">×5</button>
+        <button type="button" data-sim-speed="20">×20</button>
+      </div>
+      <div class="sim-controls sim-save">
+        <button type="button" id="simSave">บันทึกในเครื่อง</button>
+        <button type="button" id="simLoad">โหลดที่บันทึก</button>
+        <button type="button" id="simExport">ส่งออก JSON</button>
+        <label class="sim-import">นำเข้า JSON<input type="file" id="simImportFile" accept=".json,application/json"></label>
+      </div>
+      <p class="hint" id="simNotice" role="status">กำลังเริ่มระบบ...</p>
+    </section>
+    <section class="npc-section">
+      <h2>👥 ประชากร AI (30 คน)</h2>
+      <label for="npcFilter">ค้นหา NPC / อาชีพ / เมือง</label>
+      <input id="npcFilter" type="search" placeholder="เช่น trader, Mira, Niravale">
+      <div id="npcList" class="npc-list" aria-label="รายชื่อ NPC"></div>
+      <h2 class="npc-heading">ข้อมูลตัวละคร</h2>
+      <div id="npcInspector" class="infobox">เลือก NPC เพื่อติดตามชีวิต</div>
+    </section>
+    <section>
+      <h2>📜 เหตุการณ์ในโลก</h2>
+      <div id="npcEvents" class="npc-events" aria-live="polite"></div>
+    </section>
+    <section><h2>World Data</h2><p id="counts">กำลังโหลด...</p><p class="hint">R1 จำลองประชากรและการผลิตขั้นต้นบนกราฟเส้นทางเดิม ยังไม่เชื่อมกับ Kingdom-sandbox main engine หรือเซิร์ฟเวอร์ถาวร</p></section>
     <section><h2>ตัวเลือกพื้นที่</h2><label for="regionSelect">ภูมิภาค</label><select id="regionSelect"></select><div id="regionInfo" class="infobox"></div></section>
     <section><h2>ค้นหาเส้นทาง</h2><label for="fromSelect">จาก</label><select id="fromSelect"></select><label for="toSelect">ไป</label><select id="toSelect"></select><button id="findRoute" type="button">คำนวณเส้นทาง</button><div id="routeResult" class="infobox" aria-live="polite">เลือกต้นทางและปลายทาง</div></section>
     <section><h2>ข้อมูลจุดสำคัญ</h2><div id="selectedLocation" class="infobox">คลิกเครื่องหมายบนแผนที่</div></section>

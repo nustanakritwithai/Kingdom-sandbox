@@ -1,0 +1,30 @@
+name: Nira R1 Data and Simulation Gate
+on:
+  push:
+    branches: [main, 'feat/nira-living-world-r1']
+    paths:
+      - 'nira.html'
+      - 'nira.js'
+      - 'nira.css'
+      - 'world/nira/**'
+      - 'tests/nira-*.mjs'
+      - '.github/workflows/nira-r1-ci.yml'
+  pull_request:
+    paths:
+      - 'nira.html'
+      - 'nira.js'
+      - 'nira.css'
+      - 'world/nira/**'
+      - 'tests/nira-*.mjs'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check nira.js
+      - run: node --check world/nira/living-world.mjs
+      - run: node --test tests/nira-map-contract.test.mjs
+      - run: node tests/nira-living-world.test.mjs
