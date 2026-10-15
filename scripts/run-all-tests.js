@@ -13,6 +13,7 @@ const GROUPS = {
     { file: 'test-harness-185.js', required: true },
     { file: 'test-harness-185-save.js', required: true },
     { file: 'test-harness-19.js', required: true },
+    { file: 'test-harness-194b-court-politics.js', required: true },
     { file: 'test-harness-191-liveness.js', required: true },
     { file: 'test-harness-191-regression.js', required: true },
     { file: 'test-harness-193-hygiene.js', required: true }
@@ -22,6 +23,7 @@ const GROUPS = {
     { file: 'audit/probe-war.js', required: true },
     { file: 'audit/probe-professions.js', args: ['3000', '1'], required: true },
     { file: 'audit/probe-saveload.js', required: true },
+    { file: 'audit/probe-court-politics.js', args: ['500', '1'], required: true, slow: true },
     { file: 'audit/probe-treaties.js', required: true }
   ],
   ui: [

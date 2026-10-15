@@ -211,7 +211,7 @@ const civilWar = run(sandbox, `(function() {
   const leader = claimant[0];
   const fac = CourtSystem.createFaction(org, leader.id, 'support_claimant');
   if (fac) fac.memberIds = claimant.slice(1, 3).map(a => a.id);
-  const cw = CourtSystem.startCivilWar(org, leader.id, 'succession_dispute');
+  const cw = CourtSystem.startCivilWar(org, leader.id, 'succession_dispute', { force: true });
   if (!cw) return { ok: false, reason: 'no civil war' };
   const rebelWbs = cw.rebelWarbandIds.map(getWarband).filter(Boolean);
   const allMemberIds = rebelWbs.flatMap(w => w.memberIds);
